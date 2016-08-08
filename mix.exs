@@ -4,7 +4,7 @@ defmodule Crawler.Mixfile do
   def project do
     [
       app:             :crawler,
-      version:         "0.1.0",
+      version:         "0.0.0",
       elixir:          "~> 1.3",
       package:         package(),
       name:            "Crawler",
@@ -27,7 +27,8 @@ defmodule Crawler.Mixfile do
     [
       {:httpoison, "~> 0.9.0"},
       {:floki,     "~> 0.9.0"},
-      {:ex_doc,    ">= 0.0.0", only: :dev}
+      {:ex_doc,    ">= 0.0.0", only: :dev},
+      {:mock,      ">= 0.0.0", only: :test},
     ]
   end
 
