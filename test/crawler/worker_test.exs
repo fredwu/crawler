@@ -1,5 +1,5 @@
 defmodule Crawler.WorkerTest do
-  use ExUnit.Case, async: true
+  use Crawler.TestCase, async: true
 
   doctest Crawler.Worker
 end

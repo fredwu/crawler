@@ -28,7 +28,7 @@ defmodule Crawler.Mixfile do
       {:httpoison, "~> 0.9.0"},
       {:floki,     "~> 0.9.0"},
       {:ex_doc,    ">= 0.0.0", only: :dev},
-      {:mock,      ">= 0.0.0", only: :test},
+      {:bypass,    github: "PSPDFKit-labs/bypass", only: :test}
     ]
   end
 

@@ -1,5 +1,5 @@
 defmodule Crawler.SupervisorTest do
-  use ExUnit.Case, async: true
+  use Crawler.TestCase, async: true
 
   doctest Crawler.Supervisor
 end
