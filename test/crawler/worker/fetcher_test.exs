@@ -10,6 +10,12 @@ defmodule Crawler.Worker.FetcherTest do
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
-    assert Fetcher.fetch_page(url) == "<html>200</html>"
+    Fetcher.fetch_page(url)
+
+    page = CrawlerDB.Page.find(url)
+
+    assert page.parent_id == 0
+    assert page.url       == url
+    assert page.body      == "<html>200</html>"
   end
 end

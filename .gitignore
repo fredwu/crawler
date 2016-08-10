@@ -1,5 +1,7 @@
 .DS_Store
 
+Mnesia.nonode@nohost
+
 # The directory Mix will write compiled artifacts to.
 /_build
 

@@ -18,7 +18,7 @@ defmodule Crawler.Mixfile do
 
   def application do
     [
-      applications: [:logger, :httpoison, :floki],
+      applications: [:logger, :httpoison, :floki, :amnesia],
       mod:          {Crawler, []}
     ]
   end
@@ -27,6 +27,7 @@ defmodule Crawler.Mixfile do
     [
       {:httpoison, "~> 0.9.0"},
       {:floki,     "~> 0.9.0"},
+      {:amnesia,   "~> 0.2.4"},
       {:ex_doc,    ">= 0.0.0", only: :dev},
       {:bypass,    github: "PSPDFKit-labs/bypass", only: :test}
     ]
