@@ -1,19 +1,21 @@
 defmodule Crawler.Supervisor do
-  use Supervisor
+  alias Experimental.DynamicSupervisor
+
+  use DynamicSupervisor
 
   def init(_args) do
     children = [
-      worker(Crawler.Worker, [], restart: :transient)
+      worker(Crawler.Worker, [], restart: :temporary)
     ]
 
-    supervise(children, strategy: :simple_one_for_one)
+    {:ok, children, strategy: :one_for_one}
   end
 
   def start_link do
-    Supervisor.start_link(__MODULE__, [], name: __MODULE__)
+    DynamicSupervisor.start_link(__MODULE__, [], name: __MODULE__)
   end
 
   def start_child(args \\ []) do
-    Supervisor.start_child(__MODULE__, [args])
+    DynamicSupervisor.start_child(__MODULE__, [args])
   end
 end

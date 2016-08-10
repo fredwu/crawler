@@ -18,13 +18,14 @@ defmodule Crawler.Mixfile do
 
   def application do
     [
-      applications: [:logger, :httpoison, :floki, :amnesia],
+      applications: [:logger, :gen_stage, :httpoison, :floki, :amnesia],
       mod:          {Crawler, []}
     ]
   end
 
   defp deps do
     [
+      {:gen_stage, ">= 0.0.0"},
       {:httpoison, "~> 0.9.0"},
       {:floki,     "~> 0.9.0"},
       {:amnesia,   "~> 0.2.4"},
