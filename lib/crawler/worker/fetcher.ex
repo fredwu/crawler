@@ -5,10 +5,8 @@ defmodule Crawler.Worker.Fetcher do
   ]
 
   def fetch(opts) do
-    fetch_page(opts[:url])
-  end
+    url = opts[:url]
 
-  def fetch_page(url) do
     case HTTPoison.get(url, [], @fetch_opts) do
       {:ok, %{status_code: 200, body: body}} ->
         store_fetched_page(url, body)
@@ -17,7 +15,7 @@ defmodule Crawler.Worker.Fetcher do
     end
   end
 
-  def store_fetched_page(url, body) do
+  defp store_fetched_page(url, body) do
     CrawlerDB.Page.add(0, url, body)
   end
 end

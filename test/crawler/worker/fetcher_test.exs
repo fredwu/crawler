@@ -3,14 +3,14 @@ defmodule Crawler.Worker.FetcherTest do
 
   alias Crawler.Worker.Fetcher
 
-  doctest Crawler.Worker.Fetcher
+  doctest Fetcher
 
-  test ".fetch_page", %{bypass: bypass, url: url} do
+  test ".fetch", %{bypass: bypass, url: url} do
     Bypass.expect bypass, fn (conn) ->
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
-    Fetcher.fetch_page(url)
+    Fetcher.fetch(url: url)
 
     page = CrawlerDB.Page.find(url)
 

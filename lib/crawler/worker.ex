@@ -1,14 +1,16 @@
 defmodule Crawler.Worker do
   use GenServer
 
-  alias Crawler.Worker.Fetcher
+  alias Crawler.Worker.{Fetcher, Parser}
 
   def start_link(args) do
     GenServer.start_link(__MODULE__, args)
   end
 
   def handle_cast(_req, state) do
-    Fetcher.fetch(state)
+    state
+    |> Fetcher.fetch()
+    |> Parser.parse()
 
     {:noreply, state}
   end
