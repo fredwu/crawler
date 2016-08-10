@@ -1,3 +1,4 @@
+# Credit: https://gist.github.com/cblavier/5e15791387a6e22b98d8
 defmodule Helpers do
   def wait(fun), do: wait(500, fun)
   def wait(0, fun), do: fun.()
