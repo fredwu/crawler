@@ -3,3 +3,5 @@ elixir:
   - 1.3.2
 otp_release:
   - 18.3
+before_script:
+  - mix amnesia.create -db CrawlerDB
