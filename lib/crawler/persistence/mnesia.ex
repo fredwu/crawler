@@ -1,25 +1,21 @@
 use Amnesia
 
 defdatabase CrawlerDB do
-  deftable Page,
-    [{:id, autoincrement}, :parent_id, :url, :body],
-    type: :bag,
-    index: [:parent_id, :url]
-  do
+  deftable Page, [:url, :body, :parent_url], index: [:parent_url], type: :bag do
     @type t :: %Page{
-      id: integer, parent_id: integer, url: String.t, body: String.t
+      url: String.t, parent_url: String.t, body: String.t
     }
 
-    def add(url, body, parent_id \\ 0) do
-      %Page{parent_id: parent_id, url: url, body: body} |> Page.write!
+    def add(url, body, parent_url \\ "") do
+      %Page{url: url, body: body, parent_url: parent_url} |> Page.write!
     end
 
     def find(url) do
-      Page.read_at!(url, :url) |> Enum.at(0)
+      Page.read!(url) |> Enum.at(0)
     end
 
-    def pages(parent_id) do
-      Page.read_at!(parent_id, :parent_id)
+    def pages(parent_url) do
+      Page.read_at!(parent_url, :parent_url)
     end
   end
 end

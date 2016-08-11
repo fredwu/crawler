@@ -14,8 +14,8 @@ defmodule Crawler.Worker.FetcherTest do
 
     page = CrawlerDB.Page.find(url)
 
-    assert page.parent_id == 0
-    assert page.url       == url
-    assert page.body      == "<html>200</html>"
+    assert page.parent_url == ""
+    assert page.url        == url
+    assert page.body       == "<html>200</html>"
   end
 end
