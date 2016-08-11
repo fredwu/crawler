@@ -10,7 +10,7 @@ defdatabase CrawlerDB do
       id: integer, parent_id: integer, url: String.t, body: String.t
     }
 
-    def add(parent_id, url, body) do
+    def add(url, body, parent_id \\ 0) do
       %Page{parent_id: parent_id, url: url, body: body} |> Page.write!
     end
 
