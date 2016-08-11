@@ -1,4 +1,4 @@
-defmodule Crawler.Supervisor do
+defmodule Crawler.WorkerSupervisor do
   alias Experimental.DynamicSupervisor
 
   use DynamicSupervisor

@@ -4,7 +4,7 @@ defmodule CrawlerTest do
   doctest Crawler
 
   test "dynamic worker", %{url: url} do
-    {:ok, worker} = Crawler.Supervisor.start_child(hello: "world", url: url)
+    {:ok, worker} = Crawler.WorkerSupervisor.start_child(hello: "world", url: url)
 
     assert Crawler.Worker.cast(worker) == :ok
   end
