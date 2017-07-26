@@ -4,12 +4,11 @@ defmodule Crawler.Mixfile do
   def project do
     [
       app:             :crawler,
-      version:         "0.0.0",
-      elixir:          "~> 1.3",
+      version:         "0.1.0",
+      elixir:          "~> 1.5",
       package:         package(),
       name:            "Crawler",
       description:     "A high performance web crawler in Elixir.",
-      build_embedded:  Mix.env == :prod,
       start_permanent: Mix.env == :prod,
       deps:            deps(),
       aliases:         ["publish": ["hex.publish", &git_tag/1]]
@@ -18,19 +17,16 @@ defmodule Crawler.Mixfile do
 
   def application do
     [
-      applications: [:logger, :gen_stage, :httpoison, :floki, :amnesia],
-      mod:          {Crawler, []}
+      extra_applications: [:logger],
+      mod:                {Crawler, []}
     ]
   end
 
   defp deps do
     [
-      {:gen_stage, ">= 0.0.0"},
-      {:httpoison, "~> 0.9.0"},
-      {:floki,     "~> 0.9.0"},
-      {:amnesia,   "~> 0.2.4"},
-      {:ex_doc,    ">= 0.0.0", only: :dev},
-      {:bypass,    github: "PSPDFKit-labs/bypass", only: :test}
+      {:httpoison, "~> 0.12.0"},
+      {:floki,     "~> 0.17.2"},
+      {:bypass,    "~> 0.8", only: :test}
     ]
   end
 

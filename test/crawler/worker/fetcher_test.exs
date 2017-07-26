@@ -12,7 +12,7 @@ defmodule Crawler.Worker.FetcherTest do
 
     Fetcher.fetch(url: url)
 
-    page = CrawlerDB.Page.find(url)
+    page = Crawler.Store.find(url)
 
     assert page.url  == url
     assert page.body == "<html>200</html>"

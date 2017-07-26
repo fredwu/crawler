@@ -1,7 +1,5 @@
 language: elixir
 elixir:
-  - 1.3.2
+  - 1.5
 otp_release:
-  - 18.3
-before_script:
-  - mix amnesia.create -db CrawlerDB
+  - 19.3

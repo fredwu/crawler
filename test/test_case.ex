@@ -13,10 +13,4 @@ defmodule Crawler.TestCase do
 
     {:ok, bypass: bypass, url: url}
   end
-
-  setup do
-    on_exit fn ->
-      CrawlerDB.Page.clear()
-    end
-  end
 end

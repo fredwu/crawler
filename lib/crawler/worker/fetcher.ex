@@ -16,6 +16,6 @@ defmodule Crawler.Worker.Fetcher do
   end
 
   defp store_fetched_page(url, body) do
-    CrawlerDB.Page.add(url, body)
+    Crawler.Store.add(url, body)
   end
 end
