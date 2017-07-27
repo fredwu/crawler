@@ -16,8 +16,9 @@ defmodule Crawler.Store do
   end
 
   def find(url) do
-    [{_, page}] = Registry.lookup(DB, url)
-
-    page
+    case Registry.lookup(DB, url) do
+      [{_, page}] -> page
+      _           -> false
+    end
   end
 end

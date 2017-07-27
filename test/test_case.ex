@@ -8,7 +8,7 @@ defmodule Crawler.TestCase do
   end
 
   setup_all do
-    bypass = Bypass.open()
+    bypass = Bypass.open
     url    = "http://localhost:#{bypass.port}"
 
     {:ok, bypass: bypass, url: url}
