@@ -11,7 +11,7 @@ defmodule Crawler.Worker.Fetcher do
       {:ok, %{status_code: 200, body: body}} ->
         store_fetched_page(url, body)
       _ ->
-        false
+        nil
     end
   end
 

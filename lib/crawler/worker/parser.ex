@@ -31,12 +31,12 @@ defmodule Crawler.Worker.Parser do
     Store.processed(url)
   end
 
-  def mark_processed(_) do; false end
+  def mark_processed(_), do: nil
 
   defp parse_link({"a", attrs, _}) do
     case detect_link(attrs) do
       {_, url} -> Crawler.crawl(url)
-      _        -> false
+      _        -> nil
     end
   end
 

@@ -12,14 +12,14 @@ defmodule Crawler.Store do
   def find(url) do
     case Registry.lookup(DB, url) do
       [{_, page}] -> page
-      _           -> false
+      _           -> nil
     end
   end
 
   def find_processed(url) do
     case Registry.match(DB, url, %{processed: true}) do
       [{_, page}] -> page
-      _           -> false
+      _           -> nil
     end
   end
 
