@@ -34,13 +34,15 @@ defmodule Crawler.Worker.Parser do
   def mark_processed(_) do; false end
 
   defp parse_link({"a", attrs, _}) do
-    match = Enum.find(attrs, fn(attr) ->
-      Kernel.match?({"href", _}, attr)
-    end)
-
-    case match do
+    case detect_link(attrs) do
       {_, url} -> Crawler.crawl(url)
       _        -> false
     end
+  end
+
+  defp detect_link(attrs) do
+    Enum.find(attrs, fn(attr) ->
+      Kernel.match?({"href", _}, attr)
+    end)
   end
 end
