@@ -21,7 +21,7 @@ defmodule CrawlerTest do
 
     Bypass.expect_once bypass, "GET", "/link1", fn (conn) ->
       Plug.Conn.resp(conn, 200, """
-        <html><a href="#{linked_url2}"></a></html>
+        <html><a id="link2" href="#{linked_url2}" target="_blank"></a></html>
       """)
     end
 

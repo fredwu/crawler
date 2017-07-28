@@ -4,13 +4,18 @@ defmodule Crawler.Worker.Parser do
   @doc """
   ## Examples
 
-      iex> Parser.parse(%Crawler.Store.Page{
-      iex>   body: "<a href='http://example.com/'>Example</a>"}
-      iex> )
-      %Crawler.Store.Page{body: "<a href='http://example.com/'>Example</a>"}
+      iex> Parser.parse(%Crawler.Store.Page{body: "Body"})
+      %Crawler.Store.Page{body: "Body"}
 
-      iex> Parser.parse(%Crawler.Store.Page{body: "Example"})
-      %Crawler.Store.Page{body: "Example"}
+      iex> Parser.parse(%Crawler.Store.Page{
+      iex>   body: "<a href='http://localhost/'>Link</a>"}
+      iex> )
+      %Crawler.Store.Page{body: "<a href='http://localhost/'>Link</a>"}
+
+      iex> Parser.parse(%Crawler.Store.Page{
+      iex>   body: "<a href='http://localhost/' target='_blank'>Link</a>"}
+      iex> )
+      %Crawler.Store.Page{body: "<a href='http://localhost/' target='_blank'>Link</a>"}
   """
   def parse(%Page{body: body, url: url}) do
     body
@@ -28,7 +33,14 @@ defmodule Crawler.Worker.Parser do
 
   def mark_processed(_) do; false end
 
-  defp parse_link({"a", [{"href", url}], _}) do
-    Crawler.crawl(url)
+  defp parse_link({"a", attrs, _}) do
+    match = Enum.find(attrs, fn(attr) ->
+      Kernel.match?({"href", _}, attr)
+    end)
+
+    case match do
+      {_, url} -> Crawler.crawl(url)
+      _        -> false
+    end
   end
 end
