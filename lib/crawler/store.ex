@@ -2,11 +2,25 @@ defmodule Crawler.Store do
   alias Crawler.Store.DB
 
   defmodule Page do
-    defstruct [:url, :body]
+    defstruct [:url, :body, :processed]
   end
 
   def init do
     Registry.start_link(keys: :unique, name: DB)
+  end
+
+  def find(url) do
+    case Registry.lookup(DB, url) do
+      [{_, page}] -> page
+      _           -> false
+    end
+  end
+
+  def find_processed(url) do
+    case Registry.match(DB, url, %{processed: true}) do
+      [{_, page}] -> page
+      _           -> false
+    end
   end
 
   def add(url, body) do
@@ -15,10 +29,7 @@ defmodule Crawler.Store do
     %Page{url: url, body: body}
   end
 
-  def find(url) do
-    case Registry.lookup(DB, url) do
-      [{_, page}] -> page
-      _           -> false
-    end
+  def processed(url) do
+    Registry.update_value(DB, url, &(%{&1 | processed: true}))
   end
 end

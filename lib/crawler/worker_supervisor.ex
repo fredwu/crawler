@@ -1,4 +1,4 @@
-defmodule Crawler.Supervisor do
+defmodule Crawler.WorkerSupervisor do
   use Supervisor
 
   def init(_args) do

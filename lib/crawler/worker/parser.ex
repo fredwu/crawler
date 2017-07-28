@@ -1,5 +1,5 @@
 defmodule Crawler.Worker.Parser do
-  alias Crawler.{Worker.Fetcher, Store.Page}
+  alias Crawler.{Store, Store.Page}
 
   @doc """
   ## Examples
@@ -7,20 +7,28 @@ defmodule Crawler.Worker.Parser do
       iex> Parser.parse(%Crawler.Store.Page{
       iex>   body: "<a href='http://example.com/'>Example</a>"}
       iex> )
-      :ok
+      %Crawler.Store.Page{body: "<a href='http://example.com/'>Example</a>"}
 
       iex> Parser.parse(%Crawler.Store.Page{body: "Example"})
-      :ok
+      %Crawler.Store.Page{body: "Example"}
   """
-  def parse(%Page{body: body}) do
+  def parse(%Page{body: body, url: url}) do
     body
     |> Floki.find("a")
     |> Enum.each(&parse_link/1)
+
+    %Page{body: body, url: url}
   end
 
   def parse(_), do: nil
 
+  def mark_processed(%Page{url: url}) do
+    Store.processed(url)
+  end
+
+  def mark_processed(_) do; false end
+
   defp parse_link({"a", [{"href", url}], _}) do
-    Fetcher.fetch(url: url)
+    Crawler.crawl(url)
   end
 end

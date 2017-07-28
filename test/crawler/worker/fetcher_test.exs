@@ -6,7 +6,7 @@ defmodule Crawler.Worker.FetcherTest do
   doctest Fetcher
 
   test ".fetch", %{bypass: bypass, url: url} do
-    Bypass.expect bypass, fn (conn) ->
+    Bypass.expect_once bypass, fn (conn) ->
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
