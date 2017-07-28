@@ -4,12 +4,6 @@ A high performance web crawler in Elixir.
 
 ## Usage
 
-Create an mnesia database:
-
-```
-mix amnesia.create -db CrawlerDB
-```
-
 ```elixir
 Crawler.crawl("http://elixir-lang.org")
 ```
