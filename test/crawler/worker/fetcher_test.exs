@@ -10,7 +10,7 @@ defmodule Crawler.Worker.FetcherTest do
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
-    Fetcher.fetch(url: url)
+    Fetcher.fetch(url: url, level: 0)
 
     page = Crawler.Store.find(url)
 

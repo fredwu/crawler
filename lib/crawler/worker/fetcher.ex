@@ -1,33 +1,72 @@
 defmodule Crawler.Worker.Fetcher do
+  alias Crawler.{Store, Store.Page}
+
   @fetch_opts [
     follow_redirect: true,
     max_redirect:    5
   ]
 
   def fetch(opts) do
-    url = opts[:url]
+    opts
+    |> fetchable
+    |> store_url
+    |> store_url_level
+    |> fetch_url
+  end
 
-    unless already_fetched?(url) do
-      url |> store_url |> fetch_url
+  defp fetchable(opts) do
+    case fetchable_check(opts) do
+      true  -> opts
+      false -> nil
     end
   end
 
-  defp fetch_url(url) do
-    case HTTPoison.get(url, [], @fetch_opts) do
-      {:ok, %{status_code: 200, body: body}} -> store_fetched_page(url, body)
-      _                                      -> nil
+  defp fetchable_check(opts) do
+    within_fetch_level?(opts[:level], opts[:max_levels])
+      && not_fetched?(opts[:url])
+  end
+
+  defp within_fetch_level?(current_level, max_levels) do
+    current_level < max_levels
+  end
+
+  defp not_fetched?(url) do
+    !Store.find(url)
+  end
+
+  defp store_url(nil), do: nil
+  defp store_url(opts) do
+    Store.add(opts[:url])
+
+    opts
+  end
+
+  defp store_url_level(nil), do: nil
+  defp store_url_level(opts) do
+    case Keyword.has_key?(opts, :level) do
+      true  -> Keyword.replace(opts, :level, opts[:level] + 1)
+      false -> opts
     end
   end
 
-  defp already_fetched?(url) do
-    !!Crawler.Store.find(url)
+  defp fetch_url(nil), do: nil
+  defp fetch_url(opts) do
+    case HTTPoison.get(opts[:url], [], @fetch_opts) do
+      {:ok, %{status_code: 200, body: body}} ->
+        store_page(opts[:url], body)
+        return_page(body, opts)
+      _ -> nil
+    end
   end
 
-  defp store_url(url) do
-    Crawler.Store.add(url)
+  defp store_page(url, body) do
+    Store.add_body(url, body)
   end
 
-  defp store_fetched_page(url, body) do
-    Crawler.Store.add_body(url, body)
+  defp return_page(body, opts) do
+    %{
+      page: %Page{url: opts[:url], body: body},
+      opts: opts
+    }
   end
 end

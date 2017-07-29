@@ -8,6 +8,19 @@ A high performance web crawler in Elixir.
 Crawler.crawl("http://elixir-lang.org")
 ```
 
+## Configurations
+
+| Option      | Type    | Default Value | Description |
+|-------------|---------|---------------|-------------|
+| :max_levels | integer | 3             | Maximum nested level of pages to crawl.
+
+
+### Example
+
+```elixir
+Crawler.crawl("http://elixir-lang.org", max_levels: 5)
+```
+
 ## License
 
 Licensed under [MIT](http://fredwu.mit-license.org/).

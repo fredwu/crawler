@@ -4,25 +4,25 @@ defmodule Crawler.Worker.Parser do
   @doc """
   ## Examples
 
-      iex> Parser.parse(%Crawler.Store.Page{body: "Body"})
+      iex> Parser.parse(%{page: %Crawler.Store.Page{body: "Body"}, opts: []})
       %Crawler.Store.Page{body: "Body"}
 
-      iex> Parser.parse(%Crawler.Store.Page{
-      iex>   body: "<a href='http://localhost/'>Link</a>"}
-      iex> )
+      iex> Parser.parse(%{page: %Crawler.Store.Page{
+      iex>   body: "<a href='http://localhost/'>Link</a>"
+      iex> }, opts: []})
       %Crawler.Store.Page{body: "<a href='http://localhost/'>Link</a>"}
 
-      iex> Parser.parse(%Crawler.Store.Page{
-      iex>   body: "<a href='http://localhost/' target='_blank'>Link</a>"}
-      iex> )
+      iex> Parser.parse(%{page: %Crawler.Store.Page{
+      iex>   body: "<a href='http://localhost/' target='_blank'>Link</a>"
+      iex> }, opts: []})
       %Crawler.Store.Page{body: "<a href='http://localhost/' target='_blank'>Link</a>"}
   """
-  def parse(%Page{body: body, url: url}) do
-    body
+  def parse(%{page: page, opts: opts}) do
+    page.body
     |> Floki.find("a")
-    |> Enum.each(&parse_link/1)
+    |> Enum.each(&parse_link(&1, opts))
 
-    %Page{body: body, url: url}
+    page
   end
 
   def parse(_), do: nil
@@ -33,10 +33,10 @@ defmodule Crawler.Worker.Parser do
 
   def mark_processed(_), do: nil
 
-  defp parse_link({"a", attrs, _}) do
+  defp parse_link({"a", attrs, _}, opts) do
     attrs
     |> detect_link
-    |> Dispatcher.dispatch
+    |> Dispatcher.dispatch(opts)
   end
 
   defp detect_link(attrs) do

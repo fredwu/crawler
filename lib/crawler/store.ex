@@ -25,14 +25,10 @@ defmodule Crawler.Store do
 
   def add(url) do
     {:ok, _pid} = Registry.register(DB, url, %Page{url: url})
-
-    url
   end
 
   def add_body(url, body) do
     {_new, _old} = Registry.update_value(DB, url, & %{&1 | body: body})
-
-    %Page{url: url, body: body}
   end
 
   def processed(url) do
