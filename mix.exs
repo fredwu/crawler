@@ -44,6 +44,7 @@ defmodule Crawler.Mixfile do
 
   defp git_tag(_args) do
     System.cmd "git", ["tag", "v" <> Mix.Project.config[:version]]
+    System.cmd "git", ["push"]
     System.cmd "git", ["push", "--tags"]
   end
 end
