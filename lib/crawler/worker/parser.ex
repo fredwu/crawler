@@ -1,5 +1,5 @@
 defmodule Crawler.Worker.Parser do
-  alias Crawler.{Store, Store.Page}
+  alias Crawler.{Worker.Dispatcher, Store, Store.Page}
 
   @doc """
   ## Examples
@@ -34,10 +34,9 @@ defmodule Crawler.Worker.Parser do
   def mark_processed(_), do: nil
 
   defp parse_link({"a", attrs, _}) do
-    case detect_link(attrs) do
-      {_, url} -> Crawler.crawl(url)
-      _        -> nil
-    end
+    attrs
+    |> detect_link
+    |> Dispatcher.dispatch
   end
 
   defp detect_link(attrs) do

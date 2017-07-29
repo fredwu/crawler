@@ -12,10 +12,13 @@ defmodule CrawlerTest do
   test ".crawl", %{bypass: bypass, url: url} do
     linked_url1 = "#{url}/link1"
     linked_url2 = "#{url}/link2"
+    linked_url3 = "#{url}/link3"
 
-    Bypass.expect_once bypass, "GET", "/link2", fn (conn) ->
+    Bypass.expect_once bypass, "GET", "/", fn (conn) ->
       Plug.Conn.resp(conn, 200, """
-        <html>Link 2</html>
+        <html><a href="#{linked_url1}"></a></html>
+        <html><a href="#{linked_url2}"></a></html>
+        <html><a href="#{linked_url3}"></a></html>
       """)
     end
 
@@ -25,9 +28,15 @@ defmodule CrawlerTest do
       """)
     end
 
-    Bypass.expect_once bypass, "GET", "/", fn (conn) ->
+    Bypass.expect_once bypass, "GET", "/link2", fn (conn) ->
       Plug.Conn.resp(conn, 200, """
-        <html><a href="#{linked_url1}"></a></html>
+        <html>Link 2</html>
+      """)
+    end
+
+    Bypass.expect_once bypass, "GET", "/link3", fn (conn) ->
+      Plug.Conn.resp(conn, 200, """
+        <html>Link 3</html>
       """)
     end
 
@@ -36,7 +45,8 @@ defmodule CrawlerTest do
     wait fn ->
       assert Crawler.Store.find_processed(url)
       assert Crawler.Store.find_processed(linked_url1)
-      assert Crawler.Store.find(linked_url2)
+      assert Crawler.Store.find_processed(linked_url2)
+      assert Crawler.Store.find_processed(linked_url3)
     end
   end
 end

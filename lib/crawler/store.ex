@@ -23,8 +23,13 @@ defmodule Crawler.Store do
     end
   end
 
-  def add(url, body) do
-    Registry.register(DB, url, %Page{url: url, body: body})
+  def add(url) do
+    Registry.register(DB, url, %Page{url: url})
+    url
+  end
+
+  def add_body(url, body) do
+    Registry.update_value(DB, url, &(%{&1 | body: body}))
 
     %Page{url: url, body: body}
   end
