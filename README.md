@@ -5,7 +5,7 @@ A high performance web crawler in Elixir.
 ## Usage
 
 ```elixir
-Crawler.crawl("http://elixir-lang.org")
+Crawler.crawl("http://elixir-lang.org", max_levels: 2)
 ```
 
 ## Configurations
@@ -14,12 +14,19 @@ Crawler.crawl("http://elixir-lang.org")
 |-------------|---------|---------------|-------------|
 | :max_levels | integer | 3             | Maximum nested level of pages to crawl.
 
+## Features Backlog
 
-### Example
+Crawler is under active development, below is the list of features to be implemented.
 
-```elixir
-Crawler.crawl("http://elixir-lang.org", max_levels: 5)
-```
+|     | Feature |
+|-----|---------|
+| [x] | Set the maximum crawl level.
+| [ ] | Restrict crawlable domains and/or path.
+| [ ] | Limit concurrent crawlers.
+| [ ] | Limit rate of crawling.
+| [ ] | Set crawler's user agent.
+| [ ] | The ability to retry a failed crawl.
+| [ ] | DSL for scraping page content.
 
 ## License
 
