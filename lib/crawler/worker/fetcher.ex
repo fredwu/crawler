@@ -40,10 +40,7 @@ defmodule Crawler.Worker.Fetcher do
   end
 
   defp store_url_level(opts) do
-    case Keyword.has_key?(opts, :level) do
-      true  -> Keyword.replace(opts, :level, opts[:level] + 1)
-      false -> opts
-    end
+    Keyword.replace(opts, :level, opts[:level] + 1)
   end
 
   defp fetch_url(opts) do
