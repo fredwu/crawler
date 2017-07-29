@@ -7,16 +7,17 @@ defmodule Crawler.Worker.Fetcher do
   ]
 
   def fetch(opts) do
-    opts
-    |> fetchable
-    |> store_url
-    |> store_url_level
-    |> fetch_url
+    with {:ok, opts} <- fetchable(opts),
+         _           <- store_url(opts),
+         opts        <- store_url_level(opts)
+    do
+      fetch_url(opts)
+    end
   end
 
   defp fetchable(opts) do
     case fetchable_check(opts) do
-      true  -> opts
+      true  -> {:ok, opts}
       false -> nil
     end
   end
@@ -34,14 +35,10 @@ defmodule Crawler.Worker.Fetcher do
     !Store.find(url)
   end
 
-  defp store_url(nil), do: nil
   defp store_url(opts) do
     Store.add(opts[:url])
-
-    opts
   end
 
-  defp store_url_level(nil), do: nil
   defp store_url_level(opts) do
     case Keyword.has_key?(opts, :level) do
       true  -> Keyword.replace(opts, :level, opts[:level] + 1)
@@ -49,7 +46,6 @@ defmodule Crawler.Worker.Fetcher do
     end
   end
 
-  defp fetch_url(nil), do: nil
   defp fetch_url(opts) do
     case HTTPoison.get(opts[:url], [], @fetch_opts) do
       {:ok, %{status_code: 200, body: body}} ->
