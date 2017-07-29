@@ -14,10 +14,8 @@ defmodule Crawler.Worker.Fetcher do
 
   defp fetch_url(url) do
     case HTTPoison.get(url, [], @fetch_opts) do
-      {:ok, %{status_code: 200, body: body}} ->
-        store_fetched_page(url, body)
-      _ ->
-        nil
+      {:ok, %{status_code: 200, body: body}} -> store_fetched_page(url, body)
+      _                                      -> nil
     end
   end
 
