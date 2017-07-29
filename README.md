@@ -29,6 +29,10 @@ Crawler is under active development, below is a non-comprehensive list of featur
 - [ ] The ability to retry a failed crawl.
 - [ ] DSL for scraping page content.
 
+## Changelog
+
+Please see [CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
 Licensed under [MIT](http://fredwu.mit-license.org/).
