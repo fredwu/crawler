@@ -19,7 +19,10 @@ Crawler.crawl("http://elixir-lang.org", max_levels: 2)
 Crawler is under active development, below is a non-comprehensive list of features to be implemented.
 
 - [x] Set the maximum crawl level.
-- [ ] Restrict crawlable domains and/or path.
+- [ ] Save to disk.
+- [ ] Set timeouts.
+- [ ] The ability to manually stop/pause/restart the crawler.
+- [ ] Restrict crawlable domains, paths or file types.
 - [ ] Limit concurrent crawlers.
 - [ ] Limit rate of crawling.
 - [ ] Set crawler's user agent.
