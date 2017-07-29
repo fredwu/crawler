@@ -16,17 +16,15 @@ Crawler.crawl("http://elixir-lang.org", max_levels: 2)
 
 ## Features Backlog
 
-Crawler is under active development, below is the list of features to be implemented.
+Crawler is under active development, below is a non-comprehensive list of features to be implemented.
 
-|     | Feature |
-|-----|---------|
-| [x] | Set the maximum crawl level.
-| [ ] | Restrict crawlable domains and/or path.
-| [ ] | Limit concurrent crawlers.
-| [ ] | Limit rate of crawling.
-| [ ] | Set crawler's user agent.
-| [ ] | The ability to retry a failed crawl.
-| [ ] | DSL for scraping page content.
+- [x] Set the maximum crawl level.
+- [ ] Restrict crawlable domains and/or path.
+- [ ] Limit concurrent crawlers.
+- [ ] Limit rate of crawling.
+- [ ] Set crawler's user agent.
+- [ ] The ability to retry a failed crawl.
+- [ ] DSL for scraping page content.
 
 ## License
 
