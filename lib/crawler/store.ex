@@ -30,12 +30,12 @@ defmodule Crawler.Store do
   end
 
   def add_body(url, body) do
-    Registry.update_value(DB, url, &(%{&1 | body: body}))
+    Registry.update_value(DB, url, & %{&1 | body: body})
 
     %Page{url: url, body: body}
   end
 
   def processed(url) do
-    Registry.update_value(DB, url, &(%{&1 | processed: true}))
+    Registry.update_value(DB, url, & %{&1 | processed: true})
   end
 end
