@@ -3,15 +3,17 @@ defmodule Crawler.Mixfile do
 
   def project do
     [
-      app:             :crawler,
-      version:         "0.1.0",
-      elixir:          "~> 1.5",
-      package:         package(),
-      name:            "Crawler",
-      description:     "A high performance web crawler in Elixir.",
-      start_permanent: Mix.env == :prod,
-      deps:            deps(),
-      aliases:         ["publish": ["hex.publish", &git_tag/1]]
+      app:               :crawler,
+      version:           "0.1.0",
+      elixir:            "~> 1.5",
+      package:           package(),
+      name:              "Crawler",
+      description:       "A high performance web crawler in Elixir.",
+      start_permanent:   Mix.env == :prod,
+      deps:              deps(),
+      test_coverage:     [tool: ExCoveralls],
+      preferred_cli_env: [coveralls: :test],
+      aliases:           ["publish": ["hex.publish", &git_tag/1]],
     ]
   end
 
@@ -24,9 +26,10 @@ defmodule Crawler.Mixfile do
 
   defp deps do
     [
-      {:httpoison, "~> 0.12.0"},
-      {:floki,     "~> 0.17.2"},
-      {:bypass,    "~> 0.8", only: :test}
+      {:httpoison,   "~> 0.12"},
+      {:floki,       "~> 0.17"},
+      {:bypass,      "~> 0.8", only: :test},
+      {:excoveralls, "~> 0.7", only: :test},
     ]
   end
 
