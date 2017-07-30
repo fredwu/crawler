@@ -1,4 +1,4 @@
-# Crawler [![Travis](https://img.shields.io/travis/fredwu/crawler.svg)](https://travis-ci.org/fredwu/crawler) [![Coverage](https://coveralls.io/repos/github/fredwu/crawler/badge.svg?branch=master)](https://coveralls.io/github/fredwu/crawler?branch=master) [![Hex.pm](https://img.shields.io/hexpm/v/crawler.svg)](https://hex.pm/packages/crawler)
+# Crawler [![Travis](https://img.shields.io/travis/fredwu/crawler.svg)](https://travis-ci.org/fredwu/crawler) [![Coverage](https://img.shields.io/coveralls/fredwu/crawler.svg)](https://coveralls.io/github/fredwu/crawler?branch=master) [![Hex.pm](https://img.shields.io/hexpm/v/crawler.svg)](https://hex.pm/packages/crawler)
 
 A high performance web crawler in Elixir.
 
