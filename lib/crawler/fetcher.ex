@@ -8,7 +8,7 @@ defmodule Crawler.Fetcher do
 
   def fetch(opts) do
     with {:ok, opts} <- Policer.police(opts),
-         _           <- Recorder.store_url(opts),
+         {:ok, _pid} <- Recorder.store_url(opts),
          opts        <- Recorder.store_url_level(opts)
     do
       fetch_url(opts)
