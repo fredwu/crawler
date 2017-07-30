@@ -4,18 +4,18 @@ defmodule Crawler.Worker.Parser do
   @doc """
   ## Examples
 
-      iex> Parser.parse(%{page: %Crawler.Store.Page{body: "Body"}, opts: []})
-      %Crawler.Store.Page{body: "Body"}
+      iex> Parser.parse(%{page: %Page{body: "Body"}, opts: []})
+      %Page{body: "Body"}
 
-      iex> Parser.parse(%{page: %Crawler.Store.Page{
+      iex> Parser.parse(%{page: %Page{
       iex>   body: "<a href='http://localhost/'>Link</a>"
       iex> }, opts: []})
-      %Crawler.Store.Page{body: "<a href='http://localhost/'>Link</a>"}
+      %Page{body: "<a href='http://localhost/'>Link</a>"}
 
-      iex> Parser.parse(%{page: %Crawler.Store.Page{
+      iex> Parser.parse(%{page: %Page{
       iex>   body: "<a href='http://localhost/' target='_blank'>Link</a>"
       iex> }, opts: []})
-      %Crawler.Store.Page{body: "<a href='http://localhost/' target='_blank'>Link</a>"}
+      %Page{body: "<a href='http://localhost/' target='_blank'>Link</a>"}
   """
   def parse(%{page: page, opts: opts}) do
     page.body

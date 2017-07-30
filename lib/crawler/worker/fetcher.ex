@@ -1,5 +1,5 @@
 defmodule Crawler.Worker.Fetcher do
-  alias Crawler.{Store, Store.Page}
+  alias Crawler.{Worker.Fetcher.Recorder, Store, Store.Page}
 
   @fetch_opts [
     follow_redirect: true,
@@ -8,8 +8,8 @@ defmodule Crawler.Worker.Fetcher do
 
   def fetch(opts) do
     with {:ok, opts} <- fetchable(opts),
-         _           <- store_url(opts),
-         opts        <- store_url_level(opts)
+         _           <- Recorder.store_url(opts),
+         opts        <- Recorder.store_url_level(opts)
     do
       fetch_url(opts)
     end
@@ -35,25 +35,13 @@ defmodule Crawler.Worker.Fetcher do
     !Store.find(url)
   end
 
-  defp store_url(opts) do
-    Store.add(opts[:url])
-  end
-
-  defp store_url_level(opts) do
-    Keyword.replace(opts, :level, opts[:level] + 1)
-  end
-
   defp fetch_url(opts) do
     case HTTPoison.get(opts[:url], [], @fetch_opts) do
       {:ok, %{status_code: 200, body: body}} ->
-        store_page(opts[:url], body)
+        Recorder.store_page(opts[:url], body)
         return_page(body, opts)
       _ -> nil
     end
-  end
-
-  defp store_page(url, body) do
-    Store.add_body(url, body)
   end
 
   defp return_page(body, opts) do

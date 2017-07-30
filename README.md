@@ -10,9 +10,9 @@ Crawler.crawl("http://elixir-lang.org", max_levels: 2)
 
 ## Configurations
 
-| Option      | Type    | Default Value | Description |
-|-------------|---------|---------------|-------------|
-| :max_levels | integer | 3             | Maximum nested level of pages to crawl.
+| Option        | Type    | Default Value | Description |
+|---------------|---------|---------------|-------------|
+| `:max_levels` | integer | 3             | Maximum nested level of pages to crawl.
 
 ## Features Backlog
 
