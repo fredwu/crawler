@@ -9,7 +9,7 @@ defmodule Crawler.Fetcher.Policer do
 
       iex> Crawler.Store.add("http://localhost/")
       iex> Policer.police([level: 1, max_levels: 2, url: "http://localhost/"])
-      {:error, "Not allowed to fetch with opts: [level: 1, max_levels: 2, url: \\"http://localhost/\\"]."}
+      {:error, "Not allowed to fetch with opts: [level: 1, max_levels: 2, url: \\\"http://localhost/\\\"]."}
 
       iex> Policer.police([level: 2, max_levels: 2])
       {:error, "Not allowed to fetch with opts: [level: 2, max_levels: 2]."}
