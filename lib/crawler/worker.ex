@@ -1,7 +1,7 @@
 defmodule Crawler.Worker do
   use GenServer
 
-  alias Crawler.Worker.{Fetcher, Parser}
+  alias Crawler.{Fetcher, Parser}
 
   def start_link(args) do
     GenServer.start_link(__MODULE__, args)

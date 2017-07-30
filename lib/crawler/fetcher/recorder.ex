@@ -1,4 +1,4 @@
-defmodule Crawler.Worker.Fetcher.Recorder do
+defmodule Crawler.Fetcher.Recorder do
   alias Crawler.Store
 
   def store_url(opts) do

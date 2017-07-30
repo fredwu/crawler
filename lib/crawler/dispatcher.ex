@@ -1,4 +1,4 @@
-defmodule Crawler.Worker.Dispatcher do
+defmodule Crawler.Dispatcher do
   def dispatch(request, opts) do
     case request do
       {_, url} -> Crawler.crawl(url, opts)

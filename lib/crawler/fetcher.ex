@@ -1,5 +1,5 @@
-defmodule Crawler.Worker.Fetcher do
-  alias Crawler.{Worker.Fetcher.Recorder, Store, Store.Page}
+defmodule Crawler.Fetcher do
+  alias Crawler.{Fetcher.Recorder, Store, Store.Page}
 
   @fetch_opts [
     follow_redirect: true,

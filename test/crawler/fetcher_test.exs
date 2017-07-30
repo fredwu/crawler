@@ -1,7 +1,7 @@
-defmodule Crawler.Worker.FetcherTest do
+defmodule Crawler.FetcherTest do
   use Crawler.TestCase, async: true
 
-  alias Crawler.Worker.Fetcher
+  alias Crawler.Fetcher
 
   doctest Fetcher
 

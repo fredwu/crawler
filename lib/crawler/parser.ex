@@ -1,5 +1,5 @@
-defmodule Crawler.Worker.Parser do
-  alias Crawler.{Worker.Dispatcher, Store, Store.Page}
+defmodule Crawler.Parser do
+  alias Crawler.{Dispatcher, Store, Store.Page}
 
   @doc """
   ## Examples
