@@ -1,5 +1,6 @@
 defmodule Crawler.Options do
   @max_levels 3
+  @timeout    5_000
 
   @doc """
   ## Examples
@@ -17,6 +18,7 @@ defmodule Crawler.Options do
     Keyword.merge([
       level:      0,
       max_levels: max_levels(),
+      timeout:    timeout(),
     ], opts)
   end
 
@@ -34,4 +36,5 @@ defmodule Crawler.Options do
   end
 
   defp max_levels, do: Application.get_env(:crawler, :max_levels) || @max_levels
+  defp timeout,    do: Application.get_env(:crawler, :timeout) || @timeout
 end

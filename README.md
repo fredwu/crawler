@@ -13,6 +13,7 @@ Crawler.crawl("http://elixir-lang.org", max_levels: 2)
 | Option        | Type    | Default Value | Description |
 |---------------|---------|---------------|-------------|
 | `:max_levels` | integer | 3             | Maximum nested level of pages to crawl.
+| `:timeout`    | integer | 5000          | Timeout value for fetching a page, in ms.
 
 ## Features Backlog
 
@@ -20,7 +21,7 @@ Crawler is under active development, below is a non-comprehensive list of featur
 
 - [x] Set the maximum crawl level.
 - [ ] Save to disk.
-- [ ] Set timeouts.
+- [x] Set timeouts.
 - [ ] The ability to manually stop/pause/restart the crawler.
 - [ ] Restrict crawlable domains, paths or file types.
 - [ ] Limit concurrent crawlers.

@@ -15,12 +15,27 @@ defmodule Crawler.Fetcher do
   end
 
   defp fetch_url(opts) do
-    case HTTPoison.get(opts[:url], [], @fetch_opts) do
-      {:ok, %{status_code: 200, body: body}} ->
-        Recorder.store_page(opts[:url], body)
+    url = opts[:url]
+
+    case HTTPoison.get(url, [], fetch_opts(opts)) do
+
+      {:ok, %HTTPoison.Response{status_code: 200, body: body}} ->
+        Recorder.store_page(url, body)
         return_page(body, opts)
-      _ -> nil
+
+      {:ok, %HTTPoison.Response{status_code: status_code}} ->
+        {:error, "Failed to fetch #{url}, status code: #{status_code}"}
+
+      {:error, %HTTPoison.Error{reason: reason}} ->
+        {:error, "Failed to fetch #{url}, reason: #{reason}"}
+
     end
+  end
+
+  defp fetch_opts(opts) do
+    @fetch_opts ++ [
+      recv_timeout: opts[:timeout]
+    ]
   end
 
   defp return_page(body, opts) do
