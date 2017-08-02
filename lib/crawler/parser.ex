@@ -8,14 +8,14 @@ defmodule Crawler.Parser do
       %Page{body: "Body"}
 
       iex> Parser.parse(%{page: %Page{
-      iex>   body: "<a href='http://localhost/'>Link</a>"
+      iex>   body: "<a href='http://parser/'>Link</a>"
       iex> }, opts: []})
-      %Page{body: "<a href='http://localhost/'>Link</a>"}
+      %Page{body: "<a href='http://parser/'>Link</a>"}
 
       iex> Parser.parse(%{page: %Page{
-      iex>   body: "<a href='http://localhost/' target='_blank'>Link</a>"
+      iex>   body: "<a href='http://parser/' target='_blank'>Link</a>"
       iex> }, opts: []})
-      %Page{body: "<a href='http://localhost/' target='_blank'>Link</a>"}
+      %Page{body: "<a href='http://parser/' target='_blank'>Link</a>"}
   """
   def parse(%{page: page, opts: opts}) do
     page.body

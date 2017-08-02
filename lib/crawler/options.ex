@@ -27,11 +27,11 @@ defmodule Crawler.Options do
   @doc """
   ## Examples
 
-      iex> Options.assign_url([], "http://localhost/")
-      [url: "http://localhost/"]
+      iex> Options.assign_url([], "http://options/")
+      [url: "http://options/"]
 
-      iex> Options.assign_url([url: "http://example.com/"], "http://localhost/")
-      [url: "http://localhost/"]
+      iex> Options.assign_url([url: "http://example.com/"], "http://options/")
+      [url: "http://options/"]
   """
   def assign_url(opts, url) do
     Keyword.merge(opts, [url: url])

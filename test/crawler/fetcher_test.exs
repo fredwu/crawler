@@ -55,6 +55,8 @@ defmodule Crawler.FetcherTest do
 
     Fetcher.fetch(url: url, level: 0, save_to: tmp("fetcher"))
 
-    assert {:ok, "<html>200</html>"} == File.read(tmp("fetcher", "index.html"))
+    wait fn ->
+      assert {:ok, "<html>200</html>"} == File.read(tmp("fetcher", "index.html"))
+    end
   end
 end

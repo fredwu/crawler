@@ -2,11 +2,11 @@ defmodule Crawler.Fetcher.Snapper do
   @doc """
   ## Examples
 
-      iex> Crawler.Fetcher.Snapper.snap("hello", save_to: tmp("snapper"), url: "http://localhost/index.html")
+      iex> Crawler.Fetcher.Snapper.snap("hello", save_to: tmp("snapper"), url: "http://snapper/index.html")
       iex> File.read(tmp("snapper", "index.html"))
       {:ok, "hello"}
 
-      iex> Crawler.Fetcher.Snapper.snap("hello", save_to: "nope", url: "http://localhost/index.html")
+      iex> Crawler.Fetcher.Snapper.snap("hello", save_to: "nope", url: "http://snapper/index.html")
       {:error, "Cannot write to file nope/index.html, reason: enoent"}
   """
   def snap(body, opts) do
