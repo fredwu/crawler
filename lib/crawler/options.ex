@@ -1,6 +1,7 @@
 defmodule Crawler.Options do
   @max_levels 3
   @timeout    5_000
+  @save_to    nil
 
   @doc """
   ## Examples
@@ -19,6 +20,7 @@ defmodule Crawler.Options do
       level:      0,
       max_levels: max_levels(),
       timeout:    timeout(),
+      save_to:    save_to(),
     ], opts)
   end
 
@@ -37,4 +39,5 @@ defmodule Crawler.Options do
 
   defp max_levels, do: Application.get_env(:crawler, :max_levels) || @max_levels
   defp timeout,    do: Application.get_env(:crawler, :timeout) || @timeout
+  defp save_to,    do: Application.get_env(:crawler, :save_to) || @save_to
 end

@@ -1,5 +1,6 @@
 defmodule Crawler.Fetcher do
-  alias Crawler.{Fetcher.Policer, Fetcher.Recorder, Store.Page}
+  alias Crawler.Fetcher.{Policer, Recorder, Snapper}
+  alias Crawler.Store.Page
 
   @fetch_opts [
     follow_redirect: true,
@@ -21,6 +22,11 @@ defmodule Crawler.Fetcher do
 
       {:ok, %HTTPoison.Response{status_code: 200, body: body}} ->
         Recorder.store_page(url, body)
+
+        if opts[:save_to] do
+          Snapper.snap(body, opts)
+        end
+
         return_page(body, opts)
 
       {:ok, %HTTPoison.Response{status_code: status_code}} ->

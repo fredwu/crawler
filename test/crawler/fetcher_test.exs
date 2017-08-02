@@ -45,4 +45,16 @@ defmodule Crawler.FetcherTest do
     assert fetcher == {:error, "Failed to fetch #{url}, reason: timeout"}
     refute Crawler.Store.find(url).body
   end
+
+  test "fetch index.html", %{bypass: bypass, url: url} do
+    url = "#{url}/index.html"
+
+    Bypass.expect_once bypass, "GET", "/index.html", fn (conn) ->
+      Plug.Conn.resp(conn, 200, "<html>200</html>")
+    end
+
+    Fetcher.fetch(url: url, level: 0, save_to: tmp("fetcher"))
+
+    assert {:ok, "<html>200</html>"} == File.read(tmp("fetcher", "index.html"))
+  end
 end

@@ -11,4 +11,12 @@ defmodule Helpers do
         wait(max(0, timeout - 10), fun)
     end
   end
+
+  def tmp(path \\ "", filename \\ "") do
+    tmp_path = Path.join([File.cwd!, "test", "tmp", path])
+
+    File.mkdir_p(tmp_path)
+
+    Path.join(tmp_path, filename)
+  end
 end

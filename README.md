@@ -10,10 +10,11 @@ Crawler.crawl("http://elixir-lang.org", max_levels: 2)
 
 ## Configurations
 
-| Option        | Type    | Default Value | Description |
-|---------------|---------|---------------|-------------|
-| `:max_levels` | integer | 3             | Maximum nested level of pages to crawl.
-| `:timeout`    | integer | 5000          | Timeout value for fetching a page, in ms.
+| Option          | Type    | Default Value | Description |
+|-----------------|---------|---------------|-------------|
+| `:max_levels`   | integer | 3             | Maximum nested level of pages to crawl.
+| `:timeout`      | integer | 5000          | Timeout value for fetching a page, in ms.
+| `:save_to`      | string  | nil           | When provided, the path for saving crawled pages.
 
 ## Features Backlog
 
