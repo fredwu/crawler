@@ -21,13 +21,11 @@ defmodule Crawler.Fetcher do
     case HTTPoison.get(url, [], fetch_opts(opts)) do
 
       {:ok, %HTTPoison.Response{status_code: 200, body: body}} ->
-        Recorder.store_page(url, body)
-
-        if opts[:save_to] do
-          Snapper.snap(body, opts)
+        with {:ok, _} <- Recorder.store_page(url, body),
+             {:ok, _} <- snap_page(body, opts)
+        do
+          return_page(body, opts)
         end
-
-        return_page(body, opts)
 
       {:ok, %HTTPoison.Response{status_code: status_code}} ->
         {:error, "Failed to fetch #{url}, status code: #{status_code}"}
@@ -38,10 +36,12 @@ defmodule Crawler.Fetcher do
     end
   end
 
-  defp fetch_opts(opts) do
-    @fetch_opts ++ [
-      recv_timeout: opts[:timeout]
-    ]
+  defp snap_page(body, opts) do
+    if opts[:save_to] do
+      Snapper.snap(body, opts)
+    else
+      {:ok, ""}
+    end
   end
 
   defp return_page(body, opts) do
@@ -49,5 +49,11 @@ defmodule Crawler.Fetcher do
       page: %Page{url: opts[:url], body: body},
       opts: opts
     }
+  end
+
+  defp fetch_opts(opts) do
+    @fetch_opts ++ [
+      recv_timeout: opts[:timeout]
+    ]
   end
 end

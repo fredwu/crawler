@@ -20,7 +20,7 @@ defmodule Crawler.Fetcher.Recorder do
   end
 
   def store_page(url, body) do
-    Store.add_body(url, body)
+    {:ok, Store.add_body(url, body)}
   end
 
   defp store_url(opts) do

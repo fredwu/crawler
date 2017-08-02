@@ -46,6 +46,18 @@ defmodule Crawler.FetcherTest do
     refute Crawler.Store.find(url).body
   end
 
+  test "failure: unable to write", %{bypass: bypass, url: url} do
+    url = "#{url}/fail.html"
+
+    Bypass.expect_once bypass, "GET", "/fail.html", fn (conn) ->
+      Plug.Conn.resp(conn, 200, "<html>200</html>")
+    end
+
+    fetcher = Fetcher.fetch(url: url, level: 0, save_to: "nope")
+
+    assert {:error, "Cannot write to file nope/fail.html, reason: enoent"} == fetcher
+  end
+
   test "fetch index.html", %{bypass: bypass, url: url} do
     url = "#{url}/index.html"
 
