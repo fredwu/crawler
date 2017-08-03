@@ -20,7 +20,7 @@ defmodule Crawler.Fetcher.Policer do
     do
       {:ok, opts}
     else
-      _ -> {:error, "Not allowed to fetch with opts: #{Kernel.inspect(opts)}."}
+      _ -> police_error(opts)
     end
   end
 
@@ -30,5 +30,9 @@ defmodule Crawler.Fetcher.Policer do
 
   defp not_fetched_yet?(opts) do
     !Store.find(opts[:url])
+  end
+
+  defp police_error(opts) do
+    {:error, "Not allowed to fetch with opts: #{Kernel.inspect(opts)}."}
   end
 end
