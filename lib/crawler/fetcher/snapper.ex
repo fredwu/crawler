@@ -30,7 +30,7 @@ defmodule Crawler.Fetcher.Snapper do
       {:ok, "<a href='another.domain/page'></a>"}
 
       iex> Snapper.snap(
-      iex>   "<a href='http://another.domain:8888/page'></a>",
+      iex>   "<a href='https://another.domain:8888/page'></a>",
       iex>   save_to: tmp("snapper"),
       iex>   url: "http://snapper.local:7777/dir/depth1",
       iex>   level: 1,
@@ -54,10 +54,10 @@ defmodule Crawler.Fetcher.Snapper do
     end
   end
 
-  # TODO: configurable protocals
   def snap_path(url) do
     url
-    |> String.replace_prefix("http://", "")
+    |> String.split("://", parts: 2)
+    |> Enum.at(-1)
     |> String.replace(":", "-")
   end
 end
