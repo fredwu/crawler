@@ -1,7 +1,7 @@
 defmodule Crawler.FetcherTest do
   use Crawler.TestCase, async: true
 
-  alias Crawler.Fetcher
+  alias Crawler.{Fetcher, Store}
 
   doctest Fetcher
 
@@ -12,7 +12,7 @@ defmodule Crawler.FetcherTest do
 
     Fetcher.fetch(url: url, level: 0)
 
-    page = Crawler.Store.find(url)
+    page = Store.find(url)
 
     assert page.url  == url
     assert page.body == "<html>200</html>"
@@ -28,7 +28,7 @@ defmodule Crawler.FetcherTest do
     fetcher = Fetcher.fetch(url: url, level: 0)
 
     assert fetcher == {:error, "Failed to fetch #{url}, status code: 500"}
-    refute Crawler.Store.find(url).body
+    refute Store.find(url).body
   end
 
   test "failure: timeout", %{bypass: bypass, url: url} do
@@ -43,7 +43,7 @@ defmodule Crawler.FetcherTest do
     :timer.sleep(10)
 
     assert fetcher == {:error, "Failed to fetch #{url}, reason: timeout"}
-    refute Crawler.Store.find(url).body
+    refute Store.find(url).body
   end
 
   test "failure: unable to write", %{bypass: bypass, url: url, path: path} do

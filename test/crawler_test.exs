@@ -1,12 +1,14 @@
 defmodule CrawlerTest do
   use Crawler.TestCase, async: true
 
+  alias Crawler.{WorkerSupervisor, Worker, Store}
+
   doctest Crawler
 
   test "supervisor and worker" do
-    {:ok, worker} = Crawler.WorkerSupervisor.start_child(hello: "world", url: "url")
+    {:ok, worker} = WorkerSupervisor.start_child(hello: "world", url: "url")
 
-    assert Crawler.Worker.cast(worker) == :ok
+    assert Worker.cast(worker) == :ok
   end
 
   test "stored information", %{bypass: bypass, url: url} do
@@ -43,11 +45,11 @@ defmodule CrawlerTest do
     assert Crawler.crawl(url, max_levels: 3) == :ok
 
     wait fn ->
-      assert Crawler.Store.find_processed(url)
-      assert Crawler.Store.find_processed(linked_url1)
-      assert Crawler.Store.find_processed(linked_url2)
-      assert Crawler.Store.find_processed(linked_url3)
-      refute Crawler.Store.find(linked_url4)
+      assert Store.find_processed(url)
+      assert Store.find_processed(linked_url1)
+      assert Store.find_processed(linked_url2)
+      assert Store.find_processed(linked_url3)
+      refute Store.find(linked_url4)
     end
   end
 

@@ -1,18 +1,18 @@
 defmodule Crawler do
   use Application
 
-  alias Crawler.Options
+  alias Crawler.{Options, Store, WorkerSupervisor, Worker}
 
   def start(_type, _args) do
-    Crawler.Store.init
-    Crawler.WorkerSupervisor.start_link()
+    Store.init
+    WorkerSupervisor.start_link()
   end
 
   def crawl(url, opts \\ []) do
     opts = opts |> Options.assign_defaults |> Options.assign_url(url)
 
-    {:ok, worker} = Crawler.WorkerSupervisor.start_child(opts)
+    {:ok, worker} = WorkerSupervisor.start_child(opts)
 
-    Crawler.Worker.cast(worker, opts)
+    Worker.cast(worker, opts)
   end
 end
