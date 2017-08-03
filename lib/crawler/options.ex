@@ -1,24 +1,24 @@
 defmodule Crawler.Options do
-  @max_levels 3
+  @max_depths 3
   @timeout    5_000
   @save_to    nil
 
   @doc """
   ## Examples
 
-      iex> Options.assign_defaults([]) |> Keyword.has_key?(:level)
+      iex> Options.assign_defaults([]) |> Keyword.has_key?(:depth)
       true
 
-      iex> Options.assign_defaults([]) |> Keyword.get(:max_levels)
+      iex> Options.assign_defaults([]) |> Keyword.get(:max_depths)
       3
 
-      iex> Options.assign_defaults([max_levels: 4]) |> Keyword.get(:max_levels)
+      iex> Options.assign_defaults([max_depths: 4]) |> Keyword.get(:max_depths)
       4
   """
   def assign_defaults(opts) do
     Keyword.merge([
-      level:      0,
-      max_levels: max_levels(),
+      depth:      0,
+      max_depths: max_depths(),
       timeout:    timeout(),
       save_to:    save_to(),
     ], opts)
@@ -37,7 +37,7 @@ defmodule Crawler.Options do
     Keyword.merge(opts, [url: url])
   end
 
-  defp max_levels, do: Application.get_env(:crawler, :max_levels) || @max_levels
+  defp max_depths, do: Application.get_env(:crawler, :max_depths) || @max_depths
   defp timeout,    do: Application.get_env(:crawler, :timeout) || @timeout
   defp save_to,    do: Application.get_env(:crawler, :save_to) || @save_to
 end

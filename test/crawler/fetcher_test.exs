@@ -10,7 +10,7 @@ defmodule Crawler.FetcherTest do
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
-    Fetcher.fetch(url: url, level: 0)
+    Fetcher.fetch(url: url, depth: 0)
 
     page = Store.find(url)
 
@@ -25,7 +25,7 @@ defmodule Crawler.FetcherTest do
       Plug.Conn.resp(conn, 500, "<html>500</html>")
     end
 
-    fetcher = Fetcher.fetch(url: url, level: 0)
+    fetcher = Fetcher.fetch(url: url, depth: 0)
 
     assert fetcher == {:error, "Failed to fetch #{url}, status code: 500"}
     refute Store.find(url).body
@@ -39,7 +39,7 @@ defmodule Crawler.FetcherTest do
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
-    fetcher = Fetcher.fetch(url: url, level: 0, timeout: 1)
+    fetcher = Fetcher.fetch(url: url, depth: 0, timeout: 1)
     :timer.sleep(10)
 
     assert fetcher == {:error, "Failed to fetch #{url}, reason: timeout"}
@@ -53,7 +53,7 @@ defmodule Crawler.FetcherTest do
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
-    fetcher = Fetcher.fetch(url: url, level: 0, save_to: "nope")
+    fetcher = Fetcher.fetch(url: url, depth: 0, save_to: "nope")
 
     assert {:error, "Cannot write to file nope/#{path}/fail.html, reason: enoent"} == fetcher
   end
@@ -65,7 +65,7 @@ defmodule Crawler.FetcherTest do
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
-    Fetcher.fetch(url: url, level: 0, save_to: tmp("fetcher"))
+    Fetcher.fetch(url: url, depth: 0, save_to: tmp("fetcher"))
 
     wait fn ->
       assert {:ok, "<html>200</html>"} == File.read(tmp("fetcher/#{path}", "page.html"))

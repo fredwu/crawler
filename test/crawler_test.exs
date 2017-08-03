@@ -42,7 +42,7 @@ defmodule CrawlerTest do
       """)
     end
 
-    assert Crawler.crawl(url, max_levels: 3) == :ok
+    assert Crawler.crawl(url, max_depths: 3) == :ok
 
     wait fn ->
       assert Store.find_processed(url)

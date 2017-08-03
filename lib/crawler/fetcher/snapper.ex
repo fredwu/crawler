@@ -23,8 +23,8 @@ defmodule Crawler.Fetcher.Snapper do
       iex>   "<a href='http://another.domain/page'></a>",
       iex>   save_to: tmp("snapper"),
       iex>   url: "http://snapper.local/depth0",
-      iex>   level: 1,
-      iex>   max_levels: 2,
+      iex>   depth: 1,
+      iex>   max_depths: 2,
       iex> )
       iex> File.read(tmp("snapper/snapper.local", "depth0"))
       {:ok, "<a href='another.domain/page'></a>"}
@@ -33,8 +33,8 @@ defmodule Crawler.Fetcher.Snapper do
       iex>   "<a href='https://another.domain:8888/page'></a>",
       iex>   save_to: tmp("snapper"),
       iex>   url: "http://snapper.local:7777/dir/depth1",
-      iex>   level: 1,
-      iex>   max_levels: 2,
+      iex>   depth: 1,
+      iex>   max_depths: 2,
       iex> )
       iex> File.read(tmp("snapper/snapper.local-7777/dir", "depth1"))
       {:ok, "<a href='../another.domain-8888/page'></a>"}

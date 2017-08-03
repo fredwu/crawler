@@ -11,14 +11,14 @@ A high performance web crawler in Elixir.
 ## Usage
 
 ```elixir
-Crawler.crawl("http://elixir-lang.org", max_levels: 2)
+Crawler.crawl("http://elixir-lang.org", max_depths: 2)
 ```
 
 ## Configurations
 
 | Option          | Type    | Default Value | Description |
 |-----------------|---------|---------------|-------------|
-| `:max_levels`   | integer | 3             | Maximum nested level of pages to crawl.
+| `:max_depths`   | integer | 3             | Maximum nested depth of pages to crawl.
 | `:timeout`      | integer | 5000          | Timeout value for fetching a page, in ms.
 | `:save_to`      | string  | nil           | When provided, the path for saving crawled pages.
 
@@ -26,7 +26,7 @@ Crawler.crawl("http://elixir-lang.org", max_levels: 2)
 
 Crawler is under active development, below is a non-comprehensive list of features to be implemented.
 
-- [x] Set the maximum crawl level.
+- [x] Set the maximum crawl depth.
 - [ ] Save to disk.
 - [x] Set timeouts.
 - [ ] The ability to manually stop/pause/restart the crawler.

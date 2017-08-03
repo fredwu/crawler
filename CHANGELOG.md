@@ -3,6 +3,7 @@
 ## master
 
 - Implemented `:timeout` option
+- Renamed `:max_levels` to `:max_depths`
 
 ## v0.1.0 [2017-07-30]
 

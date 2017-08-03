@@ -7,24 +7,24 @@ defmodule Crawler.Replacer do
       iex> Replacer.replace_links(
       iex>   "<a href='http://another.domain/page'></a>",
       iex>   url: "http://main.domain/dir/page",
-      iex>   level: 1,
-      iex>   max_levels: 2,
+      iex>   depth: 1,
+      iex>   max_depths: 2,
       iex> )
       {:ok, "<a href='../another.domain/page'></a>"}
 
       iex> Replacer.replace_links(
       iex>   "<a href='http://another.domain/dir/page'></a>",
       iex>   url: "http://main.domain/page",
-      iex>   level: 1,
-      iex>   max_levels: 2,
+      iex>   depth: 1,
+      iex>   max_depths: 2,
       iex> )
       {:ok, "<a href='another.domain/dir/page'></a>"}
 
       iex> Replacer.replace_links(
       iex>   "<a href='http://another.domain/dir/page'></a>",
       iex>   url: "http://main.domain/dir/page",
-      iex>   level: 1,
-      iex>   max_levels: 2,
+      iex>   depth: 1,
+      iex>   max_depths: 2,
       iex> )
       {:ok, "<a href='../another.domain/dir/page'></a>"}
   """

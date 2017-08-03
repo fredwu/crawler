@@ -4,18 +4,18 @@ defmodule Crawler.Fetcher.Policer do
   @doc """
   ## Examples
 
-      iex> Policer.police([level: 1, max_levels: 2, url: "http://policer/"])
-      {:ok, [level: 1, max_levels: 2, url: "http://policer/"]}
+      iex> Policer.police([depth: 1, max_depths: 2, url: "http://policer/"])
+      {:ok, [depth: 1, max_depths: 2, url: "http://policer/"]}
 
       iex> Crawler.Store.add("http://policer/exist/")
-      iex> Policer.police([level: 1, max_levels: 2, url: "http://policer/exist/"])
-      {:error, "Not allowed to fetch with opts: [level: 1, max_levels: 2, url: \\\"http://policer/exist/\\\"]."}
+      iex> Policer.police([depth: 1, max_depths: 2, url: "http://policer/exist/"])
+      {:error, "Not allowed to fetch with opts: [depth: 1, max_depths: 2, url: \\\"http://policer/exist/\\\"]."}
 
-      iex> Policer.police([level: 2, max_levels: 2])
-      {:error, "Not allowed to fetch with opts: [level: 2, max_levels: 2]."}
+      iex> Policer.police([depth: 2, max_depths: 2])
+      {:error, "Not allowed to fetch with opts: [depth: 2, max_depths: 2]."}
   """
   def police(opts) do
-    with true <- within_fetch_level?(opts),
+    with true <- within_fetch_depth?(opts),
          true <- not_fetched_yet?(opts)
     do
       {:ok, opts}
@@ -24,8 +24,8 @@ defmodule Crawler.Fetcher.Policer do
     end
   end
 
-  defp within_fetch_level?(opts) do
-    opts[:level] < opts[:max_levels]
+  defp within_fetch_depth?(opts) do
+    opts[:depth] < opts[:max_depths]
   end
 
   defp not_fetched_yet?(opts) do
