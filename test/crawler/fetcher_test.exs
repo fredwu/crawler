@@ -58,17 +58,17 @@ defmodule Crawler.FetcherTest do
     assert {:error, "Cannot write to file nope/fail.html, reason: enoent"} == fetcher
   end
 
-  test "fetch index.html", %{bypass: bypass, url: url} do
-    url = "#{url}/index.html"
+  test "fetch and snap /page.html", %{bypass: bypass, url: url} do
+    url = "#{url}/page.html"
 
-    Bypass.expect_once bypass, "GET", "/index.html", fn (conn) ->
+    Bypass.expect_once bypass, "GET", "/page.html", fn (conn) ->
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
     Fetcher.fetch(url: url, level: 0, save_to: tmp("fetcher"))
 
     wait fn ->
-      assert {:ok, "<html>200</html>"} == File.read(tmp("fetcher", "index.html"))
+      assert {:ok, "<html>200</html>"} == File.read(tmp("fetcher", "page.html"))
     end
   end
 end

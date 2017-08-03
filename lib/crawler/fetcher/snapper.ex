@@ -8,6 +8,14 @@ defmodule Crawler.Fetcher.Snapper do
 
       iex> Snapper.snap("hello", save_to: "nope", url: "http://snapper/index.html")
       {:error, "Cannot write to file nope/index.html, reason: enoent"}
+
+      iex> Snapper.snap("hello", save_to: tmp("snapper"), url: "http://snapper/dir")
+      iex> File.read(tmp("snapper", "dir"))
+      {:ok, "hello"}
+
+      iex> Snapper.snap("hello", save_to: tmp("snapper"), url: "http://snapper/dir/")
+      iex> File.read(tmp("snapper", "dir"))
+      {:ok, "hello"}
   """
   def snap(body, opts) do
     file_path = Path.join(opts[:save_to], filename(opts[:url]))
