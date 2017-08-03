@@ -54,6 +54,15 @@ defmodule Crawler.Fetcher.Snapper do
     end
   end
 
+  @doc """
+  ## Examples
+
+      iex> Snapper.snap_path("http://hello")
+      "hello"
+
+      iex> Snapper.snap_path("https://hello:8888/world")
+      "hello-8888/world"
+  """
   def snap_path(url) do
     url
     |> String.split("://", parts: 2)
