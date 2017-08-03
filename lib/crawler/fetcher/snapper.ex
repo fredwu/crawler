@@ -40,13 +40,8 @@ defmodule Crawler.Fetcher.Snapper do
       {:ok, "<a href='../another.domain-8888/page'></a>"}
   """
   def snap(body, opts) do
-    file_path = Path.join(opts[:save_to], snap_path(opts[:url]))
-
-    if File.exists?(opts[:save_to]) do
-      File.mkdir_p(Path.dirname(file_path))
-    end
-
     {:ok, body} = Replacer.replace_links(body, opts)
+    file_path   = create_snap_dir(opts)
 
     case File.write(file_path, body) do
       :ok              -> {:ok, opts}
@@ -68,5 +63,15 @@ defmodule Crawler.Fetcher.Snapper do
     |> String.split("://", parts: 2)
     |> Enum.at(-1)
     |> String.replace(":", "-")
+  end
+
+  defp create_snap_dir(opts) do
+    file_path = Path.join(opts[:save_to], snap_path(opts[:url]))
+
+    if File.exists?(opts[:save_to]) do
+      File.mkdir_p(Path.dirname(file_path))
+    end
+
+    file_path
   end
 end

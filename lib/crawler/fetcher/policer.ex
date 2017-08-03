@@ -15,8 +15,8 @@ defmodule Crawler.Fetcher.Policer do
       {:error, "Not allowed to fetch with opts: [level: 2, max_levels: 2]."}
   """
   def police(opts) do
-    with true <- within_fetch_level?(opts[:level], opts[:max_levels]),
-         true <- not_fetched_yet?(opts[:url])
+    with true <- within_fetch_level?(opts),
+         true <- not_fetched_yet?(opts)
     do
       {:ok, opts}
     else
@@ -24,11 +24,11 @@ defmodule Crawler.Fetcher.Policer do
     end
   end
 
-  defp within_fetch_level?(current_level, max_levels) do
-    current_level < max_levels
+  defp within_fetch_level?(opts) do
+    opts[:level] < opts[:max_levels]
   end
 
-  defp not_fetched_yet?(url) do
-    !Store.find(url)
+  defp not_fetched_yet?(opts) do
+    !Store.find(opts[:url])
   end
 end

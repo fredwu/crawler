@@ -21,11 +21,7 @@ defmodule Crawler.Fetcher do
     case HTTPoison.get(url, [], fetch_opts(opts)) do
 
       {:ok, %HTTPoison.Response{status_code: 200, body: body}} ->
-        with {:ok, _} <- Recorder.store_page(url, body),
-             {:ok, _} <- snap_page(body, opts)
-        do
-          return_page(body, opts)
-        end
+        fetch_url_success(body, opts)
 
       {:ok, %HTTPoison.Response{status_code: status_code}} ->
         {:error, "Failed to fetch #{url}, status code: #{status_code}"}
@@ -33,6 +29,14 @@ defmodule Crawler.Fetcher do
       {:error, %HTTPoison.Error{reason: reason}} ->
         {:error, "Failed to fetch #{url}, reason: #{reason}"}
 
+    end
+  end
+
+  defp fetch_url_success(body, opts) do
+    with {:ok, _} <- Recorder.store_page(opts[:url], body),
+         {:ok, _} <- snap_page(body, opts)
+    do
+      return_page(body, opts)
     end
   end
 
