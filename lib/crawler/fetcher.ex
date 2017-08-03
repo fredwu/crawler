@@ -16,16 +16,18 @@ defmodule Crawler.Fetcher do
   end
 
   defp fetch_url(opts) do
-    url = opts[:url]
-
-    case HTTPoison.get(url, [], fetch_opts(opts)) do
+    case fetch_request(opts) do
       {:ok, %HTTPoison.Response{status_code: 200, body: body}} ->
         fetch_url_200(body, opts)
       {:ok, %HTTPoison.Response{status_code: status_code}} ->
-        fetch_url_non_200(url, status_code)
+        fetch_url_non_200(status_code, opts)
       {:error, %HTTPoison.Error{reason: reason}} ->
-        fetch_url_failed(url, reason)
+        fetch_url_failed(reason, opts)
     end
+  end
+
+  defp fetch_request(opts) do
+    HTTPoison.get(opts[:url], [], fetch_opts(opts))
   end
 
   defp fetch_url_200(body, opts) do
@@ -36,12 +38,12 @@ defmodule Crawler.Fetcher do
     end
   end
 
-  defp fetch_url_non_200(url, status_code) do
-    {:error, "Failed to fetch #{url}, status code: #{status_code}"}
+  defp fetch_url_non_200(status_code, opts) do
+    {:error, "Failed to fetch #{opts[:url]}, status code: #{status_code}"}
   end
 
-  defp fetch_url_failed(url, reason) do
-    {:error, "Failed to fetch #{url}, reason: #{reason}"}
+  defp fetch_url_failed(reason, opts) do
+    {:error, "Failed to fetch #{opts[:url]}, reason: #{reason}"}
   end
 
   defp snap_page(body, opts) do
