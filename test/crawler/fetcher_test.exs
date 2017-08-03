@@ -35,7 +35,7 @@ defmodule Crawler.FetcherTest do
     url = "#{url}/timeout"
 
     Bypass.expect_once bypass, "GET", "/timeout", fn (conn) ->
-      :timer.sleep(2)
+      :timer.sleep(5)
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
@@ -46,7 +46,7 @@ defmodule Crawler.FetcherTest do
     refute Crawler.Store.find(url).body
   end
 
-  test "failure: unable to write", %{bypass: bypass, url: url} do
+  test "failure: unable to write", %{bypass: bypass, url: url, path: path} do
     url = "#{url}/fail.html"
 
     Bypass.expect_once bypass, "GET", "/fail.html", fn (conn) ->
@@ -55,10 +55,10 @@ defmodule Crawler.FetcherTest do
 
     fetcher = Fetcher.fetch(url: url, level: 0, save_to: "nope")
 
-    assert {:error, "Cannot write to file nope/fail.html, reason: enoent"} == fetcher
+    assert {:error, "Cannot write to file nope/#{path}/fail.html, reason: enoent"} == fetcher
   end
 
-  test "fetch and snap /page.html", %{bypass: bypass, url: url} do
+  test "snap /page.html", %{bypass: bypass, url: url, path: path} do
     url = "#{url}/page.html"
 
     Bypass.expect_once bypass, "GET", "/page.html", fn (conn) ->
@@ -68,7 +68,7 @@ defmodule Crawler.FetcherTest do
     Fetcher.fetch(url: url, level: 0, save_to: tmp("fetcher"))
 
     wait fn ->
-      assert {:ok, "<html>200</html>"} == File.read(tmp("fetcher", "page.html"))
+      assert {:ok, "<html>200</html>"} == File.read(tmp("fetcher/#{path}", "page.html"))
     end
   end
 end

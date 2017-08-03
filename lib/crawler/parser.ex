@@ -8,24 +8,30 @@ defmodule Crawler.Parser do
       %Page{body: "Body"}
 
       iex> Parser.parse(%{page: %Page{
-      iex>   body: "<a href='http://parser/'>Link</a>"
+      iex>   body: "<a href='http://parser/1'>Link</a>"
       iex> }, opts: []})
-      %Page{body: "<a href='http://parser/'>Link</a>"}
+      %Page{body: "<a href='http://parser/1'>Link</a>"}
 
       iex> Parser.parse(%{page: %Page{
-      iex>   body: "<a href='http://parser/' target='_blank'>Link</a>"
+      iex>   body: "<a href='http://parser/2' target='_blank'>Link</a>"
       iex> }, opts: []})
-      %Page{body: "<a href='http://parser/' target='_blank'>Link</a>"}
+      %Page{body: "<a href='http://parser/2' target='_blank'>Link</a>"}
   """
-  def parse(%{page: page, opts: opts}) do
-    page.body
-    |> Floki.find("a")
-    |> Enum.each(&parse_link(&1, opts))
+  def parse(page, link_handler \\ &Dispatcher.dispatch(&1, &2))
+
+  def parse(%{page: page, opts: opts}, link_handler) do
+    parse_links(page.body, opts, link_handler)
 
     page
   end
 
-  def parse(_), do: nil
+  def parse(_, _), do: nil
+
+  def parse_links(body, opts, link_handler) do
+    body
+    |> Floki.find("a")
+    |> Enum.map(&parse_link(&1, opts, link_handler))
+  end
 
   def mark_processed(%Page{url: url}) do
     Store.processed(url)
@@ -33,10 +39,10 @@ defmodule Crawler.Parser do
 
   def mark_processed(_), do: nil
 
-  defp parse_link({"a", attrs, _}, opts) do
+  defp parse_link({"a", attrs, _}, opts, link_handler) do
     attrs
     |> detect_link
-    |> Dispatcher.dispatch(opts)
+    |> link_handler.(opts)
   end
 
   defp detect_link(attrs) do
