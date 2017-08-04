@@ -1,6 +1,6 @@
 defmodule Crawler.Fetcher do
-  alias Crawler.Fetcher.{Policer, Recorder, Snapper}
-  alias Crawler.Store.Page
+  alias Crawler.Fetcher.{Policer, Recorder}
+  alias Crawler.{Snapper, Store.Page}
 
   @fetch_opts [
     follow_redirect: true,

@@ -59,7 +59,7 @@ defmodule CrawlerTest do
     linked_url3 = "#{url2}/page3"
 
     Bypass.expect_once bypass, "GET", "/page1", fn (conn) ->
-      Plug.Conn.resp(conn, 200, "<html><a href='#{linked_url2}'>2</a><a href='#{linked_url3}'>3</a></html>")
+      Plug.Conn.resp(conn, 200, "<html><a href='#{linked_url2}'>2</a> <a href='#{linked_url3}'>3</a></html>")
     end
 
     Bypass.expect_once bypass, "GET", "/dir/page2", fn (conn) ->
@@ -72,8 +72,8 @@ defmodule CrawlerTest do
 
     Crawler.crawl(linked_url1, save_to: tmp("crawler"))
 
-    page1 = "<html><a href='#{path}/dir/page2'>2</a><a href='#{path2}/page3'>3</a></html>"
-    page2 = "<html><a href='../#{path2}/page3'>3</a></html>"
+    page1 = "<html><a href='../#{path}/dir/page2'>2</a> <a href='../#{path2}/page3'>3</a></html>"
+    page2 = "<html><a href='../../#{path2}/page3'>3</a></html>"
 
     wait fn ->
       assert {:ok, page1} == File.read(tmp("crawler/#{path}", "page1"))

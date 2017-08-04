@@ -1,5 +1,5 @@
 defmodule Crawler.Replacer do
-  alias Crawler.{Parser, Fetcher.Snapper}
+  alias Crawler.{Parser, Snapper, Replacer.Normaliser}
 
   @doc """
   ## Examples
@@ -10,7 +10,7 @@ defmodule Crawler.Replacer do
       iex>   depth: 1,
       iex>   max_depths: 2,
       iex> )
-      {:ok, "<a href='../another.domain/page'></a>"}
+      {:ok, "<a href='../../another.domain/page'></a>"}
 
       iex> Replacer.replace_links(
       iex>   "<a href='http://another.domain/dir/page'></a>",
@@ -18,7 +18,7 @@ defmodule Crawler.Replacer do
       iex>   depth: 1,
       iex>   max_depths: 2,
       iex> )
-      {:ok, "<a href='another.domain/dir/page'></a>"}
+      {:ok, "<a href='../another.domain/dir/page'></a>"}
 
       iex> Replacer.replace_links(
       iex>   "<a href='http://another.domain/dir/page'></a>",
@@ -26,7 +26,15 @@ defmodule Crawler.Replacer do
       iex>   depth: 1,
       iex>   max_depths: 2,
       iex> )
-      {:ok, "<a href='../another.domain/dir/page'></a>"}
+      {:ok, "<a href='../../another.domain/dir/page'></a>"}
+
+      iex> Replacer.replace_links(
+      iex>   "<a href='/dir/page2'></a>",
+      iex>   url: "http://main.domain/dir/page",
+      iex>   depth: 1,
+      iex>   max_depths: 2,
+      iex> )
+      {:ok, "<a href='../../main.domain/dir/page2'></a>"}
   """
   def replace_links(body, opts) do
     links = Parser.parse_links(body, opts, &get_link/2)
@@ -35,20 +43,25 @@ defmodule Crawler.Replacer do
     {:ok, body}
   end
 
-  defp get_link({_, url}, _opts) do
-    url
+  defp get_link({_, url}, _opts), do: url
+
+  defp modify_body(body, url, current_url) do
+    String.replace(body, url, modify_link(url, current_url))
   end
 
-  defp modify_body(body, link, current_url) do
-    String.replace(body, link, modify_link(link, current_url))
-  end
+  defp modify_link(url, current_url) do
+    prefix = current_url
+    |> Snapper.snap_path
+    |> count_depth
+    |> make_prefix
 
-  defp modify_link(link, current_url) do
-    current_depth = current_url |> Snapper.snap_path |> count_depth
+    domain = current_url
+    |> Snapper.snap_domain
 
-    prefix = String.duplicate("../", current_depth - 1)
+    path = url
+    |> Normaliser.normalise(domain)
 
-    "#{prefix}#{Snapper.snap_path(link)}"
+    "#{prefix}#{path}"
   end
 
   defp count_depth(string) do
@@ -56,5 +69,9 @@ defmodule Crawler.Replacer do
     |> String.graphemes
     |> Enum.filter(& &1 == "/")
     |> Enum.count
+  end
+
+  defp make_prefix(depth) do
+    String.duplicate("../", depth)
   end
 end

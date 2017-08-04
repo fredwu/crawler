@@ -1,4 +1,4 @@
-defmodule Crawler.Fetcher.Snapper do
+defmodule Crawler.Snapper do
   alias Crawler.Replacer
 
   @doc """
@@ -27,7 +27,7 @@ defmodule Crawler.Fetcher.Snapper do
       iex>   max_depths: 2,
       iex> )
       iex> File.read(tmp("snapper/snapper.local", "depth0"))
-      {:ok, "<a href='another.domain/page'></a>"}
+      {:ok, "<a href='../another.domain/page'></a>"}
 
       iex> Snapper.snap(
       iex>   "<a href='https://another.domain:8888/page'></a>",
@@ -37,7 +37,7 @@ defmodule Crawler.Fetcher.Snapper do
       iex>   max_depths: 2,
       iex> )
       iex> File.read(tmp("snapper/snapper.local-7777/dir", "depth1"))
-      {:ok, "<a href='../another.domain-8888/page'></a>"}
+      {:ok, "<a href='../../another.domain-8888/page'></a>"}
   """
   def snap(body, opts) do
     {:ok, body} = Replacer.replace_links(body, opts)
@@ -47,6 +47,22 @@ defmodule Crawler.Fetcher.Snapper do
       :ok              -> {:ok, opts}
       {:error, reason} -> {:error, "Cannot write to file #{file_path}, reason: #{reason}"}
     end
+  end
+
+  @doc """
+  ## Examples
+
+      iex> Snapper.snap_domain("http://hello")
+      "hello"
+
+      iex> Snapper.snap_domain("https://hello:8888/world")
+      "hello-8888"
+  """
+  def snap_domain(url) do
+    url
+    |> snap_path
+    |> String.split("/", parts: 2)
+    |> Kernel.hd
   end
 
   @doc """
