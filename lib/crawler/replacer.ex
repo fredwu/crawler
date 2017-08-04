@@ -50,18 +50,14 @@ defmodule Crawler.Replacer do
   end
 
   defp modify_link(url, current_url) do
-    prefix = current_url
+    link_prefix(current_url) <> link_path(url, current_url)
+  end
+
+  defp link_prefix(current_url) do
+    current_url
     |> Snapper.snap_path
     |> count_depth
     |> make_prefix
-
-    domain = current_url
-    |> Snapper.snap_domain
-
-    path = url
-    |> Normaliser.normalise(domain)
-
-    "#{prefix}#{path}"
   end
 
   defp count_depth(string) do
@@ -73,5 +69,11 @@ defmodule Crawler.Replacer do
 
   defp make_prefix(depth) do
     String.duplicate("../", depth)
+  end
+
+  defp link_path(url, current_url) do
+    current_url
+    |> Snapper.snap_domain
+    |> Normaliser.normalise(url)
   end
 end

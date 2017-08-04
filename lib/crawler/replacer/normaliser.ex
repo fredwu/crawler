@@ -5,24 +5,24 @@ defmodule Crawler.Replacer.Normaliser do
   ## Examples
 
       iex> Normaliser.normalise(
-      iex>   "https://hello.world/dir/page",
-      iex>   "hello.world"
+      iex>   "hello.world",
+      iex>   "https://hello.world/dir/page"
       iex> )
       "hello.world/dir/page"
 
       iex> Normaliser.normalise(
-      iex>   "https://hello.world/dir/page",
-      iex>   "cool.beans"
+      iex>   "cool.beans",
+      iex>   "https://hello.world/dir/page"
       iex> )
       "hello.world/dir/page"
 
       iex> Normaliser.normalise(
-      iex>   "/dir/page",
-      iex>   "hello.world"
+      iex>   "hello.world",
+      iex>   "/dir/page"
       iex> )
       "hello.world/dir/page"
   """
-  def normalise(url, domain) do
+  def normalise(domain, url) do
     url
     |> String.split("://", parts: 2)
     |> Enum.count
