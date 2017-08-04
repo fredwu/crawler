@@ -1,6 +1,6 @@
 defmodule Crawler.Replacer do
-  alias Crawler.Replacer.{Normaliser, Prefixer}
-  alias Crawler.{Parser, Snapper}
+  alias Crawler.Replacer.{Prefixer, Pathfinder}
+  alias Crawler.Parser
 
   @doc """
   ## Examples
@@ -44,19 +44,13 @@ defmodule Crawler.Replacer do
     {:ok, body}
   end
 
-  defp get_link({_, url}, _opts), do: url
+  defp get_link({_, link}, _opts), do: link
 
-  defp modify_body(body, url, current_url) do
-    String.replace(body, url, modify_link(url, current_url))
+  defp modify_body(body, link, current_url) do
+    String.replace(body, link, modify_link(link, current_url))
   end
 
-  defp modify_link(url, current_url) do
-    Prefixer.prefix(current_url) <> link_path(url, current_url)
-  end
-
-  defp link_path(url, current_url) do
-    current_url
-    |> Snapper.snap_domain
-    |> Normaliser.normalise(url)
+  defp modify_link(link, current_url) do
+    Prefixer.prefix(current_url) <> Pathfinder.find_path(link, current_url)
   end
 end
