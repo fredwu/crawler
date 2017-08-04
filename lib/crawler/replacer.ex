@@ -1,5 +1,6 @@
 defmodule Crawler.Replacer do
-  alias Crawler.{Parser, Snapper, Replacer.Normaliser}
+  alias Crawler.Replacer.{Normaliser, Prefixer}
+  alias Crawler.{Parser, Snapper}
 
   @doc """
   ## Examples
@@ -50,25 +51,7 @@ defmodule Crawler.Replacer do
   end
 
   defp modify_link(url, current_url) do
-    link_prefix(current_url) <> link_path(url, current_url)
-  end
-
-  defp link_prefix(current_url) do
-    current_url
-    |> Snapper.snap_path
-    |> count_depth
-    |> make_prefix
-  end
-
-  defp count_depth(string) do
-    string
-    |> String.graphemes
-    |> Enum.filter(& &1 == "/")
-    |> Enum.count
-  end
-
-  defp make_prefix(depth) do
-    String.duplicate("../", depth)
+    Prefixer.prefix(current_url) <> link_path(url, current_url)
   end
 
   defp link_path(url, current_url) do
