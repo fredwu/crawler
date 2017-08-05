@@ -1,5 +1,5 @@
 defmodule Crawler.Linker.Prefixer do
-  alias Crawler.Linker.Pathfinder
+  alias Crawler.Linker.PathFinder
 
   @doc """
   ## Examples
@@ -15,7 +15,7 @@ defmodule Crawler.Linker.Prefixer do
   """
   def prefix(current_url) do
     current_url
-    |> Pathfinder.find_path
+    |> PathFinder.find_path
     |> count_depth
     |> make_prefix
   end

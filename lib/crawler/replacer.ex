@@ -5,20 +5,20 @@ defmodule Crawler.Replacer do
   ## Examples
 
       iex> Replacer.replace_links(
-      iex>   "<a href='http://another.domain/page'></a>",
+      iex>   "<a href='http://another.domain/page.html'></a>",
       iex>   url: "http://main.domain/dir/page",
       iex>   depth: 1,
       iex>   max_depths: 2,
       iex> )
-      {:ok, "<a href='../../another.domain/page'></a>"}
+      {:ok, "<a href='../../another.domain/page.html'></a>"}
 
       iex> Replacer.replace_links(
-      iex>   "<a href='http://another.domain/dir/page'></a>",
+      iex>   "<a href='http://another.domain/dir/page.html'></a>",
       iex>   url: "http://main.domain/page",
       iex>   depth: 1,
       iex>   max_depths: 2,
       iex> )
-      {:ok, "<a href='../another.domain/dir/page'></a>"}
+      {:ok, "<a href='../another.domain/dir/page.html'></a>"}
 
       iex> Replacer.replace_links(
       iex>   "<a href='http://another.domain/dir/page'></a>",
@@ -26,16 +26,16 @@ defmodule Crawler.Replacer do
       iex>   depth: 1,
       iex>   max_depths: 2,
       iex> )
-      {:ok, "<a href='../../another.domain/dir/page'></a>"}
+      {:ok, "<a href='../../another.domain/dir/page/index.html'></a>"}
 
       iex> Replacer.replace_links(
-      iex>   "<a href='/dir/page2'></a>",
+      iex>   "<a href='/dir/page2.html'></a>",
       iex>   url: "http://main.domain/dir/page",
       iex>   referrer_url: "http://main.domain/dir/page",
       iex>   depth: 1,
       iex>   max_depths: 2,
       iex> )
-      {:ok, "<a href='../../main.domain/dir/page2'></a>"}
+      {:ok, "<a href='../../main.domain/dir/page2.html'></a>"}
   """
   def replace_links(body, opts) do
     new_body = body
@@ -54,6 +54,6 @@ defmodule Crawler.Replacer do
   end
 
   defp modify_link(current_url, link) do
-    "\\1" <> Linker.modify_link(current_url, link) <> "\\2"
+    "\\1" <> Linker.localised_link(current_url, link) <> "\\2"
   end
 end

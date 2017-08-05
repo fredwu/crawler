@@ -1,11 +1,11 @@
-defmodule Crawler.Linker.Pathfinder do
+defmodule Crawler.Linker.PathFinder do
   @doc """
   ## Examples
 
-      iex> Pathfinder.find_domain("http://hello")
+      iex> PathFinder.find_domain("http://hello")
       "hello"
 
-      iex> Pathfinder.find_domain("https://hello:8888/world")
+      iex> PathFinder.find_domain("https://hello:8888/world")
       "hello-8888"
   """
   def find_domain(url, safe \\ true) do
@@ -18,10 +18,10 @@ defmodule Crawler.Linker.Pathfinder do
   @doc """
   ## Examples
 
-      iex> Pathfinder.find_dir_path("http://hello")
+      iex> PathFinder.find_dir_path("http://hello")
       "hello"
 
-      iex> Pathfinder.find_dir_path("https://hello:8888/dir/world")
+      iex> PathFinder.find_dir_path("https://hello:8888/dir/world")
       "hello-8888/dir"
   """
   def find_dir_path(url, safe \\ true) do
@@ -36,10 +36,10 @@ defmodule Crawler.Linker.Pathfinder do
   @doc """
   ## Examples
 
-      iex> Pathfinder.find_path("http://hello")
+      iex> PathFinder.find_path("http://hello")
       "hello"
 
-      iex> Pathfinder.find_path("https://hello:8888/world")
+      iex> PathFinder.find_path("https://hello:8888/world")
       "hello-8888/world"
   """
   def find_path(url, safe \\ true)

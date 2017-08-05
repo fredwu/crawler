@@ -68,7 +68,7 @@ defmodule Crawler.Parser do
     if is_url?(link) do
       element
     else
-      {"link", link, "href", Linker.modify_url(opts[:referrer_url], link)}
+      {"link", link, "href", Linker.url(opts[:referrer_url], link)}
     end
   end
 

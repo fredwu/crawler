@@ -1,8 +1,12 @@
 defmodule Crawler.Snapper do
-  alias Crawler.{Replacer, Linker.Pathfinder}
+  alias Crawler.{Replacer, Linker, Linker.PathFinder}
 
   @doc """
   ## Examples
+
+      iex> Snapper.snap("hello", save_to: tmp("snapper"), url: "http://hello-world.local")
+      iex> File.read(tmp("snapper/hello-world.local", "index.html"))
+      {:ok, "hello"}
 
       iex> Snapper.snap("hello", save_to: tmp("snapper"), url: "http://snapper.local/index.html")
       iex> File.read(tmp("snapper/snapper.local", "index.html"))
@@ -12,11 +16,11 @@ defmodule Crawler.Snapper do
       {:error, "Cannot write to file nope/snapper.local/index.html, reason: enoent"}
 
       iex> Snapper.snap("hello", save_to: tmp("snapper"), url: "http://snapper.local/hello")
-      iex> File.read(tmp("snapper/snapper.local", "hello"))
+      iex> File.read(tmp("snapper/snapper.local/hello", "index.html"))
       {:ok, "hello"}
 
       iex> Snapper.snap("hello", save_to: tmp("snapper"), url: "http://snapper.local/hello1/")
-      iex> File.read(tmp("snapper/snapper.local", "hello1"))
+      iex> File.read(tmp("snapper/snapper.local/hello1", "index.html"))
       {:ok, "hello"}
 
       iex> Snapper.snap(
@@ -26,8 +30,8 @@ defmodule Crawler.Snapper do
       iex>   depth: 1,
       iex>   max_depths: 2,
       iex> )
-      iex> File.read(tmp("snapper/snapper.local", "depth0"))
-      {:ok, "<a href='../another.domain/page'></a>"}
+      iex> File.read(tmp("snapper/snapper.local/depth0", "index.html"))
+      {:ok, "<a href='../another.domain/page/index.html'></a>"}
 
       iex> Snapper.snap(
       iex>   "<a href='https://another.domain:8888/page'></a>",
@@ -36,8 +40,8 @@ defmodule Crawler.Snapper do
       iex>   depth: 1,
       iex>   max_depths: 2,
       iex> )
-      iex> File.read(tmp("snapper/snapper.local-7777/dir", "depth1"))
-      {:ok, "<a href='../../another.domain-8888/page'></a>"}
+      iex> File.read(tmp("snapper/snapper.local-7777/dir/depth1", "index.html"))
+      {:ok, "<a href='../../another.domain-8888/page/index.html'></a>"}
   """
   def snap(body, opts) do
     {:ok, body} = update_links(body, opts)
@@ -58,7 +62,8 @@ defmodule Crawler.Snapper do
   end
 
   defp create_snap_dir(opts) do
-    file_path = Path.join(opts[:save_to], Pathfinder.find_path(opts[:url]))
+    url       = Linker.localised_url(opts[:url], opts[:url])
+    file_path = Path.join(opts[:save_to], PathFinder.find_path(url))
 
     if File.exists?(opts[:save_to]) do
       File.mkdir_p(Path.dirname(file_path))
