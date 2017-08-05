@@ -24,7 +24,7 @@ defmodule Crawler.Linker.PathLocaliser do
     |> PathFinder.find_path
     |> String.split("/", trim: true)
     |> Enum.count
-    |> handle_link(link)
+    |> last_segment(link)
   end
 
   @doc """
@@ -97,20 +97,20 @@ defmodule Crawler.Linker.PathLocaliser do
   defp preped_link(true, link),  do: link
   defp preped_link(false, link), do: "../" <> link
 
-  defp handle_link(1, link) do
+  defp last_segment(1, link) do
     localise_link(false, link)
   end
 
-  defp handle_link(_count, link) do
+  defp last_segment(_count, link) do
     link
     |> String.reverse
     |> String.split("/", parts: 2)
     |> Kernel.hd
     |> String.reverse
-    |> handle_localisation(link)
+    |> localise_segment(link)
   end
 
-  defp handle_localisation(segment, link) do
+  defp localise_segment(segment, link) do
     segment
     |> String.contains?(".")
     |> localise_link(link)
