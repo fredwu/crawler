@@ -1,5 +1,7 @@
 defmodule Crawler.Parser do
-  alias Crawler.{Dispatcher, Store, Store.Page}
+  require Logger
+
+  alias Crawler.{Dispatcher, Linker, Store, Store.Page}
 
   @doc """
   ## Examples
@@ -16,6 +18,16 @@ defmodule Crawler.Parser do
       iex>   body: "<a href='http://parser/2' target='_blank'>Link</a>"
       iex> }, opts: []})
       %Page{body: "<a href='http://parser/2' target='_blank'>Link</a>"}
+
+      iex> Parser.parse(%{page: %Page{
+      iex>   body: "<a href='parser/2'>Link</a>"
+      iex> }, opts: [referrer_url: "http://hello/"]})
+      %Page{body: "<a href='parser/2'>Link</a>"}
+
+      iex> Parser.parse(%{page: %Page{
+      iex>   body: "<a href='../parser/2'>Link</a>"
+      iex> }, opts: [referrer_url: "http://hello/"]})
+      %Page{body: "<a href='../parser/2'>Link</a>"}
   """
   def parse(page, link_handler \\ &Dispatcher.dispatch(&1, &2))
 
@@ -25,7 +37,7 @@ defmodule Crawler.Parser do
     page
   end
 
-  def parse(_, _), do: nil
+  def parse({:error, reason}, _), do: Logger.debug(reason)
 
   def parse_links(body, opts, link_handler) do
     body
@@ -42,6 +54,7 @@ defmodule Crawler.Parser do
   defp parse_link({"a", attrs, _}, opts, link_handler) do
     attrs
     |> detect_link
+    |> turn_link_into_url(opts)
     |> link_handler.(opts)
   end
 
@@ -49,5 +62,17 @@ defmodule Crawler.Parser do
     Enum.find(attrs, fn(attr) ->
       Kernel.match?({"href", _}, attr)
     end)
+  end
+
+  defp turn_link_into_url(element = {"href", link}, opts) do
+    if is_url?(link) do
+      element
+    else
+      {"link", link, "href", Linker.modify_url(opts[:referrer_url], link)}
+    end
+  end
+
+  defp is_url?(link) do
+    String.contains?(link, "://")
   end
 end

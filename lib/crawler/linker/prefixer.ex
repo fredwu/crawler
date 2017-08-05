@@ -1,5 +1,5 @@
-defmodule Crawler.Replacer.Prefixer do
-  alias Crawler.Snapper
+defmodule Crawler.Linker.Prefixer do
+  alias Crawler.Linker.Pathfinder
 
   @doc """
   ## Examples
@@ -15,16 +15,17 @@ defmodule Crawler.Replacer.Prefixer do
   """
   def prefix(current_url) do
     current_url
-    |> Snapper.snap_path
+    |> Pathfinder.find_path
     |> count_depth
     |> make_prefix
   end
 
-  defp count_depth(string) do
-    string
-    |> String.graphemes
-    |> Enum.filter(& &1 == "/")
-    |> Enum.count
+  def count_depth(string, token \\ "/") do
+    (
+      string
+      |> String.split(token)
+      |> Enum.count
+    ) - 1
   end
 
   defp make_prefix(depth) do

@@ -31,8 +31,9 @@ defmodule Crawler.Fetcher do
   end
 
   defp fetch_url_200(body, opts) do
-    with {:ok, _} <- Recorder.store_page(opts[:url], body),
-         {:ok, _} <- snap_page(body, opts)
+    with {:ok, _}    <- Recorder.store_page(opts[:url], body),
+         {:ok, opts} <- record_referrer_url(opts),
+         {:ok, _}    <- snap_page(body, opts)
     do
       return_page(body, opts)
     end
@@ -44,6 +45,10 @@ defmodule Crawler.Fetcher do
 
   defp fetch_url_failed(reason, opts) do
     {:error, "Failed to fetch #{opts[:url]}, reason: #{reason}"}
+  end
+
+  defp record_referrer_url(opts) do
+    {:ok, Keyword.put(opts, :referrer_url, opts[:url])}
   end
 
   defp snap_page(body, opts) do

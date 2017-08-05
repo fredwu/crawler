@@ -1,6 +1,5 @@
 defmodule Crawler.Replacer do
-  alias Crawler.Replacer.{Prefixer, Pathfinder}
-  alias Crawler.Parser
+  alias Crawler.{Parser, Linker}
 
   @doc """
   ## Examples
@@ -32,25 +31,29 @@ defmodule Crawler.Replacer do
       iex> Replacer.replace_links(
       iex>   "<a href='/dir/page2'></a>",
       iex>   url: "http://main.domain/dir/page",
+      iex>   referrer_url: "http://main.domain/dir/page",
       iex>   depth: 1,
       iex>   max_depths: 2,
       iex> )
       {:ok, "<a href='../../main.domain/dir/page2'></a>"}
   """
   def replace_links(body, opts) do
-    links = Parser.parse_links(body, opts, &get_link/2)
-    body  = Enum.reduce(links, body, &modify_body(&2, &1, opts[:url]))
+    new_body = body
+    |> Parser.parse_links(opts, &get_link/2)
+    |> List.flatten
+    |> Enum.reduce(body, &modify_body(&2, opts[:url], &1))
 
-    {:ok, body}
+    {:ok, new_body}
   end
 
-  defp get_link({_, link}, _opts), do: link
+  defp get_link({_, url}, _opts),          do: url
+  defp get_link({_, link, _, url}, _opts), do: [link, url]
 
-  defp modify_body(body, link, current_url) do
-    String.replace(body, link, modify_link(link, current_url))
+  defp modify_body(body, current_url, link) do
+    String.replace(body, ~r/(href=['"])#{link}(['"])/, modify_link(current_url, link))
   end
 
-  defp modify_link(link, current_url) do
-    Prefixer.prefix(current_url) <> Pathfinder.find_path(link, current_url)
+  defp modify_link(current_url, link) do
+    "\\1" <> Linker.modify_link(current_url, link) <> "\\2"
   end
 end

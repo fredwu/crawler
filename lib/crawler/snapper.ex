@@ -1,5 +1,5 @@
 defmodule Crawler.Snapper do
-  alias Crawler.Replacer
+  alias Crawler.{Replacer, Linker.Pathfinder}
 
   @doc """
   ## Examples
@@ -40,7 +40,7 @@ defmodule Crawler.Snapper do
       {:ok, "<a href='../../another.domain-8888/page'></a>"}
   """
   def snap(body, opts) do
-    {:ok, body} = Replacer.replace_links(body, opts)
+    {:ok, body} = update_links(body, opts)
     file_path   = create_snap_dir(opts)
 
     case File.write(file_path, body) do
@@ -49,40 +49,16 @@ defmodule Crawler.Snapper do
     end
   end
 
-  @doc """
-  ## Examples
-
-      iex> Snapper.snap_domain("http://hello")
-      "hello"
-
-      iex> Snapper.snap_domain("https://hello:8888/world")
-      "hello-8888"
-  """
-  def snap_domain(url) do
-    url
-    |> snap_path
-    |> String.split("/", parts: 2)
-    |> Kernel.hd
-  end
-
-  @doc """
-  ## Examples
-
-      iex> Snapper.snap_path("http://hello")
-      "hello"
-
-      iex> Snapper.snap_path("https://hello:8888/world")
-      "hello-8888/world"
-  """
-  def snap_path(url) do
-    url
-    |> String.split("://", parts: 2)
-    |> Enum.at(-1)
-    |> String.replace(":", "-")
+  defp update_links(body, opts) do
+    if opts[:depth] < opts[:max_depths] do
+      Replacer.replace_links(body, opts)
+    else
+      {:ok, body}
+    end
   end
 
   defp create_snap_dir(opts) do
-    file_path = Path.join(opts[:save_to], snap_path(opts[:url]))
+    file_path = Path.join(opts[:save_to], Pathfinder.find_path(opts[:url]))
 
     if File.exists?(opts[:save_to]) do
       File.mkdir_p(Path.dirname(file_path))
