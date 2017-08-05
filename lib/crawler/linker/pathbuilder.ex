@@ -47,7 +47,7 @@ defmodule Crawler.Linker.Pathbuilder do
     link
     |> String.split("://", parts: 2)
     |> Enum.count
-    |> normalise_url(link, input)
+    |> normalise_link(link, input)
     |> Pathfinder.find_path(safe)
   end
 
@@ -64,6 +64,6 @@ defmodule Crawler.Linker.Pathbuilder do
     Path.join(url, String.replace_leading(link, "../", ""))
   end
 
-  defp normalise_url(2, url, _domain), do: url
-  defp normalise_url(1, url, domain),  do: Path.join(domain, url)
+  defp normalise_link(2, link, _input), do: link
+  defp normalise_link(1, link, input),  do: Path.join(input, link)
 end
