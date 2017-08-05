@@ -62,13 +62,27 @@ defmodule Crawler.Snapper do
   end
 
   defp create_snap_dir(opts) do
-    url       = Linker.localised_url(opts[:url], opts[:url])
-    file_path = Path.join(opts[:save_to], PathFinder.find_path(url))
+    opts[:url]
+    |> prep_filepath
+    |> save_path(opts[:save_to])
+    |> make_save_path(opts[:save_to])
+  end
 
-    if File.exists?(opts[:save_to]) do
-      File.mkdir_p(Path.dirname(file_path))
+  defp prep_filepath(url) do
+    url
+    |> Linker.localised_url(url)
+    |> PathFinder.find_path
+  end
+
+  defp save_path(path, save_to) do
+    Path.join(save_to, path)
+  end
+
+  defp make_save_path(path, save_to) do
+    if File.exists?(save_to) do
+      File.mkdir_p(Path.dirname(path))
     end
 
-    file_path
+    path
   end
 end
