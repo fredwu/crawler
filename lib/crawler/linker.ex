@@ -1,5 +1,5 @@
 defmodule Crawler.Linker do
-  alias Crawler.Linker.{Prefixer, Pathfinder, Normaliser}
+  alias Crawler.Linker.{Prefixer, Pathfinder, Pathbuilder}
 
   @doc """
   ## Examples
@@ -87,7 +87,7 @@ defmodule Crawler.Linker do
   def find_full_path(current_url, link, safe \\ true) do
     current_url
     |> path_prefix(link, safe)
-    |> Normaliser.normalise(link, safe)
+    |> Pathbuilder.build_path(link, safe)
   end
 
   @doc """
