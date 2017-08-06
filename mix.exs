@@ -26,8 +26,8 @@ defmodule Crawler.Mixfile do
 
   defp deps do
     [
-      {:httpoison,   "~> 0.12"},
-      {:floki,       "~> 0.17"},
+      {:httpoison,   "~> 0.13"},
+      {:floki,       "~> 0.18"},
       {:ex_doc,      ">= 0.0.0", only: :dev},
       {:bypass,      "~> 0.8",   only: :test},
       {:excoveralls, "~> 0.7",   only: :test},
