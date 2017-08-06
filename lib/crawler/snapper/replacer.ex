@@ -1,4 +1,4 @@
-defmodule Crawler.Replacer do
+defmodule Crawler.Snapper.Replacer do
   @moduledoc """
   Replaces links found in a page so they work offline.
   """

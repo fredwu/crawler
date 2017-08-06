@@ -3,7 +3,7 @@ defmodule Crawler.Snapper do
   Stores crawled pages offline.
   """
 
-  alias Crawler.{Replacer, Linker, Linker.PathFinder}
+  alias Crawler.{Snapper.Replacer, Linker, Linker.PathFinder}
 
   @doc """
   ## Examples
