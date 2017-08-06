@@ -27,8 +27,9 @@ Crawler.crawl("http://elixir-lang.org", max_depths: 2)
 Crawler is under active development, below is a non-comprehensive list of features to be implemented.
 
 - [x] Set the maximum crawl depth.
-- [ ] Save to disk.
+- [x] Save to disk.
 - [x] Set timeouts.
+- [ ] Crawl assets (CSS and images, etc).
 - [ ] The ability to manually stop/pause/restart the crawler.
 - [ ] Restrict crawlable domains, paths or file types.
 - [ ] Limit concurrent crawlers.
