@@ -1,4 +1,8 @@
 defmodule Crawler.Fetcher do
+  @moduledoc """
+  Fetches pages and perform tasks on them.
+  """
+
   alias Crawler.Fetcher.{Policer, Recorder}
   alias Crawler.{Snapper, Store.Page}
 

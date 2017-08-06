@@ -1,4 +1,8 @@
 defmodule Crawler do
+  @moduledoc """
+  A high performance web crawler in Elixir.
+  """
+
   use Application
 
   alias Crawler.{Options, Store, WorkerSupervisor, Worker}

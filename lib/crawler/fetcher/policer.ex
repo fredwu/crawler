@@ -1,4 +1,9 @@
 defmodule Crawler.Fetcher.Policer do
+  @moduledoc """
+  Checks a series of conditions to determine whether it is okay to continue,
+  i.e. to allow `Crawler.Fetcher.fetch/1` to begin its tasks.
+  """
+
   alias Crawler.Store
 
   @doc """

@@ -1,4 +1,8 @@
 defmodule Crawler.Options do
+  @moduledoc """
+  Options for the crawler.
+  """
+
   @max_depths 3
   @timeout    5_000
   @save_to    nil

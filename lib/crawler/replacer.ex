@@ -1,4 +1,8 @@
 defmodule Crawler.Replacer do
+  @moduledoc """
+  Replaces links found in a page so they work offline.
+  """
+
   alias Crawler.{Parser, Linker}
 
   @doc """

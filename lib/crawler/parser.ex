@@ -1,4 +1,8 @@
 defmodule Crawler.Parser do
+  @moduledoc """
+  Parses pages and calls a link handler to handle the detected links.
+  """
+
   require Logger
 
   alias Crawler.{Dispatcher, Linker, Store, Store.Page}

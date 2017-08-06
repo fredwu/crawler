@@ -92,9 +92,9 @@ defmodule Crawler.Linker do
       "../../thank.you/page1.html"
   """
   def localised_link(current_url, link) do
-    with link <- PathLocaliser.prep_link(current_url, link),
-         current_url  <- PathLocaliser.prep_url(current_url, link),
-         current_url  <- link(current_url, link)
+    with link        <- PathLocaliser.prep_link(current_url, link),
+         current_url <- PathLocaliser.prep_url(current_url, link),
+         current_url <- link(current_url, link)
     do
       PathLocaliser.localise(current_url)
     end

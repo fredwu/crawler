@@ -1,12 +1,23 @@
 defmodule Crawler.Linker.PathFinder do
+  @moduledoc """
+  Finds different components of a given URL, e.g. its domain name, directory
+  path, or full path.
+
+  The `safe` option indicates whether the return value should be transformed
+  in order to be safely used as folder and file names.
+  """
+
   @doc """
   ## Examples
 
-      iex> PathFinder.find_domain("http://hello")
-      "hello"
+      iex> PathFinder.find_domain("http://hi.hello")
+      "hi.hello"
 
-      iex> PathFinder.find_domain("https://hello:8888/world")
-      "hello-8888"
+      iex> PathFinder.find_domain("https://hi.hello:8888/world")
+      "hi.hello-8888"
+
+      iex> PathFinder.find_domain("https://hi.hello:8888/world", false)
+      "hi.hello:8888"
   """
   def find_domain(url, safe \\ true) do
     url
@@ -18,11 +29,14 @@ defmodule Crawler.Linker.PathFinder do
   @doc """
   ## Examples
 
-      iex> PathFinder.find_dir_path("http://hello")
-      "hello"
+      iex> PathFinder.find_dir_path("http://hi.hello")
+      "hi.hello"
 
-      iex> PathFinder.find_dir_path("https://hello:8888/dir/world")
-      "hello-8888/dir"
+      iex> PathFinder.find_dir_path("https://hi.hello:8888/dir/world")
+      "hi.hello-8888/dir"
+
+      iex> PathFinder.find_dir_path("https://hi.hello:8888/dir/world", false)
+      "hi.hello:8888/dir"
   """
   def find_dir_path(url, safe \\ true) do
     url
@@ -36,11 +50,14 @@ defmodule Crawler.Linker.PathFinder do
   @doc """
   ## Examples
 
-      iex> PathFinder.find_path("http://hello")
-      "hello"
+      iex> PathFinder.find_path("http://hi.hello")
+      "hi.hello"
 
-      iex> PathFinder.find_path("https://hello:8888/world")
-      "hello-8888/world"
+      iex> PathFinder.find_path("https://hi.hello:8888/world")
+      "hi.hello-8888/world"
+
+      iex> PathFinder.find_path("https://hi.hello:8888/world", false)
+      "hi.hello:8888/world"
   """
   def find_path(url, safe \\ true)
 

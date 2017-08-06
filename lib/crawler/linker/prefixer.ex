@@ -1,4 +1,8 @@
 defmodule Crawler.Linker.Prefixer do
+  @moduledoc """
+  Returns prefixes ("../") according to the given URL's structure.
+  """
+
   alias Crawler.Linker.PathFinder
 
   @doc """

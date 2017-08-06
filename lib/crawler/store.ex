@@ -1,4 +1,8 @@
 defmodule Crawler.Store do
+  @moduledoc """
+  An internal data store for information related to each crawl.
+  """
+
   alias Crawler.Store.DB
 
   defmodule Page do

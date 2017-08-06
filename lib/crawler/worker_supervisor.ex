@@ -1,4 +1,8 @@
 defmodule Crawler.WorkerSupervisor do
+  @moduledoc """
+  A supervisor for dynamically starting workers.
+  """
+
   use Supervisor
 
   def init(_args) do

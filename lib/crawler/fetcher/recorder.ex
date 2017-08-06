@@ -1,4 +1,8 @@
 defmodule Crawler.Fetcher.Recorder do
+  @moduledoc """
+  Records information about each crawl for internal use.
+  """
+
   alias Crawler.Store
 
   @doc """

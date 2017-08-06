@@ -1,4 +1,8 @@
 defmodule Crawler.Snapper do
+  @moduledoc """
+  Stores crawled pages offline.
+  """
+
   alias Crawler.{Replacer, Linker, Linker.PathFinder}
 
   @doc """

@@ -1,4 +1,8 @@
 defmodule Crawler.Worker do
+  @moduledoc """
+  Starts the crawl tasks.
+  """
+
   use GenServer
 
   alias Crawler.{Fetcher, Parser}
