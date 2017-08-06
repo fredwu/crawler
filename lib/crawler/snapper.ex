@@ -74,7 +74,7 @@ defmodule Crawler.Snapper do
 
   defp prep_filepath(url) do
     url
-    |> Linker.localised_url(url)
+    |> Linker.offline_url(url)
     |> PathFinder.find_path
   end
 

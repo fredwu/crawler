@@ -58,6 +58,6 @@ defmodule Crawler.Replacer do
   end
 
   defp modify_link(current_url, link) do
-    "\\1" <> Linker.localised_link(current_url, link) <> "\\2"
+    "\\1" <> Linker.offline_link(current_url, link) <> "\\2"
   end
 end

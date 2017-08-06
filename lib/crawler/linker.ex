@@ -1,102 +1,102 @@
 defmodule Crawler.Linker do
-  alias Crawler.Linker.{Prefixer, PathFinder, PathBuilder, PathLocaliser}
+  alias Crawler.Linker.{Prefixer, PathFinder, PathBuilder, PathOffliner}
 
   @doc """
   ## Examples
 
-      iex> Linker.localised_url(
+      iex> Linker.offline_url(
       iex>   "http://hello.world/dir/page",
       iex>   "page1"
       iex> )
       "http://hello.world/dir/page1/index.html"
 
-      iex> Linker.localised_url(
+      iex> Linker.offline_url(
       iex>   "http://hello.world/dir/page",
       iex>   "page1.html"
       iex> )
       "http://hello.world/dir/page1.html"
 
-      iex> Linker.localised_url(
+      iex> Linker.offline_url(
       iex>   "http://hello.world/dir/page",
       iex>   "../page1"
       iex> )
       "http://hello.world/page1/index.html"
 
-      iex> Linker.localised_url(
+      iex> Linker.offline_url(
       iex>   "http://hello.world/dir/page",
       iex>   "../page1.html"
       iex> )
       "http://hello.world/page1.html"
 
-      iex> Linker.localised_url(
+      iex> Linker.offline_url(
       iex>   "http://hello.world/dir/page",
       iex>   "http://thank.you/page1"
       iex> )
       "http://thank.you/page1/index.html"
 
-      iex> Linker.localised_url(
+      iex> Linker.offline_url(
       iex>   "http://hello.world/dir/page",
       iex>   "http://thank.you/page1.html"
       iex> )
       "http://thank.you/page1.html"
 
-      iex> Linker.localised_url(
+      iex> Linker.offline_url(
       iex>   "http://hello.world/dir/page",
       iex>   "http://thank.you/"
       iex> )
       "http://thank.you/index.html"
   """
-  def localised_url(current_url, link) do
+  def offline_url(current_url, link) do
     current_url
     |> url(link)
-    |> PathLocaliser.localise
+    |> PathOffliner.transform
   end
 
   @doc """
   ## Examples
 
-      iex> Linker.localised_link(
+      iex> Linker.offline_link(
       iex>   "http://hello.world/dir/page",
       iex>   "page1"
       iex> )
       "../../hello.world/dir/page1/index.html"
 
-      iex> Linker.localised_link(
+      iex> Linker.offline_link(
       iex>   "http://hello.world/dir/page",
       iex>   "page1.html"
       iex> )
       "../../hello.world/dir/page1.html"
 
-      iex> Linker.localised_link(
+      iex> Linker.offline_link(
       iex>   "http://hello.world/dir/page",
       iex>   "../page1"
       iex> )
       "../../../hello.world/page1/index.html"
 
-      iex> Linker.localised_link(
+      iex> Linker.offline_link(
       iex>   "http://hello.world/dir/page",
       iex>   "../page1.html"
       iex> )
       "../../../hello.world/page1.html"
 
-      iex> Linker.localised_link(
+      iex> Linker.offline_link(
       iex>   "http://hello.world/dir/page",
       iex>   "http://thank.you/page1"
       iex> )
       "../../thank.you/page1/index.html"
 
-      iex> Linker.localised_link(
+      iex> Linker.offline_link(
       iex>   "http://hello.world/dir/page",
       iex>   "http://thank.you/page1.html"
       iex> )
       "../../thank.you/page1.html"
   """
-  def localised_link(current_url, link) do
-    with link        <- PathLocaliser.prep_link(current_url, link),
-         current_url <- PathLocaliser.prep_url(current_url, link),
+  def offline_link(current_url, link) do
+    with link        <- PathOffliner.prep_link(current_url, link),
+         current_url <- PathOffliner.prep_url(current_url, link),
          current_url <- link(current_url, link)
     do
-      PathLocaliser.localise(current_url)
+      PathOffliner.transform(current_url)
     end
   end
 

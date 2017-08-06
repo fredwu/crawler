@@ -1,38 +1,37 @@
-defmodule Crawler.Linker.PathLocaliser do
+defmodule Crawler.Linker.PathOffliner do
   @moduledoc """
-  Varies localisation methods to help tranform a link to be storeable and
-  linkable offline.
+  Varies methods to help tranform a link to be storeable and linkable offline.
 
   `prep_url/2` and `prep_link/2` are to be used together for constructing
-  links that have been localised and therefore need an extra traversal depth.
+  links that have been transformd and therefore need an extra traversal depth.
   """
 
   alias Crawler.Linker.PathFinder
 
   @doc """
-  Localises a given link so that it can be stored and linked to by other pages.
+  Transforms a given link so that it can be stored and linked to by other pages.
 
   When a page does not have a file extension (e.g. html) it is treated as the
   index page for a directory, therefore `index.html` is appended to the link.
 
   ## Examples
 
-      iex> PathLocaliser.localise("http://hello.world")
+      iex> PathOffliner.transform("http://hello.world")
       "http://hello.world/index.html"
 
-      iex> PathLocaliser.localise("hello.world")
+      iex> PathOffliner.transform("hello.world")
       "hello.world/index.html"
 
-      iex> PathLocaliser.localise("hello.world/")
+      iex> PathOffliner.transform("hello.world/")
       "hello.world/index.html"
 
-      iex> PathLocaliser.localise("hello/world")
+      iex> PathOffliner.transform("hello/world")
       "hello/world/index.html"
 
-      iex> PathLocaliser.localise("hello/world.html")
+      iex> PathOffliner.transform("hello/world.html")
       "hello/world.html"
   """
-  def localise(link) do
+  def transform(link) do
     link
     |> PathFinder.find_path
     |> String.split("/", trim: true)
@@ -47,31 +46,31 @@ defmodule Crawler.Linker.PathLocaliser do
 
   ## Examples
 
-      iex> PathLocaliser.prep_url(
+      iex> PathOffliner.prep_url(
       iex>   "http://hello.world/dir/page",
       iex>   "page1"
       iex> )
       "http://hello.world/dir/page"
 
-      iex> PathLocaliser.prep_url(
+      iex> PathOffliner.prep_url(
       iex>   "http://hello.world/dir/page",
       iex>   "../page1"
       iex> )
       "http://hello.world/dir/page/index.html"
 
-      iex> PathLocaliser.prep_url(
+      iex> PathOffliner.prep_url(
       iex>   "http://hello.world/dir/page.html",
       iex>   "page1"
       iex> )
       "http://hello.world/dir/page.html"
 
-      iex> PathLocaliser.prep_url(
+      iex> PathOffliner.prep_url(
       iex>   "http://hello.world/dir/page.html",
       iex>   "../page1"
       iex> )
       "http://hello.world/dir/page.html"
   """
-  def prep_url(url, "../" <> _link), do: localise(url)
+  def prep_url(url, "../" <> _link), do: transform(url)
   def prep_url(url, _link),          do: url
 
   @doc """
@@ -80,25 +79,25 @@ defmodule Crawler.Linker.PathLocaliser do
 
   ## Examples
 
-      iex> PathLocaliser.prep_link(
+      iex> PathOffliner.prep_link(
       iex>   "http://hello.world/dir/page",
       iex> "page1"
       iex> )
       "page1"
 
-      iex> PathLocaliser.prep_link(
+      iex> PathOffliner.prep_link(
       iex>   "http://hello.world/dir/page",
       iex>   "../page1"
       iex> )
       "../../page1"
 
-      iex> PathLocaliser.prep_link(
+      iex> PathOffliner.prep_link(
       iex>   "http://hello.world/dir/page.html",
       iex>   "page1"
       iex> )
       "page1"
 
-      iex> PathLocaliser.prep_link(
+      iex> PathOffliner.prep_link(
       iex>   "http://hello.world/dir/page.html",
       iex>   "../page1"
       iex> )
@@ -112,13 +111,13 @@ defmodule Crawler.Linker.PathLocaliser do
 
   def prep_link(_url, link), do: link
 
-  defp skip_localisation?(url), do: localise(url) == url
+  defp skip_localisation?(url), do: transform(url) == url
 
   defp preped_link(true, link),  do: link
   defp preped_link(false, link), do: "../" <> link
 
   defp last_segment(1, link) do
-    localise_link(false, link)
+    transform_link(false, link)
   end
 
   defp last_segment(_count, link) do
@@ -127,15 +126,15 @@ defmodule Crawler.Linker.PathLocaliser do
     |> String.split("/", parts: 2)
     |> Kernel.hd
     |> String.reverse
-    |> localise_segment(link)
+    |> transform_segment(link)
   end
 
-  defp localise_segment(segment, link) do
+  defp transform_segment(segment, link) do
     segment
     |> String.contains?(".")
-    |> localise_link(link)
+    |> transform_link(link)
   end
 
-  defp localise_link(true,  link), do: link
-  defp localise_link(false, link), do: Path.join(link, "index.html")
+  defp transform_link(true,  link), do: link
+  defp transform_link(false, link), do: Path.join(link, "index.html")
 end
