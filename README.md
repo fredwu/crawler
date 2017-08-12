@@ -18,9 +18,9 @@ Crawler.crawl("http://elixir-lang.org", max_depths: 2)
 
 | Option          | Type    | Default Value | Description |
 |-----------------|---------|---------------|-------------|
-| `:max_depths`   | integer | 3             | Maximum nested depth of pages to crawl.
-| `:timeout`      | integer | 5000          | Timeout value for fetching a page, in ms.
-| `:save_to`      | string  | nil           | When provided, the path for saving crawled pages.
+| `:max_depths`   | integer | `3`           | Maximum nested depth of pages to crawl.
+| `:timeout`      | integer | `5000`        | Timeout value for fetching a page, in ms.
+| `:save_to`      | string  | `nil`         | When provided, the path for saving crawled pages.
 
 ## Features Backlog
 
