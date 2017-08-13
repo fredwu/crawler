@@ -4,6 +4,7 @@ defmodule Crawler.Options do
   """
 
   @max_depths 3
+  @workers    10
   @timeout    5_000
   @save_to    nil
 
@@ -23,6 +24,7 @@ defmodule Crawler.Options do
     Keyword.merge([
       depth:      0,
       max_depths: max_depths(),
+      workers:    workers(),
       timeout:    timeout(),
       save_to:    save_to(),
     ], opts)
@@ -42,6 +44,7 @@ defmodule Crawler.Options do
   end
 
   defp max_depths, do: Application.get_env(:crawler, :max_depths) || @max_depths
-  defp timeout,    do: Application.get_env(:crawler, :timeout) || @timeout
-  defp save_to,    do: Application.get_env(:crawler, :save_to) || @save_to
+  defp workers,    do: Application.get_env(:crawler, :workers)    || @workers
+  defp timeout,    do: Application.get_env(:crawler, :timeout)    || @timeout
+  defp save_to,    do: Application.get_env(:crawler, :save_to)    || @save_to
 end

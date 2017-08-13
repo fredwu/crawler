@@ -1,6 +1,6 @@
 defmodule Crawler.Dispatcher do
   @moduledoc """
-  Dispatches `Crawler.crawl/2` for recursive crawling.
+  Dispatches requests to a queue for crawling.
   """
 
   def dispatch(request, opts) do

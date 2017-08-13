@@ -42,13 +42,17 @@ defmodule CrawlerTest do
       """)
     end
 
-    assert Crawler.crawl(url, max_depths: 3) == :ok
+    {:ok, opts} = Crawler.crawl(url, max_depths: 3, workers: 5)
+
+    assert opts[:workers] == 5
+    assert OPQ.info(opts[:queue]) == {{[], []}, 4}
 
     wait fn ->
       assert Store.find_processed(url)
       assert Store.find_processed(linked_url1)
       assert Store.find_processed(linked_url2)
       assert Store.find_processed(linked_url3)
+      assert OPQ.info(opts[:queue]) == {{[], []}, 5}
       refute Store.find(linked_url4)
     end
   end
