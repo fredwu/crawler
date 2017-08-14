@@ -14,9 +14,14 @@ defmodule Crawler.QueueHandler do
   end
 
   defp init_queue(opts, nil) do
-    {:ok, pid} = OPQ.init(worker: Worker, workers: opts[:workers])
+    {:ok, opq} = OPQ.init(
+      worker:   Worker,
+      workers:  opts[:workers],
+      interval: opts[:interval],
+      timeout:  opts[:timeout],
+    )
 
-    Keyword.merge(opts, queue: pid)
+    Keyword.merge(opts, queue: opq)
   end
 
   defp init_queue(opts, _), do: opts

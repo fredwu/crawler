@@ -28,7 +28,7 @@ defmodule Crawler.Mixfile do
     [
       {:httpoison,   "~> 0.13"},
       {:floki,       "~> 0.18"},
-      {:opq,         "~> 0.1"},
+      {:opq,         "~> 1.0"},
       {:ex_doc,      ">= 0.0.0", only: :dev},
       {:bypass,      "~> 0.8",   only: :test},
       {:excoveralls, "~> 0.7",   only: :test},

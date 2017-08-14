@@ -20,6 +20,7 @@ Crawler.crawl("http://elixir-lang.org", max_depths: 2)
 |-----------------|---------|---------------|-------------|
 | `:max_depths`   | integer | `3`           | Maximum nested depth of pages to crawl.
 | `:workers`      | integer | `10`          | Maximum number of concurrent workers for crawling.
+| `:interval`     | integer | `0`           | Rate limit control - number of milliseconds before crawling more pages, defaults to `0` which is effectively no rate limit.
 | `:timeout`      | integer | `5000`        | Timeout value for fetching a page, in ms.
 | `:save_to`      | string  | `nil`         | When provided, the path for saving crawled pages.
 
@@ -34,7 +35,7 @@ Crawler is under active development, below is a non-comprehensive list of featur
 - [ ] The ability to manually stop/pause/restart the crawler.
 - [ ] Restrict crawlable domains, paths or file types.
 - [x] Limit concurrent crawlers.
-- [ ] Limit rate of crawling.
+- [x] Limit rate of crawling.
 - [ ] Set crawler's user agent.
 - [ ] The ability to retry a failed crawl.
 - [ ] DSL for scraping page content.
