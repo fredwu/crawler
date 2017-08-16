@@ -1,15 +1,9 @@
 defmodule CrawlerTest do
   use Crawler.TestCase, async: true
 
-  alias Crawler.{WorkerSupervisor, Worker, Store}
+  alias Crawler.Store
 
   doctest Crawler
-
-  test "supervisor and worker" do
-    {:ok, worker} = WorkerSupervisor.start_child(hello: "world", url: "url")
-
-    assert Worker.cast(worker) == :ok
-  end
 
   test ".crawl", %{bypass: bypass, url: url} do
     linked_url1 = "#{url}/link1"

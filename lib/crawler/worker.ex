@@ -14,7 +14,7 @@ defmodule Crawler.Worker do
   def handle_cast(_req, state) do
     state
     |> Fetcher.fetch
-    |> Parser.parse
+    |> state[:parser].parse
     |> Parser.mark_processed
 
     {:noreply, state}

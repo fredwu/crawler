@@ -8,6 +8,7 @@ defmodule Crawler.Options do
   @interval   0
   @timeout    5_000
   @save_to    nil
+  @parser     Crawler.Parser
 
   @doc """
   ## Examples
@@ -29,6 +30,7 @@ defmodule Crawler.Options do
       interval:   interval(),
       timeout:    timeout(),
       save_to:    save_to(),
+      parser:     parser(),
     ], opts)
   end
 
@@ -50,4 +52,5 @@ defmodule Crawler.Options do
   defp interval,   do: Application.get_env(:crawler, :interval)   || @interval
   defp timeout,    do: Application.get_env(:crawler, :timeout)    || @timeout
   defp save_to,    do: Application.get_env(:crawler, :save_to)    || @save_to
+  defp parser,     do: Application.get_env(:crawler, :parser)     || @parser
 end
