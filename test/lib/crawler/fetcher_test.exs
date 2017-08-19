@@ -40,10 +40,11 @@ defmodule Crawler.FetcherTest do
     end
 
     fetcher = Fetcher.fetch(url: url, depth: 0, timeout: 1)
-    :timer.sleep(10)
 
-    assert fetcher == {:error, "Failed to fetch #{url}, reason: timeout"}
-    refute Store.find(url).body
+    wait fn ->
+      assert fetcher == {:error, "Failed to fetch #{url}, reason: timeout"}
+      refute Store.find(url).body
+    end
   end
 
   test "failure: unable to write", %{bypass: bypass, url: url, path: path} do
