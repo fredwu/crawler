@@ -41,10 +41,18 @@ defmodule Crawler.Linker.PathFinder do
   def find_dir_path(url, safe \\ true) do
     url
     |> find_path(safe)
-    |> String.reverse
-    |> String.split("/", parts: 2)
-    |> Enum.at(-1)
-    |> String.reverse
+    |> String.split("/")
+    |> return_dir_path
+  end
+
+  defp return_dir_path([path]), do: path
+
+  defp return_dir_path(list) do
+    [_head | tail] = Enum.reverse(list)
+
+    tail
+    |> Enum.reverse
+    |> Path.join
   end
 
   @doc """
