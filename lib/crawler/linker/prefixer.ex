@@ -24,7 +24,7 @@ defmodule Crawler.Linker.Prefixer do
     |> make_prefix
   end
 
-  def count_depth(string, token \\ "/") do
+  defp count_depth(string, token \\ "/") do
     (
       string
       |> String.split(token)
