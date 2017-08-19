@@ -122,10 +122,9 @@ defmodule Crawler.Linker.PathOffliner do
 
   defp last_segment(_count, link) do
     link
-    |> String.reverse
-    |> String.split("/", parts: 2)
+    |> String.split("/")
+    |> Enum.take(-1)
     |> Kernel.hd
-    |> String.reverse
     |> transform_segment(link)
   end
 
