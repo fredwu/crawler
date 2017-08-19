@@ -39,6 +39,27 @@ defmodule Crawler.Linker.PathOffliner do
     |> last_segment(link)
   end
 
+  defp last_segment(1, link) do
+    transform_link(false, link)
+  end
+
+  defp last_segment(_count, link) do
+    link
+    |> String.split("/")
+    |> Enum.take(-1)
+    |> Kernel.hd
+    |> transform_segment(link)
+  end
+
+  defp transform_segment(segment, link) do
+    segment
+    |> String.contains?(".")
+    |> transform_link(link)
+  end
+
+  defp transform_link(true,  link), do: link
+  defp transform_link(false, link), do: Path.join(link, "index.html")
+
   @doc """
   Prepares a URL so that a depth is added (in this case, simply append
   "index.html" to it) when the URL needs localisation and the originating link
@@ -115,25 +136,4 @@ defmodule Crawler.Linker.PathOffliner do
 
   defp preped_link(true, link),  do: link
   defp preped_link(false, link), do: "../" <> link
-
-  defp last_segment(1, link) do
-    transform_link(false, link)
-  end
-
-  defp last_segment(_count, link) do
-    link
-    |> String.split("/")
-    |> Enum.take(-1)
-    |> Kernel.hd
-    |> transform_segment(link)
-  end
-
-  defp transform_segment(segment, link) do
-    segment
-    |> String.contains?(".")
-    |> transform_link(link)
-  end
-
-  defp transform_link(true,  link), do: link
-  defp transform_link(false, link), do: Path.join(link, "index.html")
 end
