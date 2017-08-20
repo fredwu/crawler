@@ -1,5 +1,5 @@
 defmodule Crawler.Linker do
-  alias Crawler.Linker.{Prefixer, PathBuilder, PathFinder, PathOffliner}
+  alias Crawler.Linker.{PathPrefixer, PathBuilder, PathFinder, PathOffliner}
 
   @doc """
   ## Examples
@@ -148,7 +148,7 @@ defmodule Crawler.Linker do
   """
   def link(current_url, link) do
     Path.join(
-      Prefixer.prefix(current_url),
+      PathPrefixer.prefix(current_url),
       PathBuilder.build_path(current_url, link)
     )
   end
