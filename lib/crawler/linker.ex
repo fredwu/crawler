@@ -92,12 +92,9 @@ defmodule Crawler.Linker do
       "../../../thank.you/page1.html"
   """
   def offline_link(current_url, link) do
-    with link        <- PathOffliner.prep_link(current_url, link),
-         current_url <- PathOffliner.prep_url(current_url, link),
-         current_url <- link(current_url, link)
-    do
-      PathOffliner.transform(current_url)
-    end
+    current_url
+    |> link(link)
+    |> PathOffliner.transform
   end
 
   @doc """

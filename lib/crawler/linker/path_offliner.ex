@@ -1,9 +1,6 @@
 defmodule Crawler.Linker.PathOffliner do
   @moduledoc """
-  Varies methods to help tranform a link to be storeable and linkable offline.
-
-  `prep_url/2` and `prep_link/2` are to be used together for constructing
-  links that have been transformd and therefore need an extra traversal depth.
+  Transforms a link to be storeable and linkable offline.
   """
 
   alias Crawler.Linker.PathFinder
@@ -59,81 +56,4 @@ defmodule Crawler.Linker.PathOffliner do
 
   defp transform_link(true,  link), do: link
   defp transform_link(false, link), do: Path.join(link, "index.html")
-
-  @doc """
-  Prepares a URL so that a depth is added (in this case, simply append
-  "index.html" to it) when the URL needs localisation and the originating link
-  traverses back to a parent depth.
-
-  ## Examples
-
-      iex> PathOffliner.prep_url(
-      iex>   "http://hello.world/dir/page",
-      iex>   "page1"
-      iex> )
-      "http://hello.world/dir/page"
-
-      iex> PathOffliner.prep_url(
-      iex>   "http://hello.world/dir/page",
-      iex>   "../page1"
-      iex> )
-      "http://hello.world/dir/page/index.html"
-
-      iex> PathOffliner.prep_url(
-      iex>   "http://hello.world/dir/page.html",
-      iex>   "page1"
-      iex> )
-      "http://hello.world/dir/page.html"
-
-      iex> PathOffliner.prep_url(
-      iex>   "http://hello.world/dir/page.html",
-      iex>   "../page1"
-      iex> )
-      "http://hello.world/dir/page.html"
-  """
-  def prep_url(url, "../" <> _link), do: transform(url)
-  def prep_url(url, _link),          do: url
-
-  @doc """
-  Prepares a link so that a "../" is prepended when the URL needs localisation
-  and the link itself traverses back to a parent depth.
-
-  ## Examples
-
-      iex> PathOffliner.prep_link(
-      iex>   "http://hello.world/dir/page",
-      iex> "page1"
-      iex> )
-      "page1"
-
-      iex> PathOffliner.prep_link(
-      iex>   "http://hello.world/dir/page",
-      iex>   "../page1"
-      iex> )
-      "../../page1"
-
-      iex> PathOffliner.prep_link(
-      iex>   "http://hello.world/dir/page.html",
-      iex>   "page1"
-      iex> )
-      "page1"
-
-      iex> PathOffliner.prep_link(
-      iex>   "http://hello.world/dir/page.html",
-      iex>   "../page1"
-      iex> )
-      "../page1"
-  """
-  def prep_link(url, link = "../" <> _) do
-    url
-    |> skip_localisation?
-    |> preped_link(link)
-  end
-
-  def prep_link(_url, link), do: link
-
-  defp skip_localisation?(url), do: transform(url) == url
-
-  defp preped_link(true, link),  do: link
-  defp preped_link(false, link), do: "../" <> link
 end
