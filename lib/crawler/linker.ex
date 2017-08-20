@@ -59,13 +59,13 @@ defmodule Crawler.Linker do
       iex>   "http://hello.world/dir/page",
       iex>   "page1"
       iex> )
-      "../../hello.world/dir/page1/index.html"
+      "../../../hello.world/dir/page1/index.html"
 
       iex> Linker.offline_link(
       iex>   "http://hello.world/dir/page",
       iex>   "page1.html"
       iex> )
-      "../../hello.world/dir/page1.html"
+      "../../../hello.world/dir/page1.html"
 
       iex> Linker.offline_link(
       iex>   "http://hello.world/dir/page",
@@ -83,13 +83,13 @@ defmodule Crawler.Linker do
       iex>   "http://hello.world/dir/page",
       iex>   "http://thank.you/page1"
       iex> )
-      "../../thank.you/page1/index.html"
+      "../../../thank.you/page1/index.html"
 
       iex> Linker.offline_link(
       iex>   "http://hello.world/dir/page",
       iex>   "http://thank.you/page1.html"
       iex> )
-      "../../thank.you/page1.html"
+      "../../../thank.you/page1.html"
   """
   def offline_link(current_url, link) do
     with link        <- PathOffliner.prep_link(current_url, link),
@@ -126,22 +126,28 @@ defmodule Crawler.Linker do
   ## Examples
 
       iex> Linker.link(
-      iex>   "http://another.domain/page",
+      iex>   "http://another.domain/page.html",
       iex>   "/dir/page2"
       iex> )
       "../another.domain/dir/page2"
 
       iex> Linker.link(
+      iex>   "http://another.domain/page",
+      iex>   "/dir/page2"
+      iex> )
+      "../../another.domain/dir/page2"
+
+      iex> Linker.link(
       iex>   "http://another.domain/parent/page",
       iex>   "dir/page2"
       iex> )
-      "../../another.domain/parent/dir/page2"
+      "../../../another.domain/parent/dir/page2"
 
       iex> Linker.link(
       iex>   "http://another.domain/parent/page",
       iex>   "../dir/page2"
       iex> )
-      "../../another.domain/dir/page2"
+      "../../../another.domain/dir/page2"
   """
   def link(current_url, link) do
     Path.join(

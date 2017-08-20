@@ -14,7 +14,7 @@ defmodule Crawler.Snapper.Replacer do
       iex>   depth: 1,
       iex>   max_depths: 2,
       iex> )
-      {:ok, "<a href='../../another.domain/page.html'></a>"}
+      {:ok, "<a href='../../../another.domain/page.html'></a>"}
 
       iex> Replacer.replace_links(
       iex>   "<a href='http://another.domain/dir/page.html'></a>",
@@ -22,7 +22,7 @@ defmodule Crawler.Snapper.Replacer do
       iex>   depth: 1,
       iex>   max_depths: 2,
       iex> )
-      {:ok, "<a href='../another.domain/dir/page.html'></a>"}
+      {:ok, "<a href='../../another.domain/dir/page.html'></a>"}
 
       iex> Replacer.replace_links(
       iex>   "<a href='http://another.domain/dir/page'></a>",
@@ -30,7 +30,7 @@ defmodule Crawler.Snapper.Replacer do
       iex>   depth: 1,
       iex>   max_depths: 2,
       iex> )
-      {:ok, "<a href='../../another.domain/dir/page/index.html'></a>"}
+      {:ok, "<a href='../../../another.domain/dir/page/index.html'></a>"}
 
       iex> Replacer.replace_links(
       iex>   "<a href='/dir/page2.html'></a>",
@@ -39,7 +39,7 @@ defmodule Crawler.Snapper.Replacer do
       iex>   depth: 1,
       iex>   max_depths: 2,
       iex> )
-      {:ok, "<a href='../../main.domain/dir/page2.html'></a>"}
+      {:ok, "<a href='../../../main.domain/dir/page2.html'></a>"}
   """
   def replace_links(body, opts) do
     new_body = body

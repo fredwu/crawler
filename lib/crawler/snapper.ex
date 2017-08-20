@@ -35,7 +35,7 @@ defmodule Crawler.Snapper do
       iex>   max_depths: 2,
       iex> )
       iex> File.read(tmp("snapper/snapper.local/depth0", "index.html"))
-      {:ok, "<a href='../another.domain/page/index.html'></a>"}
+      {:ok, "<a href='../../another.domain/page/index.html'></a>"}
 
       iex> Snapper.snap(
       iex>   "<a href='https://another.domain:8888/page'></a>",
@@ -45,7 +45,7 @@ defmodule Crawler.Snapper do
       iex>   max_depths: 2,
       iex> )
       iex> File.read(tmp("snapper/snapper.local-7777/dir/depth1", "index.html"))
-      {:ok, "<a href='../../another.domain-8888/page/index.html'></a>"}
+      {:ok, "<a href='../../../another.domain-8888/page/index.html'></a>"}
   """
   def snap(body, opts) do
     {:ok, body} = update_links(body, opts)

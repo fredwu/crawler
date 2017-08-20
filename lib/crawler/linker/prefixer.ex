@@ -3,7 +3,7 @@ defmodule Crawler.Linker.Prefixer do
   Returns prefixes ("../") according to the given URL's structure.
   """
 
-  alias Crawler.Linker.PathFinder
+  alias Crawler.Linker.{PathFinder, PathOffliner}
 
   @doc """
   ## Examples
@@ -11,15 +11,22 @@ defmodule Crawler.Linker.Prefixer do
       iex> Prefixer.prefix("https://hello.world/")
       "../"
 
-      iex> Prefixer.prefix("https://hello.world/page")
+      iex> Prefixer.prefix("https://hello.world/page.html")
       "../"
 
-      iex> Prefixer.prefix("https://hello.world/dir/page")
+      iex> Prefixer.prefix("https://hello.world/page")
       "../../"
+
+      iex> Prefixer.prefix("https://hello.world/dir/page.html")
+      "../../"
+
+      iex> Prefixer.prefix("https://hello.world/dir/page")
+      "../../../"
   """
   def prefix(current_url) do
     current_url
     |> PathFinder.find_path
+    |> PathOffliner.transform
     |> count_depth
     |> make_prefix
   end
