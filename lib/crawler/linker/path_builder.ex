@@ -41,30 +41,35 @@ defmodule Crawler.Linker.PathBuilder do
   """
   def build_path(current_url, link, safe \\ true) do
     current_url
-    |> prefix_path(link, safe)
+    |> base_path(link, safe)
     |> build(link, safe)
   end
 
-  defp prefix_path(url, "/" <> _link, safe), do: PathFinder.find_domain(url, safe)
-  defp prefix_path(url, _link, safe),        do: PathFinder.find_base_path(url, safe)
+  defp base_path(url, "/" <> _link, safe), do: PathFinder.find_domain(url, safe)
+  defp base_path(url, _link, safe),        do: PathFinder.find_base_path(url, safe)
 
-  defp build(input, link = "../" <> _, safe) do
-    input      = PathFinder.find_path(input, safe)
-    {:ok, cwd} = File.cwd
-
+  defp build(path, link, safe) do
     link
-    |> Path.expand(input)
-    |> Path.relative_to(cwd)
+    |> normalise(path)
+    |> PathFinder.find_path(safe)
+    |> resolve
   end
 
-  defp build(input, link, safe) do
+  defp normalise(link, path) do
     link
     |> String.split("://", parts: 2)
     |> Enum.count
-    |> normalise_link(link, input)
-    |> PathFinder.find_path(safe)
+    |> join_path(link, path)
   end
 
-  defp normalise_link(2, link, _input), do: link
-  defp normalise_link(1, link, input),  do: Path.join(input, link)
+  defp join_path(2, link, _path), do: link
+  defp join_path(1, link, path),  do: Path.join(path, link)
+
+  defp resolve(path) do
+    {:ok, cwd} = File.cwd
+
+    path
+    |> Path.expand
+    |> Path.relative_to(cwd)
+  end
 end
