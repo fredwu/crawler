@@ -41,7 +41,7 @@ defmodule CrawlerTest do
     assert opts[:workers] == 3
     assert OPQ.info(opts[:queue]) == {{[], []}, 2}
 
-    wait 120, fn ->
+    wait fn ->
       assert Store.find_processed(url)
       assert Store.find_processed(linked_url1)
       assert Store.find_processed(linked_url2)
@@ -50,7 +50,7 @@ defmodule CrawlerTest do
       refute Store.find(linked_url4)
     end
 
-    wait 200, fn ->
+    wait fn ->
       assert OPQ.info(opts[:queue]) == {{[], []}, 3}
     end
   end
