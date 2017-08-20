@@ -8,6 +8,28 @@
 
 A high performance web crawler in Elixir, with worker pooling and rate limiting via [OPQ](https://github.com/fredwu/opq).
 
+## Installation
+
+  1. Add Crawler to your list of dependencies in `mix.exs`:
+```elixir
+        def deps do
+          [{:crawler, "~> 1.0"}]
+        end
+```
+  2. Ensure crawler is started before your application:
+```elixir
+        def application do
+          extra_applications: [:logger, :crawler]]
+        end
+```
+
+[Optional] - Use the master branch for the latest code version
+
+```elixir
+        def deps do
+          [{:crawler, git: "https://github.com/fredwu/crawler.git"}]
+        end
+```
 ## Usage
 
 ```elixir
@@ -44,6 +66,20 @@ Crawler is under active development, below is a non-comprehensive list of featur
 ## Changelog
 
 Please see [CHANGELOG.md](CHANGELOG.md).
+
+## Documentation
+
+Documentation can be found at [https://hexdocs.pm/crawler](https://hexdocs.pm/crawler) on HexDocs.
+
+## Testing
+
+Get dependencies
+
+```shell
+mix deps.get
+mix test
+```
+
 
 ## License
 

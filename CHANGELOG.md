@@ -2,6 +2,9 @@
 
 ## master
 
+- Adding Install Instructions to [README.md](README.md) @cdesch
+- Adding Documentation link to [README.md](README.md) @cdesch
+- Adding Test instructions to [README.md](README.md) @cdesch
 - Implemented `:timeout` option
 - Implemented `:save_to` option
 - Added `:parser` option to allow custom parsing logic
