@@ -19,6 +19,11 @@ defmodule Crawler.Parser do
       %Page{body: "<a href='http://parser/1'>Link</a>"}
 
       iex> Parser.parse(%{page: %Page{
+      iex>   body: "<a name='hello'>Link</a>"
+      iex> }, opts: []})
+      %Page{body: "<a name='hello'>Link</a>"}
+
+      iex> Parser.parse(%{page: %Page{
       iex>   body: "<a href='http://parser/2' target='_blank'>Link</a>"
       iex> }, opts: []})
       %Page{body: "<a href='http://parser/2' target='_blank'>Link</a>"}
@@ -56,10 +61,11 @@ defmodule Crawler.Parser do
   def mark_processed(_), do: nil
 
   defp parse_link({"a", attrs, _}, opts, link_handler) do
-    attrs
-    |> detect_link
-    |> turn_link_into_url(opts)
-    |> link_handler.(opts)
+    with {"href", link} <- detect_link(attrs),
+         element        <- turn_link_into_url({"href", link}, opts)
+    do
+      link_handler.(element, opts)
+    end
   end
 
   defp detect_link(attrs) do
