@@ -10,38 +10,45 @@ defmodule Crawler.Linker.PathBuilder do
   ## Examples
 
       iex> PathBuilder.build_path(
-      iex>   "hello.world",
-      iex>   "https://hello.world/dir/page"
+      iex>   "https://cool.beans:7777/dir/page1",
+      iex>   "https://hello.world:8888/remote/page2"
       iex> )
-      "hello.world/dir/page"
+      "hello.world-8888/remote/page2"
 
       iex> PathBuilder.build_path(
-      iex>   "cool.beans",
-      iex>   "https://hello.world/dir/page"
+      iex>   "https://cool.beans:7777/dir/page1",
+      iex>   "local/page2"
       iex> )
-      "hello.world/dir/page"
+      "cool.beans-7777/dir/local/page2"
 
       iex> PathBuilder.build_path(
-      iex>   "hello.world",
-      iex>   "/dir/page"
+      iex>   "https://cool.beans:7777/dir/page1",
+      iex>   "/local/page2"
       iex> )
-      "hello.world/dir/page"
+      "cool.beans-7777/local/page2"
 
       iex> PathBuilder.build_path(
-      iex>   "https://cool.beans:7777/parent/dir",
+      iex>   "https://cool.beans:7777/parent/dir/page1",
       iex>   "../local/page2"
       iex> )
       "cool.beans-7777/parent/local/page2"
 
       iex> PathBuilder.build_path(
-      iex>   "cool.beans:7777/parent/dir",
+      iex>   "https://cool.beans:7777/parent/dir/page1",
       iex>   "../../local/page2"
       iex> )
       "cool.beans-7777/local/page2"
   """
-  def build_path(input, link, safe \\ true)
+  def build_path(current_url, link, safe \\ true) do
+    current_url
+    |> prefix_path(link, safe)
+    |> build(link, safe)
+  end
 
-  def build_path(input, link = "../" <> _, safe) do
+  defp prefix_path(url, "/" <> _link, safe), do: PathFinder.find_domain(url, safe)
+  defp prefix_path(url, _link, safe),        do: PathFinder.find_base_path(url, safe)
+
+  defp build(input, link = "../" <> _, safe) do
     input      = PathFinder.find_path(input, safe)
     {:ok, cwd} = File.cwd
 
@@ -50,7 +57,7 @@ defmodule Crawler.Linker.PathBuilder do
     |> Path.relative_to(cwd)
   end
 
-  def build_path(input, link, safe) do
+  defp build(input, link, safe) do
     link
     |> String.split("://", parts: 2)
     |> Enum.count

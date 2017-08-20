@@ -7,50 +7,6 @@ defmodule Crawler.Linker.PathFinder do
   in order to be safely used as folder and file names.
   """
 
-  alias Crawler.Linker.PathBuilder
-
-  @doc """
-  ## Examples
-
-      iex> PathFinder.find_full_path(
-      iex>   "https://cool.beans:7777/dir/page1",
-      iex>   "https://hello.world:8888/remote/page2"
-      iex> )
-      "hello.world-8888/remote/page2"
-
-      iex> PathFinder.find_full_path(
-      iex>   "https://cool.beans:7777/dir/page1",
-      iex>   "local/page2"
-      iex> )
-      "cool.beans-7777/dir/local/page2"
-
-      iex> PathFinder.find_full_path(
-      iex>   "https://cool.beans:7777/dir/page1",
-      iex>   "/local/page2"
-      iex> )
-      "cool.beans-7777/local/page2"
-
-      iex> PathFinder.find_full_path(
-      iex>   "https://cool.beans:7777/parent/dir/page1",
-      iex>   "../local/page2"
-      iex> )
-      "cool.beans-7777/parent/local/page2"
-
-      iex> PathFinder.find_full_path(
-      iex>   "https://cool.beans:7777/parent/dir/page1",
-      iex>   "../../local/page2"
-      iex> )
-      "cool.beans-7777/local/page2"
-  """
-  def find_full_path(current_url, link, safe \\ true) do
-    current_url
-    |> path_prefix(link, safe)
-    |> PathBuilder.build_path(link, safe)
-  end
-
-  defp path_prefix(url, "/" <> _link, safe), do: find_domain(url, safe)
-  defp path_prefix(url, _link, safe),        do: find_dir_path(url, safe)
-
   @doc """
   ## Examples
 
@@ -90,16 +46,16 @@ defmodule Crawler.Linker.PathFinder do
   @doc """
   ## Examples
 
-      iex> PathFinder.find_dir_path("http://hi.hello")
+      iex> PathFinder.find_base_path("http://hi.hello")
       "hi.hello"
 
-      iex> PathFinder.find_dir_path("https://hi.hello:8888/dir/world")
+      iex> PathFinder.find_base_path("https://hi.hello:8888/dir/world")
       "hi.hello-8888/dir"
 
-      iex> PathFinder.find_dir_path("https://hi.hello:8888/dir/world", false)
+      iex> PathFinder.find_base_path("https://hi.hello:8888/dir/world", false)
       "hi.hello:8888/dir"
   """
-  def find_dir_path(url, safe \\ true) do
+  def find_base_path(url, safe \\ true) do
     url
     |> find_path(safe)
     |> String.split("/")
