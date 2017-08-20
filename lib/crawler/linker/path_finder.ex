@@ -59,12 +59,12 @@ defmodule Crawler.Linker.PathFinder do
     url
     |> find_path(safe)
     |> String.split("/")
-    |> return_dir_path
+    |> base_path
   end
 
-  defp return_dir_path([path]), do: path
+  defp base_path([path]), do: path
 
-  defp return_dir_path(list) do
+  defp base_path(list) do
     [_head | tail] = Enum.reverse(list)
 
     tail
