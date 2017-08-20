@@ -4,7 +4,7 @@ defmodule Crawler.Linker.PathBuilder do
   the input string which is a URL with or without its protocol.
   """
 
-  alias Crawler.Linker.PathFinder
+  alias Crawler.Linker.{PathFinder, PathExpander}
 
   @doc """
   ## Examples
@@ -52,7 +52,7 @@ defmodule Crawler.Linker.PathBuilder do
     link
     |> normalise(path)
     |> PathFinder.find_path(safe)
-    |> resolve
+    |> PathExpander.expand_dot
   end
 
   defp normalise(link, path) do
@@ -64,12 +64,4 @@ defmodule Crawler.Linker.PathBuilder do
 
   defp join_path(2, link, _path), do: link
   defp join_path(1, link, path),  do: Path.join(path, link)
-
-  defp resolve(path) do
-    {:ok, cwd} = File.cwd
-
-    path
-    |> Path.expand
-    |> Path.relative_to(cwd)
-  end
 end
