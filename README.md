@@ -38,7 +38,7 @@ Crawler is under active development, below is a non-comprehensive list of featur
 - [ ] Restrict crawlable domains, paths or file types.
 - [x] Limit concurrent crawlers.
 - [x] Limit rate of crawling.
-- [ ] Set crawler's user agent.
+- [x] Set crawler's user agent.
 - [ ] The ability to retry a failed crawl.
 - [ ] DSL for scraping page content.
 
