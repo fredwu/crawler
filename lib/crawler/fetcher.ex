@@ -4,7 +4,7 @@ defmodule Crawler.Fetcher do
   """
 
   alias Crawler.Fetcher.{Policer, Recorder}
-  alias Crawler.{Snapper, Store.Page}
+  alias Crawler.{HTTP, Snapper, Store.Page}
 
   @fetch_opts [
     follow_redirect: true,
@@ -31,7 +31,7 @@ defmodule Crawler.Fetcher do
   end
 
   defp fetch_request(opts) do
-    HTTPoison.get(opts[:url], [], fetch_opts(opts))
+    HTTP.get(opts[:url], [], fetch_opts(opts))
   end
 
   defp fetch_url_200(body, opts) do

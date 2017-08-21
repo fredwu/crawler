@@ -6,7 +6,9 @@ defmodule Crawler.FetcherTest do
   doctest Fetcher
 
   test "success", %{bypass: bypass, url: url} do
-    Bypass.expect_once bypass, "GET", "/", fn (conn) ->
+    url = "#{url}/fetcher/200"
+
+    Bypass.expect_once bypass, "GET", "/fetcher/200", fn (conn) ->
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
@@ -19,9 +21,9 @@ defmodule Crawler.FetcherTest do
   end
 
   test "failure: 500", %{bypass: bypass, url: url} do
-    url = "#{url}/500"
+    url = "#{url}/fetcher/500"
 
-    Bypass.expect_once bypass, "GET", "/500", fn (conn) ->
+    Bypass.expect_once bypass, "GET", "/fetcher/500", fn (conn) ->
       Plug.Conn.resp(conn, 500, "<html>500</html>")
     end
 
@@ -32,9 +34,9 @@ defmodule Crawler.FetcherTest do
   end
 
   test "failure: timeout", %{bypass: bypass, url: url} do
-    url = "#{url}/timeout"
+    url = "#{url}/fetcher/timeout"
 
-    Bypass.expect_once bypass, "GET", "/timeout", fn (conn) ->
+    Bypass.expect_once bypass, "GET", "/fetcher/timeout", fn (conn) ->
       :timer.sleep(10)
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
@@ -48,28 +50,28 @@ defmodule Crawler.FetcherTest do
   end
 
   test "failure: unable to write", %{bypass: bypass, url: url, path: path} do
-    url = "#{url}/fail.html"
+    url = "#{url}/fetcher/fail.html"
 
-    Bypass.expect_once bypass, "GET", "/fail.html", fn (conn) ->
+    Bypass.expect_once bypass, "GET", "/fetcher/fail.html", fn (conn) ->
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
     fetcher = Fetcher.fetch(url: url, depth: 0, save_to: "nope")
 
-    assert {:error, "Cannot write to file nope/#{path}/fail.html, reason: enoent"} == fetcher
+    assert {:error, "Cannot write to file nope/#{path}/fetcher/fail.html, reason: enoent"} == fetcher
   end
 
-  test "snap /page.html", %{bypass: bypass, url: url, path: path} do
-    url = "#{url}/page.html"
+  test "snap /fetcher/page.html", %{bypass: bypass, url: url, path: path} do
+    url = "#{url}/fetcher/page.html"
 
-    Bypass.expect_once bypass, "GET", "/page.html", fn (conn) ->
+    Bypass.expect_once bypass, "GET", "/fetcher/page.html", fn (conn) ->
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
     Fetcher.fetch(url: url, depth: 0, save_to: tmp("fetcher"))
 
     wait fn ->
-      assert {:ok, "<html>200</html>"} == File.read(tmp("fetcher/#{path}", "page.html"))
+      assert {:ok, "<html>200</html>"} == File.read(tmp("fetcher/#{path}/fetcher", "page.html"))
     end
   end
 end
