@@ -16,14 +16,15 @@ Crawler.crawl("http://elixir-lang.org", max_depths: 2)
 
 ## Configurations
 
-| Option          | Type    | Default Value    | Description |
-|-----------------|---------|------------------|-------------|
-| `:max_depths`   | integer | `3`              | Maximum nested depth of pages to crawl.
-| `:workers`      | integer | `10`             | Maximum number of concurrent workers for crawling.
-| `:interval`     | integer | `0`              | Rate limit control - number of milliseconds before crawling more pages, defaults to `0` which is effectively no rate limit.
-| `:timeout`      | integer | `5000`           | Timeout value for fetching a page, in ms.
-| `:save_to`      | string  | `nil`            | When provided, the path for saving crawled pages.
-| `:parser`       | module  | `Crawler.Parser` | The default parser, useful when you need to handle parsing differently or to add extra functionalities.
+| Option          | Type    | Default Value         | Description |
+|-----------------|---------|-----------------------|-------------|
+| `:max_depths`   | integer | `3`                   | Maximum nested depth of pages to crawl.
+| `:workers`      | integer | `10`                  | Maximum number of concurrent workers for crawling.
+| `:interval`     | integer | `0`                   | Rate limit control - number of milliseconds before crawling more pages, defaults to `0` which is effectively no rate limit.
+| `:timeout`      | integer | `5000`                | Timeout value for fetching a page, in ms.
+| `:user_agent`   | string  | `Crawler/x.x.x (...)` | User-Agent value sent by the fetch requests.
+| `:save_to`      | string  | `nil`                 | When provided, the path for saving crawled pages.
+| `:parser`       | module  | `Crawler.Parser`      | The default parser, useful when you need to handle parsing differently or to add extra functionalities.
 
 ## Features Backlog
 

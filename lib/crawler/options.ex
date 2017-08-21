@@ -3,10 +3,13 @@ defmodule Crawler.Options do
   Options for the crawler.
   """
 
+  alias Crawler.Mixfile
+
   @max_depths 3
   @workers    10
   @interval   0
   @timeout    5_000
+  @user_agent "Crawler/#{Mixfile.project[:version]} (https://github.com/fredwu/crawler)"
   @save_to    nil
   @parser     Crawler.Parser
 
@@ -29,6 +32,7 @@ defmodule Crawler.Options do
       workers:    workers(),
       interval:   interval(),
       timeout:    timeout(),
+      user_agent: user_agent(),
       save_to:    save_to(),
       parser:     parser(),
     ], opts)
@@ -51,6 +55,7 @@ defmodule Crawler.Options do
   defp workers,    do: Application.get_env(:crawler, :workers)    || @workers
   defp interval,   do: Application.get_env(:crawler, :interval)   || @interval
   defp timeout,    do: Application.get_env(:crawler, :timeout)    || @timeout
+  defp user_agent, do: Application.get_env(:crawler, :user_agent) || @user_agent
   defp save_to,    do: Application.get_env(:crawler, :save_to)    || @save_to
   defp parser,     do: Application.get_env(:crawler, :parser)     || @parser
 end

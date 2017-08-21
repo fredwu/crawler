@@ -31,7 +31,7 @@ defmodule Crawler.Fetcher do
   end
 
   defp fetch_request(opts) do
-    HTTP.get(opts[:url], [], fetch_opts(opts))
+    HTTP.get(opts[:url], fetch_headers(opts), fetch_opts(opts))
   end
 
   defp fetch_url_200(body, opts) do
@@ -51,6 +51,16 @@ defmodule Crawler.Fetcher do
     {:error, "Failed to fetch #{opts[:url]}, reason: #{reason}"}
   end
 
+  defp fetch_headers(opts) do
+    [{"User-Agent", opts[:user_agent]}]
+  end
+
+  defp fetch_opts(opts) do
+    @fetch_opts ++ [
+      recv_timeout: opts[:timeout]
+    ]
+  end
+
   defp record_referrer_url(opts) do
     {:ok, Keyword.put(opts, :referrer_url, opts[:url])}
   end
@@ -68,11 +78,5 @@ defmodule Crawler.Fetcher do
       page: %Page{url: opts[:url], body: body},
       opts: opts
     }
-  end
-
-  defp fetch_opts(opts) do
-    @fetch_opts ++ [
-      recv_timeout: opts[:timeout]
-    ]
   end
 end
