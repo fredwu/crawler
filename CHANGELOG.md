@@ -2,8 +2,11 @@
 
 ## master
 
-- Implemented `:timeout` option
-- Implemented `:save_to` option
+- Added `:workers` option
+- Added `:interval` option
+- Added `:timeout` option
+- Added `:user_agent` option
+- Added `:save_to` option
 - Added `:parser` option to allow custom parsing logic
 - Renamed `:max_levels` to `:max_depths`
 
@@ -11,4 +14,4 @@
 
 - A semi-functioning prototype
 - Finished the very basic crawling function
-- Implemented `:max_levels` option
+- Added `:max_levels` option
