@@ -19,6 +19,9 @@ defmodule Crawler.Linker.PathExpander do
       iex> PathExpander.expand_dot("foo/bar/../baz")
       "foo/baz"
 
+      iex> PathExpander.expand_dot("/foo/bar/../baz")
+      "/foo/baz"
+
       ### Non-intended use cases are ignored
 
       iex> PathExpander.expand_dot("foo/bar/./baz")
@@ -29,14 +32,11 @@ defmodule Crawler.Linker.PathExpander do
   """
   def expand_dot(<<"/", rest::binary>>),
     do: "/" <> do_expand_dot(rest)
-  def expand_dot(<<letter, ":/", rest::binary>>) when letter in ?a..?z,
-    do: <<letter, ":/">> <> do_expand_dot(rest)
   def expand_dot(path),
     do: do_expand_dot(path)
 
   defp do_expand_dot(path),
     do: do_expand_dot(:binary.split(path, "/", [:global]), [])
-
   defp do_expand_dot([".." | t], [_, _ | acc]),
     do: do_expand_dot(t, acc)
   defp do_expand_dot([".." | t], []),
