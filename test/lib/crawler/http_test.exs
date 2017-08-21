@@ -19,7 +19,10 @@ defmodule Crawler.HTTPTest do
     Crawler.crawl("#{url}/http/default_ua")
 
     wait fn ->
-      assert Agent.get(HTTP.DefaultUA, & &1) == "Crawler/0.1.0 (https://github.com/fredwu/crawler)"
+      assert String.match?(
+        Agent.get(HTTP.DefaultUA, & &1),
+        ~r{Crawler/\d\.\d\.\d \(https://github\.com/fredwu/crawler\)}
+      )
     end
   end
 
