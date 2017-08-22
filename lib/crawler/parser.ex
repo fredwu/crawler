@@ -5,7 +5,7 @@ defmodule Crawler.Parser do
 
   require Logger
 
-  alias Crawler.{Dispatcher, Linker, Store, Store.Page}
+  alias Crawler.{Dispatcher, Linker}
 
   @doc """
   ## Examples
@@ -53,12 +53,6 @@ defmodule Crawler.Parser do
     |> Floki.find("a")
     |> Enum.map(&parse_link(&1, opts, link_handler))
   end
-
-  def mark_processed(%Page{url: url}) do
-    Store.processed(url)
-  end
-
-  def mark_processed(_), do: nil
 
   defp parse_link({"a", attrs, _}, opts, link_handler) do
     with {"href", link} <- detect_link(attrs),
