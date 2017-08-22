@@ -5,7 +5,7 @@ defmodule Crawler.Parser do
 
   require Logger
 
-  alias Crawler.{Dispatcher, Linker}
+  alias Crawler.{Dispatcher, Parser.LinkParser}
 
   @doc """
   ## Examples
@@ -51,32 +51,6 @@ defmodule Crawler.Parser do
   def parse_links(body, opts, link_handler) do
     body
     |> Floki.find("a")
-    |> Enum.map(&parse_link(&1, opts, link_handler))
-  end
-
-  defp parse_link({"a", attrs, _}, opts, link_handler) do
-    with {"href", link} <- detect_link(attrs),
-         element        <- turn_link_into_url({"href", link}, opts)
-    do
-      link_handler.(element, opts)
-    end
-  end
-
-  defp detect_link(attrs) do
-    Enum.find(attrs, fn(attr) ->
-      Kernel.match?({"href", _}, attr)
-    end)
-  end
-
-  defp turn_link_into_url(element = {"href", link}, opts) do
-    if is_url?(link) do
-      element
-    else
-      {"link", link, "href", Linker.url(opts[:referrer_url], link)}
-    end
-  end
-
-  defp is_url?(link) do
-    String.contains?(link, "://")
+    |> Enum.map(&LinkParser.parse(&1, opts, link_handler))
   end
 end
