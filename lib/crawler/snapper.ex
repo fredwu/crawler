@@ -3,7 +3,7 @@ defmodule Crawler.Snapper do
   Stores crawled pages offline.
   """
 
-  alias Crawler.{Snapper.Replacer, Linker, Linker.PathFinder}
+  alias Crawler.{Snapper.LinkReplacer, Linker, Linker.PathFinder}
 
   @doc """
   ## Examples
@@ -59,7 +59,7 @@ defmodule Crawler.Snapper do
 
   defp update_links(body, opts) do
     if opts[:depth] < opts[:max_depths] do
-      Replacer.replace_links(body, opts)
+      LinkReplacer.replace_links(body, opts)
     else
       {:ok, body}
     end

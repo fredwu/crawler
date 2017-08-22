@@ -1,4 +1,4 @@
-defmodule Crawler.Snapper.Replacer do
+defmodule Crawler.Snapper.LinkReplacer do
   @moduledoc """
   Replaces links found in a page so they work offline.
   """
@@ -8,7 +8,7 @@ defmodule Crawler.Snapper.Replacer do
   @doc """
   ## Examples
 
-      iex> Replacer.replace_links(
+      iex> LinkReplacer.replace_links(
       iex>   "<a href='http://another.domain/page.html'></a>",
       iex>   url: "http://main.domain/dir/page",
       iex>   depth: 1,
@@ -16,7 +16,7 @@ defmodule Crawler.Snapper.Replacer do
       iex> )
       {:ok, "<a href='../../../another.domain/page.html'></a>"}
 
-      iex> Replacer.replace_links(
+      iex> LinkReplacer.replace_links(
       iex>   "<a href='http://another.domain/dir/page.html'></a>",
       iex>   url: "http://main.domain/page",
       iex>   depth: 1,
@@ -24,7 +24,7 @@ defmodule Crawler.Snapper.Replacer do
       iex> )
       {:ok, "<a href='../../another.domain/dir/page.html'></a>"}
 
-      iex> Replacer.replace_links(
+      iex> LinkReplacer.replace_links(
       iex>   "<a href='http://another.domain/dir/page'></a>",
       iex>   url: "http://main.domain/dir/page",
       iex>   depth: 1,
@@ -32,7 +32,7 @@ defmodule Crawler.Snapper.Replacer do
       iex> )
       {:ok, "<a href='../../../another.domain/dir/page/index.html'></a>"}
 
-      iex> Replacer.replace_links(
+      iex> LinkReplacer.replace_links(
       iex>   "<a href='/dir/page2.html'></a>",
       iex>   url: "http://main.domain/dir/page",
       iex>   referrer_url: "http://main.domain/dir/page",
