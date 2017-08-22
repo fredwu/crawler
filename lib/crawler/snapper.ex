@@ -3,7 +3,7 @@ defmodule Crawler.Snapper do
   Stores crawled pages offline.
   """
 
-  alias Crawler.{Snapper.LinkReplacer, Linker, Linker.PathFinder}
+  alias Crawler.Snapper.{LinkReplacer, DirMaker}
 
   @doc """
   ## Examples
@@ -49,7 +49,7 @@ defmodule Crawler.Snapper do
   """
   def snap(body, opts) do
     {:ok, body} = update_links(body, opts)
-    file_path   = create_snap_dir(opts)
+    file_path   = DirMaker.make_dir(opts)
 
     case File.write(file_path, body) do
       :ok              -> {:ok, opts}
@@ -63,30 +63,5 @@ defmodule Crawler.Snapper do
     else
       {:ok, body}
     end
-  end
-
-  defp create_snap_dir(opts) do
-    opts[:url]
-    |> prep_filepath
-    |> save_path(opts[:save_to])
-    |> make_save_path(opts[:save_to])
-  end
-
-  defp prep_filepath(url) do
-    url
-    |> Linker.offline_url(url)
-    |> PathFinder.find_path
-  end
-
-  defp save_path(path, save_to) do
-    Path.join(save_to, path)
-  end
-
-  defp make_save_path(path, save_to) do
-    if File.exists?(save_to) do
-      File.mkdir_p(Path.dirname(path))
-    end
-
-    path
   end
 end
