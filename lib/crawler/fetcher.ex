@@ -3,13 +3,8 @@ defmodule Crawler.Fetcher do
   Fetches pages and perform tasks on them.
   """
 
-  alias Crawler.Fetcher.{Policer, Recorder}
-  alias Crawler.{HTTP, Snapper, Store.Page}
-
-  @fetch_opts [
-    follow_redirect: true,
-    max_redirect:    5
-  ]
+  alias Crawler.Fetcher.{Policer, Recorder, Requester}
+  alias Crawler.{Snapper, Store.Page}
 
   def fetch(opts) do
     with {:ok, opts} <- Policer.police(opts),
@@ -20,7 +15,7 @@ defmodule Crawler.Fetcher do
   end
 
   defp fetch_url(opts) do
-    case fetch_request(opts) do
+    case Requester.make(opts) do
       {:ok, %HTTPoison.Response{status_code: 200, body: body}} ->
         fetch_url_200(body, opts)
       {:ok, %HTTPoison.Response{status_code: status_code}} ->
@@ -28,10 +23,6 @@ defmodule Crawler.Fetcher do
       {:error, %HTTPoison.Error{reason: reason}} ->
         fetch_url_failed(reason, opts)
     end
-  end
-
-  defp fetch_request(opts) do
-    HTTP.get(opts[:url], fetch_headers(opts), fetch_opts(opts))
   end
 
   defp fetch_url_200(body, opts) do
@@ -49,16 +40,6 @@ defmodule Crawler.Fetcher do
 
   defp fetch_url_failed(reason, opts) do
     {:error, "Failed to fetch #{opts[:url]}, reason: #{reason}"}
-  end
-
-  defp fetch_headers(opts) do
-    [{"User-Agent", opts[:user_agent]}]
-  end
-
-  defp fetch_opts(opts) do
-    @fetch_opts ++ [
-      recv_timeout: opts[:timeout]
-    ]
   end
 
   defp record_referrer_url(opts) do
