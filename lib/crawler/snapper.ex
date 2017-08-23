@@ -4,6 +4,7 @@ defmodule Crawler.Snapper do
   """
 
   alias Crawler.Snapper.{LinkReplacer, DirMaker}
+  alias Crawler.Parser
 
   @doc """
   ## Examples
@@ -60,7 +61,7 @@ defmodule Crawler.Snapper do
   end
 
   defp update_links(body, opts) do
-    if opts[:html_tag] == "a" do
+    if Parser.parsable?(opts) do
       LinkReplacer.replace_links(body, opts)
     else
       {:ok, body}

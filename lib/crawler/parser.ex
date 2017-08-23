@@ -42,11 +42,18 @@ defmodule Crawler.Parser do
       iex>   body: "<a href='../parser/2'>Link</a>"
       iex> }, opts: [referrer_url: "http://hello/"]})
       %Page{body: "<a href='../parser/2'>Link</a>"}
+
+      iex> Parser.parse(%{page: %Page{
+      iex>   body: image_file()
+      iex> }, opts: [referrer_url: "http://hello/"]})
+      %Page{body: "\#{image_file()}"}
   """
   def parse(page, link_handler \\ &Dispatcher.dispatch(&1, &2))
 
   def parse(%{page: page, opts: opts}, link_handler) do
-    parse_links(page.body, opts, link_handler)
+    if parsable?(opts) do
+      parse_links(page.body, opts, link_handler)
+    end
 
     page
   end
@@ -57,6 +64,10 @@ defmodule Crawler.Parser do
     body
     |> Floki.find(tags(opts))
     |> Enum.map(&LinkParser.parse(&1, opts, link_handler))
+  end
+
+  def parsable?(opts) do
+    opts[:html_tag] == "a"
   end
 
   defp tags(opts) do
