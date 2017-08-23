@@ -54,7 +54,11 @@ defmodule Crawler.Snapper.LinkReplacer do
   defp get_link({_, link, _, url}, _opts), do: [link, url]
 
   defp modify_body(body, current_url, link) do
-    String.replace(body, ~r/(href=['"])#{link}(['"])/, modify_link(current_url, link))
+    String.replace(
+      body,
+      ~r/((?!src|href)=['"])#{link}(['"])/,
+      modify_link(current_url, link)
+    )
   end
 
   defp modify_link(current_url, link) do

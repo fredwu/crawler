@@ -50,7 +50,7 @@ defmodule Crawler.Parser do
 
   def parse_links(body, opts, link_handler) do
     body
-    |> Floki.find("a")
+    |> Floki.find("a, img")
     |> Enum.map(&LinkParser.parse(&1, opts, link_handler))
   end
 end

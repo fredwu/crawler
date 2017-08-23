@@ -24,6 +24,7 @@ Crawler.crawl("http://elixir-lang.org", max_depths: 2)
 | `:timeout`      | integer | `5000`                | Timeout value for fetching a page, in ms.
 | `:user_agent`   | string  | `Crawler/x.x.x (...)` | User-Agent value sent by the fetch requests.
 | `:save_to`      | string  | `nil`                 | When provided, the path for saving crawled pages.
+| `:assets`       | list    | `[]`                  | Whether to fetch any asset files, available options: `css`, `js`, `images`.
 | `:parser`       | module  | `Crawler.Parser`      | The default parser, useful when you need to handle parsing differently or to add extra functionalities.
 
 ## Features Backlog
@@ -33,7 +34,10 @@ Crawler is under active development, below is a non-comprehensive list of featur
 - [x] Set the maximum crawl depth.
 - [x] Save to disk.
 - [x] Set timeouts.
-- [ ] Crawl assets (CSS and images, etc).
+- [ ] Crawl assets.
+  - [ ] js
+  - [ ] css
+  - [x] images
 - [ ] The ability to manually stop/pause/restart the crawler.
 - [ ] Restrict crawlable domains, paths or file types.
 - [x] Limit concurrent crawlers.

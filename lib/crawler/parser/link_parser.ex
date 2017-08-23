@@ -5,6 +5,11 @@ defmodule Crawler.Parser.LinkParser do
 
   alias Crawler.Linker
 
+  @tag_attr [
+    a:   "href",
+    img: "src",
+  ]
+
   @doc """
   ## Examples
 
@@ -14,22 +19,32 @@ defmodule Crawler.Parser.LinkParser do
       iex>   &Kernel.inspect(&1, &2)
       iex> )
       "{\\\"href\\\", \\\"http://hello.world\\\"}"
+
+      iex> LinkParser.parse(
+      iex>   {"img", [{"hello", "world"}, {"src", "http://hello.world"}], []},
+      iex>   [],
+      iex>   &Kernel.inspect(&1, &2)
+      iex> )
+      "{\\\"src\\\", \\\"http://hello.world\\\"}"
+
   """
-  def parse({"a", attrs, _}, opts, link_handler) do
-    with {"href", link} <- detect_link(attrs),
-         element        <- expand_link_into_url({"href", link}, opts)
+  def parse({tag, attrs, _}, opts, link_handler) do
+    src = @tag_attr[:"#{tag}"]
+
+    with {_tag, link} <- detect_link(src, attrs),
+         element      <- expand_link_into_url({src, link}, opts)
     do
       link_handler.(element, opts)
     end
   end
 
-  defp detect_link(attrs) do
+  defp detect_link(src, attrs) do
     Enum.find(attrs, fn(attr) ->
-      Kernel.match?({"href", _}, attr)
+      Kernel.match?({^src, _link}, attr)
     end)
   end
 
-  defp expand_link_into_url(element = {"href", link}, opts) do
+  defp expand_link_into_url(element = {_tag, link}, opts) do
     link
     |> is_url?
     |> transform_link(element, opts)
@@ -39,7 +54,7 @@ defmodule Crawler.Parser.LinkParser do
 
   defp transform_link(true, element, _opts), do: element
 
-  defp transform_link(false, {"href", link}, opts) do
-    {"link", link, "href", Linker.url(opts[:referrer_url], link)}
+  defp transform_link(false, {tag, link}, opts) do
+    {"link", link, @tag_attr[:"#{tag}"], Linker.url(opts[:referrer_url], link)}
   end
 end

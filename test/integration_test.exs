@@ -19,11 +19,15 @@ defmodule IntegrationTest do
     end
 
     Bypass.expect_once bypass2, "GET", "/dir/page4", fn (conn) ->
-      Plug.Conn.resp(conn, 200, "<html><a href='../page5.html'>5</a></html>")
+      Plug.Conn.resp(conn, 200, "<html><a href='../page5.html'>5</a> <img src='../image.png' /></html>")
     end
 
     Bypass.expect_once bypass2, "GET", "/page5.html", fn (conn) ->
       Plug.Conn.resp(conn, 200, "<html><a href='/page6'>6</a></html>")
+    end
+
+    Bypass.expect_once bypass2, "GET", "/image.png", fn (conn) ->
+      Plug.Conn.resp(conn, 200, "png")
     end
 
     Crawler.crawl(linked_url1, save_to: tmp("integration"), max_depths: 4)
@@ -31,7 +35,7 @@ defmodule IntegrationTest do
     page1 = "<html><a href='../#{path}/dir/page2.html'>2</a> <a href='../#{path2}/page3.html'>3</a></html>"
     page2 = "<html><a href='../../#{path2}/page3.html'>3</a></html>"
     page3 = "<html><a href='../#{path2}/dir/page4/index.html'>4</a> <a href='../#{path2}/dir/page4/index.html'>4</a></html>"
-    page4 = "<html><a href='../../../#{path2}/page5.html'>5</a></html>"
+    page4 = "<html><a href='../../../#{path2}/page5.html'>5</a> <img src='../../../#{path2}/image.png' /></html>"
     page5 = "<html><a href='/page6'>6</a></html>"
 
     wait fn ->
@@ -40,6 +44,7 @@ defmodule IntegrationTest do
       assert {:ok, page3} == File.read(tmp("integration/#{path2}", "page3.html"))
       assert {:ok, page4} == File.read(tmp("integration/#{path2}/dir/page4", "index.html"))
       assert {:ok, page5} == File.read(tmp("integration/#{path2}", "page5.html"))
+      assert {:ok, "png"} == File.read(tmp("integration/#{path2}", "image.png"))
     end
   end
 end
