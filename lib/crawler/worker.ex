@@ -24,6 +24,10 @@ defmodule Crawler.Worker do
     GenServer.cast(pid, term)
   end
 
+  def actionable?(opts) do
+    opts[:html_tag] == "a"
+  end
+
   defp mark_processed(%Page{url: url}), do: Store.processed(url)
   defp mark_processed(_),               do: nil
 end

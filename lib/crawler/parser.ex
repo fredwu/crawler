@@ -5,7 +5,7 @@ defmodule Crawler.Parser do
 
   require Logger
 
-  alias Crawler.{Dispatcher, Parser.LinkParser}
+  alias Crawler.{Worker, Dispatcher, Parser.LinkParser}
 
   @asset_tags %{
     "pages"  => "a",
@@ -51,7 +51,7 @@ defmodule Crawler.Parser do
   def parse(page, link_handler \\ &Dispatcher.dispatch(&1, &2))
 
   def parse(%{page: page, opts: opts}, link_handler) do
-    if parsable?(opts) do
+    if Worker.actionable?(opts) do
       parse_links(page.body, opts, link_handler)
     end
 
@@ -64,10 +64,6 @@ defmodule Crawler.Parser do
     body
     |> Floki.find(tags(opts))
     |> Enum.map(&LinkParser.parse(&1, opts, link_handler))
-  end
-
-  def parsable?(opts) do
-    opts[:html_tag] == "a"
   end
 
   defp tags(opts) do
