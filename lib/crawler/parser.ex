@@ -7,6 +7,11 @@ defmodule Crawler.Parser do
 
   alias Crawler.{Dispatcher, Parser.LinkParser}
 
+  @asset_tags %{
+    "pages"  => "a",
+    "images" => "img",
+  }
+
   @doc """
   ## Examples
 
@@ -50,7 +55,14 @@ defmodule Crawler.Parser do
 
   def parse_links(body, opts, link_handler) do
     body
-    |> Floki.find("a, img")
+    |> Floki.find(tags(opts))
     |> Enum.map(&LinkParser.parse(&1, opts, link_handler))
+  end
+
+  defp tags(opts) do
+    @asset_tags
+    |> Map.take(["pages"] ++ (opts[:assets] || []))
+    |> Map.values
+    |> Enum.join(", ")
   end
 end

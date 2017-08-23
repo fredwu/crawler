@@ -11,6 +11,7 @@ defmodule Crawler.Options do
   @timeout    5_000
   @user_agent "Crawler/#{Mixfile.project[:version]} (https://github.com/fredwu/crawler)"
   @save_to    nil
+  @assets     []
   @parser     Crawler.Parser
 
   @doc """
@@ -34,6 +35,7 @@ defmodule Crawler.Options do
       timeout:    timeout(),
       user_agent: user_agent(),
       save_to:    save_to(),
+      assets:     assets(),
       parser:     parser(),
     ], opts)
   end
@@ -57,5 +59,6 @@ defmodule Crawler.Options do
   defp timeout,    do: Application.get_env(:crawler, :timeout)    || @timeout
   defp user_agent, do: Application.get_env(:crawler, :user_agent) || @user_agent
   defp save_to,    do: Application.get_env(:crawler, :save_to)    || @save_to
+  defp assets,     do: Application.get_env(:crawler, :assets)     || @assets
   defp parser,     do: Application.get_env(:crawler, :parser)     || @parser
 end

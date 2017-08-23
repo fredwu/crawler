@@ -30,7 +30,7 @@ defmodule IntegrationTest do
       Plug.Conn.resp(conn, 200, "png")
     end
 
-    Crawler.crawl(linked_url1, save_to: tmp("integration"), max_depths: 4)
+    Crawler.crawl(linked_url1, save_to: tmp("integration"), max_depths: 4, assets: ["images"])
 
     page1 = "<html><a href='../#{path}/dir/page2.html'>2</a> <a href='../#{path2}/page3.html'>3</a></html>"
     page2 = "<html><a href='../../#{path2}/page3.html'>3</a></html>"

@@ -24,7 +24,7 @@ Crawler.crawl("http://elixir-lang.org", max_depths: 2)
 | `:timeout`      | integer | `5000`                | Timeout value for fetching a page, in ms.
 | `:user_agent`   | string  | `Crawler/x.x.x (...)` | User-Agent value sent by the fetch requests.
 | `:save_to`      | string  | `nil`                 | When provided, the path for saving crawled pages.
-| `:assets`       | list    | `[]`                  | Whether to fetch any asset files, available options: `css`, `js`, `images`.
+| `:assets`       | list    | `[]`                  | Whether to fetch any asset files, available options: `"css"`, `"js"`, `"images"`.
 | `:parser`       | module  | `Crawler.Parser`      | The default parser, useful when you need to handle parsing differently or to add extra functionalities.
 
 ## Features Backlog

@@ -5,10 +5,10 @@ defmodule Crawler.Parser.LinkParser do
 
   alias Crawler.Linker
 
-  @tag_attr [
-    a:   "href",
-    img: "src",
-  ]
+  @tag_attr %{
+    "a"   => "href",
+    "img" => "src",
+  }
 
   @doc """
   ## Examples
@@ -29,7 +29,7 @@ defmodule Crawler.Parser.LinkParser do
 
   """
   def parse({tag, attrs, _}, opts, link_handler) do
-    src = @tag_attr[:"#{tag}"]
+    src = @tag_attr[tag]
 
     with {_tag, link} <- detect_link(src, attrs),
          element      <- expand_link_into_url({src, link}, opts)
@@ -55,6 +55,6 @@ defmodule Crawler.Parser.LinkParser do
   defp transform_link(true, element, _opts), do: element
 
   defp transform_link(false, {tag, link}, opts) do
-    {"link", link, @tag_attr[:"#{tag}"], Linker.url(opts[:referrer_url], link)}
+    {"link", link, @tag_attr[tag], Linker.url(opts[:referrer_url], link)}
   end
 end
