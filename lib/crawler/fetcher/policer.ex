@@ -6,7 +6,8 @@ defmodule Crawler.Fetcher.Policer do
 
   alias Crawler.Store
 
-  @uri_schemes ["http", "https"]
+  @uri_schemes       ["http", "https"]
+  @asset_extra_depth 2
 
   @doc """
   ## Examples
@@ -14,8 +15,11 @@ defmodule Crawler.Fetcher.Policer do
       iex> Policer.police([depth: 1, max_depths: 2, url: "http://policer/"])
       {:ok, [depth: 1, max_depths: 2, url: "http://policer/"]}
 
-      iex> Policer.police([depth: 2, max_depths: 2])
-      {:error, "Fetch failed 'within_fetch_depth?', with opts: [depth: 2, max_depths: 2]."}
+      iex> Policer.police([depth: 2, max_depths: 2, html_tag: "a"])
+      {:error, "Fetch failed 'within_fetch_depth?', with opts: [depth: 2, max_depths: 2, html_tag: \\\"a\\\"]."}
+
+      iex> Policer.police([depth: 3, max_depths: 2, html_tag: "img", url: "http://policer/hi.jpg"])
+      {:ok, [depth: 3, max_depths: 2, html_tag: "img", url: "http://policer/hi.jpg"]}
 
       iex> Policer.police([depth: 1, max_depths: 2, url: "ftp://hello.world"])
       {:error, "Fetch failed 'acceptable_uri_scheme?', with opts: [depth: 1, max_depths: 2, url: \\\"ftp://hello.world\\\"]."}
@@ -36,7 +40,12 @@ defmodule Crawler.Fetcher.Policer do
   end
 
   defp within_fetch_depth?(opts) do
-    {:within_fetch_depth?, opts[:depth] < opts[:max_depths]}
+    max_depths = case opts[:html_tag] do
+      "a" -> opts[:max_depths]
+      _   -> opts[:max_depths] + @asset_extra_depth
+    end
+
+    {:within_fetch_depth?, opts[:depth] < max_depths}
   end
 
   defp acceptable_uri_scheme?(opts) do

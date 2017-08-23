@@ -23,10 +23,14 @@ defmodule IntegrationTest do
     end
 
     Bypass.expect_once bypass2, "GET", "/page5.html", fn (conn) ->
-      Plug.Conn.resp(conn, 200, "<html><a href='/page6'>6</a></html>")
+      Plug.Conn.resp(conn, 200, "<html><a href='/page6'>6</a> <img src='/image2.png' /></html>")
     end
 
     Bypass.expect_once bypass2, "GET", "/image.png", fn (conn) ->
+      Plug.Conn.resp(conn, 200, "png")
+    end
+
+    Bypass.expect_once bypass2, "GET", "/image2.png", fn (conn) ->
       Plug.Conn.resp(conn, 200, "png")
     end
 
@@ -36,7 +40,7 @@ defmodule IntegrationTest do
     page2 = "<html><a href='../../#{path2}/page3.html'>3</a></html>"
     page3 = "<html><a href='../#{path2}/dir/page4/index.html'>4</a> <a href='../#{path2}/dir/page4/index.html'>4</a></html>"
     page4 = "<html><a href='../../../#{path2}/page5.html'>5</a> <img src='../../../#{path2}/image.png' /></html>"
-    page5 = "<html><a href='/page6'>6</a></html>"
+    page5 = "<html><a href='../#{path2}/page6/index.html'>6</a> <img src='../#{path2}/image2.png' /></html>"
 
     wait fn ->
       assert {:ok, page1} == File.read(tmp("integration/#{path}", "page1.html"))
@@ -45,6 +49,7 @@ defmodule IntegrationTest do
       assert {:ok, page4} == File.read(tmp("integration/#{path2}/dir/page4", "index.html"))
       assert {:ok, page5} == File.read(tmp("integration/#{path2}", "page5.html"))
       assert {:ok, "png"} == File.read(tmp("integration/#{path2}", "image.png"))
+      assert {:ok, "png"} == File.read(tmp("integration/#{path2}", "image2.png"))
     end
   end
 end

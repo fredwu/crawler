@@ -34,7 +34,7 @@ defmodule Crawler.Parser.LinkParser do
     with {_tag, link} <- detect_link(src, attrs),
          element      <- expand_link_into_url({src, link}, opts)
     do
-      link_handler.(element, opts)
+      link_handler.(element, Keyword.merge(opts, [html_tag: tag]))
     end
   end
 

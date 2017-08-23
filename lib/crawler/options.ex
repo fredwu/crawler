@@ -29,6 +29,7 @@ defmodule Crawler.Options do
   def assign_defaults(opts) do
     Keyword.merge([
       depth:      0,
+      html_tag:   "a",
       max_depths: max_depths(),
       workers:    workers(),
       interval:   interval(),

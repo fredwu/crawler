@@ -33,6 +33,7 @@ defmodule Crawler.Snapper do
       iex>   url: "http://snapper.local/depth0",
       iex>   depth: 1,
       iex>   max_depths: 2,
+      iex>   html_tag: "a",
       iex> )
       iex> File.read(tmp("snapper/snapper.local/depth0", "index.html"))
       {:ok, "<a href='../../another.domain/page/index.html'></a>"}
@@ -43,6 +44,7 @@ defmodule Crawler.Snapper do
       iex>   url: "http://snapper.local:7777/dir/depth1",
       iex>   depth: 1,
       iex>   max_depths: 2,
+      iex>   html_tag: "a",
       iex> )
       iex> File.read(tmp("snapper/snapper.local-7777/dir/depth1", "index.html"))
       {:ok, "<a href='../../../another.domain-8888/page/index.html'></a>"}
@@ -58,7 +60,7 @@ defmodule Crawler.Snapper do
   end
 
   defp update_links(body, opts) do
-    if opts[:depth] < opts[:max_depths] do
+    if opts[:html_tag] == "a" do
       LinkReplacer.replace_links(body, opts)
     else
       {:ok, body}
