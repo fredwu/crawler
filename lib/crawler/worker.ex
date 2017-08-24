@@ -25,7 +25,7 @@ defmodule Crawler.Worker do
   end
 
   def actionable?(opts) do
-    opts[:html_tag] == "a"
+    Enum.member?(["a", "link"], opts[:html_tag])
   end
 
   defp mark_processed(%Page{url: url}), do: Store.processed(url)

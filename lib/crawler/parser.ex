@@ -9,6 +9,7 @@ defmodule Crawler.Parser do
 
   @asset_tags %{
     "pages"  => "a",
+    "css"    => "link[rel='stylesheet']",
     "images" => "img",
   }
 

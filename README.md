@@ -36,7 +36,7 @@ Crawler is under active development, below is a non-comprehensive list of featur
 - [x] Set timeouts.
 - [ ] Crawl assets.
   - [ ] js
-  - [ ] css
+  - [x] css
   - [x] images
 - [ ] The ability to manually stop/pause/restart the crawler.
 - [ ] Restrict crawlable domains, paths or file types.
