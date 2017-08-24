@@ -53,7 +53,7 @@ defmodule Crawler.Snapper.LinkReplacer do
     new_body = body
     |> Parser.parse_links(opts, &get_link/2)
     |> List.flatten
-    |> Enum.reduce(body, &modify_body(&2, opts[:url], &1))
+    |> Enum.reduce(body, &modify_body(opts[:file_type], &2, opts[:url], &1))
 
     {:ok, new_body}
   end
@@ -61,12 +61,19 @@ defmodule Crawler.Snapper.LinkReplacer do
   defp get_link({_, url}, _opts),          do: url
   defp get_link({_, link, _, url}, _opts), do: [link, url]
 
-  defp modify_body(body, current_url, link) do
+  defp modify_body(file_type, body, current_url, link) do
     String.replace(
       body,
-      ~r/((?!src|href)=['"])#{link}(['"])/,
+      regexes(file_type, link),
       modify_link(current_url, link)
     )
+  end
+
+  defp regexes(file_type, link) do
+    case file_type do
+      "css" -> ~r{((?!url)\(['"]?)#{link}(['"]?\))}
+      _     -> ~r{((?!src|href)=['"])#{link}(['"])}
+    end
   end
 
   defp modify_link(current_url, link) do

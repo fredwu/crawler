@@ -5,13 +5,8 @@ defmodule Crawler.Parser do
 
   require Logger
 
-  alias Crawler.{Worker, Dispatcher, Parser.LinkParser}
-
-  @asset_tags %{
-    "pages"  => "a",
-    "css"    => "link[rel='stylesheet']",
-    "images" => "img",
-  }
+  alias Crawler.Parser.{CssParser, HtmlParser, LinkParser}
+  alias Crawler.{Worker, Dispatcher}
 
   @doc """
   ## Examples
@@ -62,15 +57,12 @@ defmodule Crawler.Parser do
   def parse({:error, reason}, _), do: Logger.debug(reason)
 
   def parse_links(body, opts, link_handler) do
-    body
-    |> Floki.find(tags(opts))
-    |> Enum.map(&LinkParser.parse(&1, opts, link_handler))
+    Enum.map(
+      parse_file(body, opts),
+      &LinkParser.parse(&1, opts, link_handler)
+    )
   end
 
-  defp tags(opts) do
-    @asset_tags
-    |> Map.take(["pages"] ++ (opts[:assets] || []))
-    |> Map.values
-    |> Enum.join(", ")
-  end
+  defp parse_file(body, %{file_type: "css"}), do: CssParser.parse(body)
+  defp parse_file(body, opts),                do: HtmlParser.parse(body, opts)
 end
