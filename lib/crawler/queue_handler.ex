@@ -21,7 +21,7 @@ defmodule Crawler.QueueHandler do
       timeout:  opts[:timeout],
     )
 
-    Keyword.merge(opts, queue: opq)
+    Map.merge(opts, %{queue: opq})
   end
 
   defp init_queue(opts, _), do: opts

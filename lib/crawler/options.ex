@@ -17,17 +17,17 @@ defmodule Crawler.Options do
   @doc """
   ## Examples
 
-      iex> Options.assign_defaults([]) |> Keyword.has_key?(:depth)
+      iex> Options.assign_defaults(%{}) |> Map.has_key?(:depth)
       true
 
-      iex> Options.assign_defaults([]) |> Keyword.get(:max_depths)
+      iex> Options.assign_defaults(%{}) |> Map.get(:max_depths)
       3
 
-      iex> Options.assign_defaults([max_depths: 4]) |> Keyword.get(:max_depths)
+      iex> Options.assign_defaults(%{max_depths: 4}) |> Map.get(:max_depths)
       4
   """
   def assign_defaults(opts) do
-    Keyword.merge([
+    Map.merge(%{
       depth:      0,
       html_tag:   "a",
       max_depths: max_depths(),
@@ -38,20 +38,20 @@ defmodule Crawler.Options do
       save_to:    save_to(),
       assets:     assets(),
       parser:     parser(),
-    ], opts)
+    }, opts)
   end
 
   @doc """
   ## Examples
 
-      iex> Options.assign_url([], "http://options/")
-      [url: "http://options/"]
+      iex> Options.assign_url(%{}, "http://options/")
+      %{url: "http://options/"}
 
-      iex> Options.assign_url([url: "http://example.com/"], "http://options/")
-      [url: "http://options/"]
+      iex> Options.assign_url(%{url: "http://example.com/"}, "http://options/")
+      %{url: "http://options/"}
   """
   def assign_url(opts, url) do
-    Keyword.merge(opts, [url: url])
+    Map.merge(opts, %{url: url})
   end
 
   defp max_depths, do: Application.get_env(:crawler, :max_depths) || @max_depths

@@ -16,15 +16,15 @@ defmodule Crawler.Parser.LinkParser do
 
       iex> LinkParser.parse(
       iex>   {"a", [{"hello", "world"}, {"href", "http://hello.world"}], []},
-      iex>   [],
-      iex>   &Kernel.inspect(&1, &2)
+      iex>   %{},
+      iex>   &Kernel.inspect(&1, Enum.into(&2, []))
       iex> )
       "{\\\"href\\\", \\\"http://hello.world\\\"}"
 
       iex> LinkParser.parse(
       iex>   {"img", [{"hello", "world"}, {"src", "http://hello.world"}], []},
-      iex>   [],
-      iex>   &Kernel.inspect(&1, &2)
+      iex>   %{},
+      iex>   &Kernel.inspect(&1, Enum.into(&2, []))
       iex> )
       "{\\\"src\\\", \\\"http://hello.world\\\"}"
 
@@ -35,7 +35,7 @@ defmodule Crawler.Parser.LinkParser do
     with {_tag, link} <- detect_link(src, attrs),
          element      <- expand_link_into_url({src, link}, opts)
     do
-      link_handler.(element, Keyword.merge(opts, [html_tag: tag]))
+      link_handler.(element, Map.merge(opts, %{html_tag: tag}))
     end
   end
 

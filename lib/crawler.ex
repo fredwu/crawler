@@ -16,6 +16,7 @@ defmodule Crawler do
 
   def crawl(url, opts \\ []) do
     opts
+    |> Enum.into(%{})
     |> Options.assign_defaults
     |> Options.assign_url(url)
     |> QueueHandler.enqueue

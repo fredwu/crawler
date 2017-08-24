@@ -43,7 +43,7 @@ defmodule Crawler.Fetcher do
   end
 
   defp record_referrer_url(opts) do
-    {:ok, Keyword.put(opts, :referrer_url, opts[:url])}
+    {:ok, Map.put(opts, :referrer_url, opts[:url])}
   end
 
   defp snap_page(body, opts) do
