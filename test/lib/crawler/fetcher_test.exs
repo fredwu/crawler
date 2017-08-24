@@ -41,9 +41,9 @@ defmodule Crawler.FetcherTest do
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
-    fetcher = Fetcher.fetch(url: url, depth: 0, html_tag: "a", timeout: 5)
-
     wait fn ->
+      fetcher = Fetcher.fetch(url: url, depth: 0, html_tag: "a", timeout: 5)
+
       assert fetcher == {:error, "Failed to fetch #{url}, reason: timeout"}
       refute Store.find(url).body
     end
