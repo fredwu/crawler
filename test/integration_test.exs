@@ -6,37 +6,20 @@ defmodule IntegrationTest do
     linked_url2 = "#{url}/dir/page2.html"
     linked_url3 = "#{url2}/page3.html"
 
-    Bypass.expect_once bypass, "GET", "/page1.html", fn (conn) ->
-      Plug.Conn.resp(conn, 200, "<html><a href='#{linked_url2}'>2</a> <a href='#{linked_url3}'>3</a></html>")
-    end
+    page1_raw = "<html><a href='#{linked_url2}'>2</a> <a href='#{linked_url3}'>3</a></html>"
+    page2_raw = "<html><a href='#{linked_url3}'>3</a></html>"
+    page3_raw = "<html><a href='dir/page4'>4</a> <a href='/dir/page4'>4</a></html>"
+    page4_raw = "<html><head><link rel='stylesheet' href='../styles.css' /></head><a href='../page5.html'>5</a> <img src='../image.png' /></html>"
+    page5_raw = "<html><a href='/page6'>6</a> <img src='/image2.png' /></html>"
 
-    Bypass.expect_once bypass, "GET", "/dir/page2.html", fn (conn) ->
-      Plug.Conn.resp(conn, 200, "<html><a href='#{linked_url3}'>3</a></html>")
-    end
-
-    Bypass.expect_once bypass2, "GET", "/page3.html", fn (conn) ->
-      Plug.Conn.resp(conn, 200, "<html><a href='dir/page4'>4</a> <a href='/dir/page4'>4</a></html>")
-    end
-
-    Bypass.expect_once bypass2, "GET", "/dir/page4", fn (conn) ->
-      Plug.Conn.resp(conn, 200, "<html><head><link rel='stylesheet' href='../styles.css' /></head><a href='../page5.html'>5</a> <img src='../image.png' /></html>")
-    end
-
-    Bypass.expect_once bypass2, "GET", "/page5.html", fn (conn) ->
-      Plug.Conn.resp(conn, 200, "<html><a href='/page6'>6</a> <img src='/image2.png' /></html>")
-    end
-
-    Bypass.expect_once bypass2, "GET", "/image.png", fn (conn) ->
-      Plug.Conn.resp(conn, 200, "png")
-    end
-
-    Bypass.expect_once bypass2, "GET", "/image2.png", fn (conn) ->
-      Plug.Conn.resp(conn, 200, "png")
-    end
-
-    Bypass.expect_once bypass2, "GET", "/styles.css", fn (conn) ->
-      Plug.Conn.resp(conn, 200, "css")
-    end
+    Bypass.expect_once bypass,  "GET", "/page1.html",     &Plug.Conn.resp(&1, 200, page1_raw)
+    Bypass.expect_once bypass,  "GET", "/dir/page2.html", &Plug.Conn.resp(&1, 200, page2_raw)
+    Bypass.expect_once bypass2, "GET", "/page3.html",     &Plug.Conn.resp(&1, 200, page3_raw)
+    Bypass.expect_once bypass2, "GET", "/dir/page4",      &Plug.Conn.resp(&1, 200, page4_raw)
+    Bypass.expect_once bypass2, "GET", "/page5.html",     &Plug.Conn.resp(&1, 200, page5_raw)
+    Bypass.expect_once bypass2, "GET", "/image.png",      &Plug.Conn.resp(&1, 200, "png")
+    Bypass.expect_once bypass2, "GET", "/image2.png",     &Plug.Conn.resp(&1, 200, "png")
+    Bypass.expect_once bypass2, "GET", "/styles.css",     &Plug.Conn.resp(&1, 200, "css")
 
     Crawler.crawl(linked_url1, save_to: tmp("integration"), max_depths: 4, assets: ["css", "images"])
 
