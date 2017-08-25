@@ -14,7 +14,7 @@ defmodule Crawler.Parser.LinkParser.LinkExpander do
       iex> LinkExpander.expand({"href", "page"}, %{referrer_url: "http://hello.world"})
       {"link", "page", "href", "http://hello.world/page"}
   """
-  def expand(element = {_src, link}, opts) do
+  def expand({_src, link} = element, opts) do
     link
     |> is_url?
     |> transform_link(element, opts)
