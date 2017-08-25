@@ -10,7 +10,7 @@ A high performance web crawler in Elixir, with worker pooling and rate limiting 
 
 ## Features
 
-Crawler is under active development, below is a non-comprehensive list of features to be implemented.
+Crawler is under active development, below is a non-comprehensive list of features (to be) implemented.
 
 - [x] Set the maximum crawl depth.
 - [x] Save to disk.
