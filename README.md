@@ -8,6 +8,25 @@
 
 A high performance web crawler in Elixir, with worker pooling and rate limiting via [OPQ](https://github.com/fredwu/opq).
 
+## Features
+
+Crawler is under active development, below is a non-comprehensive list of features to be implemented.
+
+- [x] Set the maximum crawl depth.
+- [x] Save to disk.
+- [x] Set timeouts.
+- [x] Crawl assets.
+  - [x] js
+  - [x] css
+  - [x] images
+- [ ] The ability to manually stop/pause/restart the crawler.
+- [ ] Restrict crawlable domains, paths or file types.
+- [x] Limit concurrent crawlers.
+- [x] Limit rate of crawling.
+- [x] Set crawler's user agent.
+- [ ] The ability to retry a failed crawl.
+- [ ] DSL for scraping page content.
+
 ## Usage
 
 ```elixir
@@ -36,25 +55,6 @@ defmodule CustomParser do
   @behaviour Crawler.Parser.Spec
 end
 ```
-
-## Features Backlog
-
-Crawler is under active development, below is a non-comprehensive list of features to be implemented.
-
-- [x] Set the maximum crawl depth.
-- [x] Save to disk.
-- [x] Set timeouts.
-- [x] Crawl assets.
-  - [x] js
-  - [x] css
-  - [x] images
-- [ ] The ability to manually stop/pause/restart the crawler.
-- [ ] Restrict crawlable domains, paths or file types.
-- [x] Limit concurrent crawlers.
-- [x] Limit rate of crawling.
-- [x] Set crawler's user agent.
-- [ ] The ability to retry a failed crawl.
-- [ ] DSL for scraping page content.
 
 ## Changelog
 
