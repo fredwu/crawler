@@ -37,12 +37,12 @@ defmodule Crawler.FetcherTest do
     url = "#{url}/fetcher/timeout"
 
     Bypass.expect_once bypass, "GET", "/fetcher/timeout", fn (conn) ->
-      :timer.sleep(10)
+      :timer.sleep(3)
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
     wait fn ->
-      fetcher = Fetcher.fetch(url: url, depth: 0, html_tag: "a", timeout: 5)
+      fetcher = Fetcher.fetch(url: url, depth: 0, html_tag: "a", timeout: 1)
 
       assert fetcher == {:error, "Failed to fetch #{url}, reason: timeout"}
       refute Store.find(url).body
