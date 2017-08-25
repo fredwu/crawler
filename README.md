@@ -27,6 +27,16 @@ Crawler.crawl("http://elixir-lang.org", max_depths: 2)
 | `:assets`       | list    | `[]`                  | Whether to fetch any asset files, available options: `"css"`, `"js"`, `"images"`.
 | `:parser`       | module  | `Crawler.Parser`      | The default parser, useful when you need to handle parsing differently or to add extra functionalities.
 
+## Custom Parser
+
+It is possible to swap in your custom parsing logic by specifying the `:parser` option. Your custom parser needs to conform to the `Crawler.Parser.Spec` behaviour:
+
+```elixir
+defmodule CustomParser do
+  @behaviour Crawler.Parser.Spec
+end
+```
+
 ## Features Backlog
 
 Crawler is under active development, below is a non-comprehensive list of features to be implemented.

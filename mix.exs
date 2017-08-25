@@ -13,7 +13,8 @@ defmodule Crawler.Mixfile do
       deps:              deps(),
       test_coverage:     [tool: ExCoveralls],
       preferred_cli_env: [coveralls: :test],
-      aliases:           ["publish": ["hex.publish", &git_tag/1]],
+      aliases:           [publish: ["hex.publish", &git_tag/1]],
+      dialyzer:          [plt_add_apps: [:crawler]],
     ]
   end
 
@@ -30,6 +31,7 @@ defmodule Crawler.Mixfile do
       {:floki,       "~> 0.18"},
       {:opq,         "~> 1.0"},
       {:ex_doc,      ">= 0.0.0", only: :dev},
+      {:dialyxir,    "~> 0.5",   only: [:dev, :test], runtime: false},
       {:bypass,      "~> 0.8",   only: :test},
       {:excoveralls, "~> 0.7",   only: :test},
     ]

@@ -5,8 +5,11 @@ defmodule Crawler.Parser do
 
   require Logger
 
-  alias Crawler.Parser.{CssParser, HtmlParser, LinkParser}
+  alias __MODULE__.Spec
+  alias __MODULE__.{CssParser, HtmlParser, LinkParser}
   alias Crawler.{Worker, Dispatcher}
+
+  @behaviour Spec
 
   @doc """
   ## Examples
