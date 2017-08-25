@@ -10,7 +10,7 @@
 - [New] `:user_agent` option
 - [New] `:save_to` option
 - [New] `:parser` option to allow custom parsing logic
-- [New] Crawl assets (js, css and images)
+- [New] `:assets` option
 - [Change] Renamed `:max_levels` to `:max_depths`
 - [Change] A bunch of fixes and improvements
 
