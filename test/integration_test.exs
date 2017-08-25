@@ -43,6 +43,7 @@ defmodule IntegrationTest do
       assert {:ok, "png"} == File.read(tmp("integration/#{path2}", "image2.png"))
       assert {:ok, "png"} == File.read(tmp("integration/#{path2}", "image3.png"))
       assert {:ok, css}   == File.read(tmp("integration/#{path2}", "styles.css"))
+      assert {:ok, "js"}  == File.read(tmp("integration/#{path2}", "javascript.js"))
     end
   end
 end
