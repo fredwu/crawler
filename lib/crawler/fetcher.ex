@@ -3,7 +3,7 @@ defmodule Crawler.Fetcher do
   Fetches pages and perform tasks on them.
   """
 
-  alias Crawler.Fetcher.{Policer, Recorder, Requester}
+  alias __MODULE__.{Policer, Recorder, Requester}
   alias Crawler.{Snapper, Store.Page}
 
   def fetch(opts) do

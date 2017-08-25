@@ -1,5 +1,9 @@
 defmodule Crawler.Linker do
-  alias Crawler.Linker.{PathPrefixer, PathBuilder, PathFinder, PathOffliner}
+  @moduledoc """
+  A set of high level functions for making online and offline URLs and links.
+  """
+
+  alias __MODULE__.{PathPrefixer, PathBuilder, PathFinder, PathOffliner}
 
   @doc """
   ## Examples

@@ -3,7 +3,7 @@ defmodule Crawler.Snapper do
   Stores crawled pages offline.
   """
 
-  alias Crawler.Snapper.{LinkReplacer, DirMaker}
+  alias __MODULE__.{LinkReplacer, DirMaker}
   alias Crawler.Worker
 
   @doc """
