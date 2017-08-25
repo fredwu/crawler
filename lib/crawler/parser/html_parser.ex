@@ -3,7 +3,7 @@ defmodule Crawler.Parser.HtmlParser do
   Parses HTML files.
   """
 
-  @asset_tags %{
+  @tag_selectors %{
     "pages"  => "a",
     "js"     => "script[type='text/javascript']",
     "css"    => "link[rel='stylesheet']",
@@ -20,11 +20,11 @@ defmodule Crawler.Parser.HtmlParser do
       [{"a", [{"href", "http://hello.world"}], ["Link"]}]
   """
   def parse(body, opts) do
-    Floki.find(body, tags(opts))
+    Floki.find(body, selectors(opts))
   end
 
-  defp tags(opts) do
-    @asset_tags
+  defp selectors(opts) do
+    @tag_selectors
     |> Map.take(["pages"] ++ (opts[:assets] || []))
     |> Map.values
     |> Enum.join(", ")
