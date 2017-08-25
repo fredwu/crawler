@@ -34,8 +34,8 @@ Crawler is under active development, below is a non-comprehensive list of featur
 - [x] Set the maximum crawl depth.
 - [x] Save to disk.
 - [x] Set timeouts.
-- [ ] Crawl assets.
-  - [ ] js
+- [x] Crawl assets.
+  - [x] js
   - [x] css
   - [x] images
 - [ ] The ability to manually stop/pause/restart the crawler.

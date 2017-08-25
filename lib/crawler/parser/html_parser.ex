@@ -5,6 +5,7 @@ defmodule Crawler.Parser.HtmlParser do
 
   @asset_tags %{
     "pages"  => "a",
+    "js"     => "script[type='text/javascript']",
     "css"    => "link[rel='stylesheet']",
     "images" => "img",
   }

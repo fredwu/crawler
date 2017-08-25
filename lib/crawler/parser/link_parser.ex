@@ -6,9 +6,10 @@ defmodule Crawler.Parser.LinkParser do
   alias Crawler.Parser.LinkParser.{LinkExpander, FileTypeDetector}
 
   @tag_attr %{
-    "a"    => "href",
-    "link" => "href",
-    "img"  => "src",
+    "a"      => "href",
+    "link"   => "href",
+    "script" => "src",
+    "img"    => "src",
   }
 
   @doc """
