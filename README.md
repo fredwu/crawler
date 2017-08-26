@@ -47,7 +47,7 @@ Crawler.crawl("http://elixir-lang.org", max_depths: 2)
 | `:url_filter`   | module  | `Crawler.Fetcher.UrlFilter` | Custom URL filter, useful when you need to restrict crawlable domains, paths or file types.
 | `:parser`       | module  | `Crawler.Parser`            | Custom parser, useful when you need to handle parsing differently or to add extra functionalities.
 
-## Custom URL Filter
+## Custom URL Filter and Parser
 
 It is possible to swap in your custom url filtering or parsing logic as shown in the configurations section. Your custom modules need to conform to their respective behaviours:
 
