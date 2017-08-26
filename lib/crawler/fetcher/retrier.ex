@@ -1,6 +1,6 @@
 defmodule Crawler.Fetcher.Retrier do
   @moduledoc """
-  Handles retrying a failed crawl.
+  Handles retries for failed crawls.
   """
 
   defmodule Spec do
