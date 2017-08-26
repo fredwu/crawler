@@ -4,7 +4,6 @@ defmodule Crawler.Snapper do
   """
 
   alias __MODULE__.{LinkReplacer, DirMaker}
-  alias Crawler.Worker
 
   @doc """
   ## Examples
