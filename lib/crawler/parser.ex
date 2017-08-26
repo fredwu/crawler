@@ -13,37 +13,39 @@ defmodule Crawler.Parser do
   @doc """
   ## Examples
 
-      iex> Parser.parse(%{page: %Page{body: "Body"}, opts: []})
+      iex> Parser.parse(%{page: %Page{
+      iex>   body: "Body"
+      iex> }, opts: %{html_tag: "a"}})
       %Page{body: "Body"}
 
       iex> Parser.parse(%{page: %Page{
       iex>   body: "<a href='http://parser/1'>Link</a>"
-      iex> }, opts: []})
+      iex> }, opts: %{html_tag: "a"}})
       %Page{body: "<a href='http://parser/1'>Link</a>"}
 
       iex> Parser.parse(%{page: %Page{
       iex>   body: "<a name='hello'>Link</a>"
-      iex> }, opts: []})
+      iex> }, opts: %{html_tag: "a"}})
       %Page{body: "<a name='hello'>Link</a>"}
 
       iex> Parser.parse(%{page: %Page{
       iex>   body: "<a href='http://parser/2' target='_blank'>Link</a>"
-      iex> }, opts: []})
+      iex> }, opts: %{html_tag: "a"}})
       %Page{body: "<a href='http://parser/2' target='_blank'>Link</a>"}
 
       iex> Parser.parse(%{page: %Page{
       iex>   body: "<a href='parser/2'>Link</a>"
-      iex> }, opts: [referrer_url: "http://hello/"]})
+      iex> }, opts: %{html_tag: "a", referrer_url: "http://hello"}})
       %Page{body: "<a href='parser/2'>Link</a>"}
 
       iex> Parser.parse(%{page: %Page{
       iex>   body: "<a href='../parser/2'>Link</a>"
-      iex> }, opts: [referrer_url: "http://hello/"]})
+      iex> }, opts: %{html_tag: "a", referrer_url: "http://hello"}})
       %Page{body: "<a href='../parser/2'>Link</a>"}
 
       iex> Parser.parse(%{page: %Page{
       iex>   body: image_file()
-      iex> }, opts: [referrer_url: "http://hello/"]})
+      iex> }, opts: %{html_tag: "img"}})
       %Page{body: "\#{image_file()}"}
   """
   def parse(page, link_handler \\ &Dispatcher.dispatch(&1, &2))
