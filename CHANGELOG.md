@@ -2,6 +2,8 @@
 
 ## master
 
+## v0.3.0 [2017-08-27]
+
 - [Added] `:retrier` option to allow custom fetch retrying logic
 - [Added] `:url_filter` option to allow custom url filtering logic
 - [Improved] Parser is now more stable and skips unparsable files
