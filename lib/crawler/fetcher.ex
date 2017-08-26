@@ -10,7 +10,7 @@ defmodule Crawler.Fetcher do
     with {:ok, opts} <- Policer.police(opts),
          {:ok, opts} <- Recorder.record(opts)
     do
-      fetch_url(opts)
+      opts[:retrier].perform(fn -> fetch_url(opts) end, opts)
     end
   end
 

@@ -1,9 +1,17 @@
 defmodule Crawler.FetcherTest do
   use Crawler.TestCase, async: true
 
-  alias Crawler.{Fetcher, Fetcher.UrlFilter, Store}
+  alias Crawler.{Fetcher, Fetcher.UrlFilter, Fetcher.Retrier, Store}
 
   doctest Fetcher
+
+  defmodule DummyRetrier do
+    @behaviour Retrier.Spec
+
+    def perform(fetch_url, _opts), do: fetch_url.()
+  end
+
+  @defaults [depth: 0, url_filter: UrlFilter, retrier: DummyRetrier, html_tag: "a"]
 
   test "success", %{bypass: bypass, url: url} do
     url = "#{url}/fetcher/200"
@@ -12,7 +20,9 @@ defmodule Crawler.FetcherTest do
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
-    Fetcher.fetch(url: url, depth: 0, url_filter: UrlFilter, html_tag: "a")
+    @defaults
+    |> Keyword.merge([url: url])
+    |> Fetcher.fetch
 
     page = Store.find(url)
 
@@ -27,7 +37,9 @@ defmodule Crawler.FetcherTest do
       Plug.Conn.resp(conn, 500, "<html>500</html>")
     end
 
-    fetcher = Fetcher.fetch(url: url, depth: 0, url_filter: UrlFilter, html_tag: "a")
+    fetcher = @defaults
+    |> Keyword.merge([url: url])
+    |> Fetcher.fetch
 
     assert fetcher == {:error, "Failed to fetch #{url}, status code: 500"}
     refute Store.find(url).body
@@ -37,14 +49,33 @@ defmodule Crawler.FetcherTest do
     url = "#{url}/fetcher/timeout"
 
     Bypass.expect_once bypass, "GET", "/fetcher/timeout", fn (conn) ->
-      :timer.sleep(5)
+      :timer.sleep(10)
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
     wait fn ->
-      fetcher = Fetcher.fetch(url: url, depth: 0, url_filter: UrlFilter, html_tag: "a", timeout: 2)
+      fetcher = @defaults
+      |> Keyword.merge([url: url, timeout: 5])
+      |> Fetcher.fetch
 
       assert fetcher == {:error, "Failed to fetch #{url}, reason: timeout"}
+      refute Store.find(url).body
+    end
+  end
+
+  test "failure: retries", %{bypass: bypass, url: url} do
+    url = "#{url}/fetcher/retries"
+
+    Bypass.expect bypass, "GET", "/fetcher/retries", fn (conn) ->
+      Plug.Conn.resp(conn, 500, "<html>500</html>")
+    end
+
+    wait fn ->
+      fetcher = @defaults
+      |> Keyword.merge([url: url, timeout: 100, retrier: Retrier])
+      |> Fetcher.fetch
+
+      assert fetcher == {:error, "Failed to fetch #{url}, status code: 500"}
       refute Store.find(url).body
     end
   end
@@ -56,7 +87,9 @@ defmodule Crawler.FetcherTest do
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
-    fetcher = Fetcher.fetch(url: url, depth: 0, url_filter: UrlFilter, html_tag: "a", save_to: "nope")
+    fetcher = @defaults
+    |> Keyword.merge([url: url, save_to: "nope"])
+    |> Fetcher.fetch
 
     assert {:error, "Cannot write to file nope/#{path}/fetcher/fail.html, reason: enoent"} == fetcher
   end
@@ -68,7 +101,9 @@ defmodule Crawler.FetcherTest do
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end
 
-    Fetcher.fetch(url: url, depth: 0, url_filter: UrlFilter, html_tag: "a", save_to: tmp("fetcher"))
+    @defaults
+    |> Keyword.merge([url: url, save_to: tmp("fetcher")])
+    |> Fetcher.fetch
 
     wait fn ->
       assert {:ok, "<html>200</html>"} == File.read(tmp("fetcher/#{path}/fetcher", "page.html"))

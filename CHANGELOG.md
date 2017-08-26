@@ -2,6 +2,7 @@
 
 ## master
 
+- [Added] `:retrier` option to allow custom fetch retrying logic
 - [Added] `:url_filter` option to allow custom url filtering logic
 - [Improved] Varies small fixes and improvements
 

@@ -24,7 +24,7 @@ Crawler is under active development, below is a non-comprehensive list of featur
 - [x] Limit concurrent crawlers.
 - [x] Limit rate of crawling.
 - [x] Set crawler's user agent.
-- [ ] The ability to retry a failed crawl.
+- [x] The ability to retry a failed crawl.
 - [ ] DSL for scraping page content.
 
 ## Usage
@@ -44,18 +44,41 @@ Crawler.crawl("http://elixir-lang.org", max_depths: 2)
 | `:user_agent`   | string  | `Crawler/x.x.x (...)`       | User-Agent value sent by the fetch requests.
 | `:save_to`      | string  | `nil`                       | When provided, the path for saving crawled pages.
 | `:assets`       | list    | `[]`                        | Whether to fetch any asset files, available options: `"css"`, `"js"`, `"images"`.
+| `:retrier`      | module  | `Crawler.Fetcher.Retrier`   | Custom fetch retrier, useful when you need to retry failed crawls.
 | `:url_filter`   | module  | `Crawler.Fetcher.UrlFilter` | Custom URL filter, useful when you need to restrict crawlable domains, paths or file types.
 | `:parser`       | module  | `Crawler.Parser`            | Custom parser, useful when you need to handle parsing differently or to add extra functionalities.
 
-## Custom URL Filter and Parser
+## Custom Modules
 
-It is possible to swap in your custom url filtering or parsing logic as shown in the configurations section. Your custom modules need to conform to their respective behaviours:
+It is possible to swap in your custom logic as shown in the configurations section. Your custom modules need to conform to their respective behaviours:
+
+### Retrier
+
+See [`Crawler.Fetcher.Retrier`](lib/crawler/fetcher/retrier.ex).
+
+Crawler uses [ElixirRetry](https://github.com/safwank/ElixirRetry)'s exponential backoff strategy by default.
+
+```elixir
+defmodule CustomRetrier do
+  @behaviour Crawler.Fetcher.Retrier.Spec
+end
+```
+
+### URL Filter
+
+See [`Crawler.Fetcher.UrlFilter`](lib/crawler/fetcher/url_filter.ex).
 
 ```elixir
 defmodule CustomUrlFilter do
   @behaviour Crawler.Fetcher.UrlFilter.Spec
 end
+```
 
+### Parser
+
+See [`Crawler.Parser`](lib/crawler/parser.ex).
+
+```elixir
 defmodule CustomParser do
   @behaviour Crawler.Parser.Spec
 end
