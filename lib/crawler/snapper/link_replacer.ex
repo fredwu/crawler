@@ -53,6 +53,7 @@ defmodule Crawler.Snapper.LinkReplacer do
     new_body = body
     |> Parser.parse_links(opts, &get_link/2)
     |> List.flatten
+    |> Enum.reject(& &1 == nil)
     |> Enum.reduce(body, &modify_body(opts[:file_type], &2, opts[:url], &1))
 
     {:ok, new_body}
