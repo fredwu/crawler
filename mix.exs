@@ -14,7 +14,7 @@ defmodule Crawler.Mixfile do
       test_coverage:     [tool: ExCoveralls],
       preferred_cli_env: [coveralls: :test],
       aliases:           [publish: ["hex.publish", &git_tag/1]],
-      dialyzer:          [plt_add_apps: [:crawler]],
+      dialyzer:          [plt_add_apps: [:crawler], flags: [:error_handling, :race_conditions, :underspecs]],
     ]
   end
 

@@ -48,7 +48,7 @@ defmodule Crawler.Parser do
       iex> }, opts: %{html_tag: "img"}})
       %Page{body: "\#{image_file()}"}
   """
-  def parse(page, link_handler \\ &Dispatcher.dispatch(&1, &2))
+  def parse(input, link_handler \\ &Dispatcher.dispatch(&1, &2))
 
   def parse(%{page: page, opts: opts}, link_handler) do
     if Worker.actionable?(opts) do

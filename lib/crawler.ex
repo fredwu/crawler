@@ -10,7 +10,8 @@ defmodule Crawler do
   def version, do: "0.1.0"
 
   def start(_type, _args) do
-    Store.init
+    {:ok, _pid} = Store.init
+
     WorkerSupervisor.start_link
   end
 

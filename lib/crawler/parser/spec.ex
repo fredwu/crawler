@@ -3,8 +3,13 @@ defmodule Crawler.Parser.Spec do
   Spec for defining a parser.
   """
 
-  @type page         :: map
-  @type link_handler :: fun
+  alias Crawler.Store.Page
 
-  @callback parse(page, link_handler) :: page
+  @type element      :: {String.t, String.t} | {String.t, String.t, String.t, String.t}
+  @type opts         :: map
+  @type page         :: %Page{body: String.t}
+  @type input        :: %{page: page, opts: opts} | {:error, term}
+  @type link_handler :: (element, opts -> term)
+
+  @callback parse(input, link_handler) :: page | :ok
 end
