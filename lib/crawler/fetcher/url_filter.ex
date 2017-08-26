@@ -3,6 +3,16 @@ defmodule Crawler.Fetcher.UrlFilter do
   A placeholder module that let all URLs pass through.
   """
 
+  defmodule Spec do
+    @moduledoc """
+    Spec for defining an url filter.
+    """
+
+    @type url :: String.t
+
+    @callback filter(url) :: {:ok, boolean} | {:error, term}
+  end
+
   @behaviour __MODULE__.Spec
 
   @doc """
