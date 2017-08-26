@@ -5,7 +5,7 @@ defmodule Crawler.Parser.HtmlParser do
 
   @tag_selectors %{
     "pages"  => "a",
-    "js"     => "script[type='text/javascript']",
+    "js"     => "script[type='text/javascript'][src]",
     "css"    => "link[rel='stylesheet']",
     "images" => "img",
   }
@@ -18,6 +18,12 @@ defmodule Crawler.Parser.HtmlParser do
       iex>   %{}
       iex> )
       [{"a", [{"href", "http://hello.world"}], ["Link"]}]
+
+      iex> HtmlParser.parse(
+      iex>   "<script type='text/javascript'>js</script>",
+      iex>   %{assets: ["js"]}
+      iex> )
+      []
   """
   def parse(body, opts) do
     Floki.find(body, selectors(opts))
