@@ -17,9 +17,14 @@ defmodule Crawler.Parser.CssParser do
       iex>   "@font-face { src: url('icons.ttf') format('truetype'); }"
       iex> )
       [{"link", [{"href", "icons.ttf"}], []}]
+
+      iex> CssParser.parse(
+      iex>   "@font-face { src: url('data:applicatin/blah'); }"
+      iex> )
+      []
   """
   def parse(body) do
-    ~r{url\(['"]?([^#{@url_unsafe_chars}]+)['"]?\)}
+    ~r{url\(['"]?((?!data:)[^#{@url_unsafe_chars}]+)['"]?\)}
     |> Regex.scan(body, capture: :all_but_first)
     |> Enum.map(&prep_css_element/1)
   end
