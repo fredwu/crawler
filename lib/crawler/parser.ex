@@ -5,8 +5,8 @@ defmodule Crawler.Parser do
 
   require Logger
 
-  alias __MODULE__.{CssParser, HtmlParser, LinkParser}
-  alias Crawler.{Worker, Dispatcher}
+  alias __MODULE__.{Guarder, CssParser, HtmlParser, LinkParser}
+  alias Crawler.Dispatcher
 
   defmodule Spec do
     @moduledoc """
@@ -67,17 +67,18 @@ defmodule Crawler.Parser do
   """
   def parse(input, link_handler \\ &Dispatcher.dispatch(&1, &2))
 
+  def parse({:error, reason}, _), do: Logger.debug(reason)
   def parse(%{page: page, opts: opts}, link_handler) do
-    if Worker.actionable?(opts) do
-      parse_links(page.body, opts, link_handler)
-    end
-
+    parse_links(page.body, opts, link_handler)
     page
   end
 
-  def parse({:error, reason}, _), do: Logger.debug(reason)
-
   def parse_links(body, opts, link_handler) do
+    do_parse_links(Guarder.pass?(body, opts), body, opts, link_handler)
+  end
+
+  defp do_parse_links(false, _body, _opts, _link_handler), do: []
+  defp do_parse_links(true, body, opts, link_handler) do
     Enum.map(
       parse_file(body, opts),
       &LinkParser.parse(&1, opts, link_handler)

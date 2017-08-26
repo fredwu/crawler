@@ -55,20 +55,12 @@ defmodule Crawler.Snapper do
       {:ok, "<a href='../../../another.domain-8888/page/index.html'></a>"}
   """
   def snap(body, opts) do
-    {:ok, body} = update_links(body, opts)
+    {:ok, body} = LinkReplacer.replace_links(body, opts)
     file_path   = DirMaker.make_dir(opts)
 
     case File.write(file_path, body) do
       :ok              -> {:ok, opts}
       {:error, reason} -> {:error, "Cannot write to file #{file_path}, reason: #{reason}"}
-    end
-  end
-
-  defp update_links(body, opts) do
-    if Worker.actionable?(opts) do
-      LinkReplacer.replace_links(body, opts)
-    else
-      {:ok, body}
     end
   end
 end

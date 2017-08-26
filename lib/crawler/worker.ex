@@ -24,10 +24,6 @@ defmodule Crawler.Worker do
     GenServer.cast(pid, term)
   end
 
-  def actionable?(opts) do
-    Enum.member?(["a", "link"], opts[:html_tag])
-  end
-
   defp mark_processed(%Page{url: url}), do: Store.processed(url)
   defp mark_processed(_),               do: nil
 end

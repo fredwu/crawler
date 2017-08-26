@@ -16,8 +16,8 @@ defmodule Crawler.Fetcher do
 
   defp fetch_url(opts) do
     case Requester.make(opts) do
-      {:ok, %HTTPoison.Response{status_code: 200, body: body}} ->
-        fetch_url_200(body, opts)
+      {:ok, %HTTPoison.Response{status_code: 200, body: body, headers: headers}} ->
+        fetch_url_200(body, headers, opts)
       {:ok, %HTTPoison.Response{status_code: status_code}} ->
         fetch_url_non_200(status_code, opts)
       {:error, %HTTPoison.Error{reason: reason}} ->
@@ -25,11 +25,12 @@ defmodule Crawler.Fetcher do
     end
   end
 
-  defp fetch_url_200(body, opts) do
+  defp fetch_url_200(body, headers, opts) do
     with {:ok, _}    <- Recorder.store_page(opts[:url], body),
          {:ok, opts} <- record_referrer_url(opts),
          {:ok, _}    <- snap_page(body, opts)
     do
+      opts = Map.put(opts, :headers, headers)
       return_page(body, opts)
     end
   end

@@ -14,6 +14,7 @@ defmodule Crawler.Snapper.LinkReplacer do
       iex>     url: "http://main.domain/dir/page",
       iex>     depth: 1,
       iex>     max_depths: 2,
+      iex>     html_tag: "a",
       iex>   }
       iex> )
       {:ok, "<a href='../../../another.domain/page.html'></a>"}
@@ -24,6 +25,7 @@ defmodule Crawler.Snapper.LinkReplacer do
       iex>     url: "http://main.domain/page",
       iex>     depth: 1,
       iex>     max_depths: 2,
+      iex>     html_tag: "a",
       iex>   }
       iex> )
       {:ok, "<a href='../../another.domain/dir/page.html'></a>"}
@@ -34,6 +36,7 @@ defmodule Crawler.Snapper.LinkReplacer do
       iex>     url: "http://main.domain/dir/page",
       iex>     depth: 1,
       iex>     max_depths: 2,
+      iex>     html_tag: "a",
       iex>   }
       iex> )
       {:ok, "<a href='../../../another.domain/dir/page/index.html'></a>"}
@@ -45,6 +48,7 @@ defmodule Crawler.Snapper.LinkReplacer do
       iex>     referrer_url: "http://main.domain/dir/page",
       iex>     depth: 1,
       iex>     max_depths: 2,
+      iex>     html_tag: "a",
       iex>   }
       iex> )
       {:ok, "<a href='../../../main.domain/dir/page2.html'></a>"}

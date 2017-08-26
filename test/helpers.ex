@@ -19,4 +19,9 @@ defmodule Helpers do
 
     Path.join(tmp_path, filename)
   end
+
+  def image_file do
+    {:ok, file} = File.read("test/fixtures/introducing-elixir.jpg")
+    file
+  end
 end
