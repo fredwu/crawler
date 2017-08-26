@@ -30,8 +30,9 @@ defmodule Crawler.Fetcher do
          {:ok, opts} <- record_referrer_url(opts),
          {:ok, _}    <- snap_page(body, opts)
     do
-      opts = Map.put(opts, :headers, headers)
-      return_page(body, opts)
+      return_page(
+        body, Map.put(opts, :headers, headers)
+      )
     end
   end
 
