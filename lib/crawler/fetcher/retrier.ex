@@ -8,7 +8,10 @@ defmodule Crawler.Fetcher.Retrier do
     Spec for defining a fetch retrier.
     """
 
-    @callback perform(fetch_url :: fun, opts :: map) :: term
+    @type fetch_url :: fun
+    @type opts      :: map
+
+    @callback perform(fetch_url, opts) :: term
   end
 
   @behaviour __MODULE__.Spec

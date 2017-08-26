@@ -8,9 +8,10 @@ defmodule Crawler.Fetcher.UrlFilter do
     Spec for defining an url filter.
     """
 
-    @type url :: String.t
+    @type url  :: String.t
+    @type opts :: map
 
-    @callback filter(url) :: {:ok, boolean} | {:error, term}
+    @callback filter(url, opts) :: {:ok, boolean} | {:error, term}
   end
 
   @behaviour __MODULE__.Spec
@@ -20,5 +21,5 @@ defmodule Crawler.Fetcher.UrlFilter do
     - `true` for letting the url through.
     - `false` for rejecting the url.
   """
-  def filter(_url), do: {:ok, true}
+  def filter(_url, _opts), do: {:ok, true}
 end

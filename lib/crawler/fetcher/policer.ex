@@ -85,7 +85,7 @@ defmodule Crawler.Fetcher.Policer do
   end
 
   defp perform_url_filtering(opts) do
-    {:ok, pass_through?} = opts[:url_filter].filter(opts[:url])
+    {:ok, pass_through?} = opts[:url_filter].filter(opts[:url], opts)
 
     {:perform_url_filtering, pass_through?}
   end
