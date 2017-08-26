@@ -20,7 +20,7 @@ Crawler is under active development, below is a non-comprehensive list of featur
   - [x] css
   - [x] images
 - [ ] The ability to manually stop/pause/restart the crawler.
-- [ ] Restrict crawlable domains, paths or file types.
+- [x] Restrict crawlable domains, paths or file types.
 - [x] Limit concurrent crawlers.
 - [x] Limit rate of crawling.
 - [x] Set crawler's user agent.
@@ -35,22 +35,27 @@ Crawler.crawl("http://elixir-lang.org", max_depths: 2)
 
 ## Configurations
 
-| Option          | Type    | Default Value         | Description |
-|-----------------|---------|-----------------------|-------------|
-| `:max_depths`   | integer | `3`                   | Maximum nested depth of pages to crawl.
-| `:workers`      | integer | `10`                  | Maximum number of concurrent workers for crawling.
-| `:interval`     | integer | `0`                   | Rate limit control - number of milliseconds before crawling more pages, defaults to `0` which is effectively no rate limit.
-| `:timeout`      | integer | `5000`                | Timeout value for fetching a page, in ms.
-| `:user_agent`   | string  | `Crawler/x.x.x (...)` | User-Agent value sent by the fetch requests.
-| `:save_to`      | string  | `nil`                 | When provided, the path for saving crawled pages.
-| `:assets`       | list    | `[]`                  | Whether to fetch any asset files, available options: `"css"`, `"js"`, `"images"`.
-| `:parser`       | module  | `Crawler.Parser`      | The default parser, useful when you need to handle parsing differently or to add extra functionalities.
+| Option          | Type    | Default Value               | Description |
+|-----------------|---------|-----------------------------|-------------|
+| `:max_depths`   | integer | `3`                         | Maximum nested depth of pages to crawl.
+| `:workers`      | integer | `10`                        | Maximum number of concurrent workers for crawling.
+| `:interval`     | integer | `0`                         | Rate limit control - number of milliseconds before crawling more pages, defaults to `0` which is effectively no rate limit.
+| `:timeout`      | integer | `5000`                      | Timeout value for fetching a page, in ms.
+| `:user_agent`   | string  | `Crawler/x.x.x (...)`       | User-Agent value sent by the fetch requests.
+| `:save_to`      | string  | `nil`                       | When provided, the path for saving crawled pages.
+| `:assets`       | list    | `[]`                        | Whether to fetch any asset files, available options: `"css"`, `"js"`, `"images"`.
+| `:url_filter`   | module  | `Crawler.Fetcher.UrlFilter` | Custom URL filter, useful when you need to restrict crawlable domains, paths or file types.
+| `:parser`       | module  | `Crawler.Parser`            | Custom parser, useful when you need to handle parsing differently or to add extra functionalities.
 
-## Custom Parser
+## Custom URL Filter
 
-It is possible to swap in your custom parsing logic by specifying the `:parser` option. Your custom parser needs to conform to the `Crawler.Parser.Spec` behaviour:
+It is possible to swap in your custom url filtering or parsing logic as shown in the configurations section. Your custom modules need to conform to their respective behaviours:
 
 ```elixir
+defmodule CustomUrlFilter do
+  @behaviour Crawler.Fetcher.UrlFilter.Spec
+end
+
 defmodule CustomParser do
   @behaviour Crawler.Parser.Spec
 end

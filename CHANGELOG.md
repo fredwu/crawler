@@ -11,8 +11,9 @@
 - [Added] `:timeout` option
 - [Added] `:user_agent` option
 - [Added] `:save_to` option
-- [Added] `:parser` option to allow custom parsing logic
 - [Added] `:assets` option
+- [Added] `:url_filter` option to allow custom url filtering logic
+- [Added] `:parser` option to allow custom parsing logic
 - [Improved] Renamed `:max_levels` to `:max_depths`
 - [Improved] Varies small fixes and improvements
 

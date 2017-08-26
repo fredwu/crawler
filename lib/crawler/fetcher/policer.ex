@@ -12,26 +12,50 @@ defmodule Crawler.Fetcher.Policer do
   @doc """
   ## Examples
 
-      iex> Policer.police([depth: 1, max_depths: 2, url: "http://policer/"])
-      {:ok, [depth: 1, max_depths: 2, url: "http://policer/"]}
+      iex> Policer.police([
+      iex>   depth: 1,
+      iex>   max_depths: 2,
+      iex>   url: "http://policer/",
+      iex>   url_filter: UrlFilter
+      iex> ])
+      {:ok, [depth: 1, max_depths: 2, url: "http://policer/", url_filter: UrlFilter]}
 
-      iex> Policer.police([depth: 2, max_depths: 2, html_tag: "a"])
+      iex> Policer.police([
+      iex>   depth: 2,
+      iex>   max_depths: 2,
+      iex>   html_tag: "a"
+      iex> ])
       {:error, "Fetch failed 'within_fetch_depth?', with opts: [depth: 2, max_depths: 2, html_tag: \\\"a\\\"]."}
 
-      iex> Policer.police([depth: 3, max_depths: 2, html_tag: "img", url: "http://policer/hi.jpg"])
-      {:ok, [depth: 3, max_depths: 2, html_tag: "img", url: "http://policer/hi.jpg"]}
+      iex> Policer.police([
+      iex>   depth: 3,
+      iex>   max_depths: 2,
+      iex>   html_tag: "img",
+      iex>   url: "http://policer/hi.jpg",
+      iex>   url_filter: UrlFilter
+      iex> ])
+      {:ok, [depth: 3, max_depths: 2, html_tag: "img", url: "http://policer/hi.jpg", url_filter: UrlFilter]}
 
-      iex> Policer.police([depth: 1, max_depths: 2, url: "ftp://hello.world"])
+      iex> Policer.police([
+      iex>   depth: 1,
+      iex>   max_depths: 2,
+      iex>   url: "ftp://hello.world"
+      iex> ])
       {:error, "Fetch failed 'acceptable_uri_scheme?', with opts: [depth: 1, max_depths: 2, url: \\\"ftp://hello.world\\\"]."}
 
       iex> Crawler.Store.add("http://policer/exist/")
-      iex> Policer.police([depth: 1, max_depths: 2, url: "http://policer/exist/"])
+      iex> Policer.police([
+      iex>   depth: 1,
+      iex>   max_depths: 2,
+      iex>   url: "http://policer/exist/"
+      iex> ])
       {:error, "Fetch failed 'not_fetched_yet?', with opts: [depth: 1, max_depths: 2, url: \\\"http://policer/exist/\\\"]."}
   """
   def police(opts) do
     with {_, true} <- within_fetch_depth?(opts),
          {_, true} <- acceptable_uri_scheme?(opts),
-         {_, true} <- not_fetched_yet?(opts)
+         {_, true} <- not_fetched_yet?(opts),
+         {_, true} <- perform_url_filtering(opts)
     do
       {:ok, opts}
     else
@@ -58,6 +82,12 @@ defmodule Crawler.Fetcher.Policer do
 
   defp not_fetched_yet?(opts) do
     {:not_fetched_yet?, !Store.find(opts[:url])}
+  end
+
+  defp perform_url_filtering(opts) do
+    {:ok, pass_through?} = opts[:url_filter].filter(opts[:url])
+
+    {:perform_url_filtering, pass_through?}
   end
 
   defp police_error(fail_type, opts) do
