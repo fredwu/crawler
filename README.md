@@ -31,7 +31,7 @@ Crawler is under active development, below is a non-comprehensive list of featur
 
 Below is a very high level architecture diagram demonstrating how Crawler works.
 
-![](architecture.svg)
+![](http://cdn.rawgit.com/fredwu/crawler/master/architecture.svg)
 
 ## Usage
 
