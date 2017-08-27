@@ -6,6 +6,10 @@ defmodule Crawler.Store do
   alias __MODULE__.DB
 
   defmodule Page do
+    @moduledoc """
+    An internal struct for keeping the url and content of a crawled page.
+    """
+
     defstruct [:url, :body, :processed]
   end
 
