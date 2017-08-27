@@ -1,6 +1,6 @@
-defmodule Crawler.Parser.HeaderParser do
+defmodule Crawler.Fetcher.HeaderPreparer do
   @moduledoc """
-  Captures and parses HTTP response headers.
+  Captures and prepares HTTP response headers.
   """
 
   @default_content_type "text/html"
@@ -8,22 +8,22 @@ defmodule Crawler.Parser.HeaderParser do
   @doc """
   ## Examples
 
-      iex> HeaderParser.parse(
+      iex> HeaderPreparer.prepare(
       iex>   %{}
       iex> )
       %{content_type: "text/html"}
 
-      iex> HeaderParser.parse(
+      iex> HeaderPreparer.prepare(
       iex>   %{headers: [{"Content-Type", "text/css"}]}
       iex> )
       %{headers: [{"Content-Type", "text/css"}], content_type: "text/css"}
 
-      iex> HeaderParser.parse(
+      iex> HeaderPreparer.prepare(
       iex>   %{headers: [{"Content-Type", "image/png; blah"}]}
       iex> )
       %{headers: [{"Content-Type", "image/png; blah"}], content_type: "image/png"}
   """
-  def parse(opts) do
+  def prepare(opts) do
     content_type = opts[:headers]
     |> get_content_type
     |> simplify_content_type

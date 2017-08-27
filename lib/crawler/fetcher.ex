@@ -3,8 +3,8 @@ defmodule Crawler.Fetcher do
   Fetches pages and perform tasks on them.
   """
 
-  alias __MODULE__.{Policer, Recorder, Requester}
-  alias Crawler.{Parser.HeaderParser, Snapper, Store.Page}
+  alias __MODULE__.{Policer, Recorder, Requester, HeaderPreparer}
+  alias Crawler.{Snapper, Store.Page}
 
   def fetch(opts) do
     with {:ok, opts} <- Policer.police(opts),
@@ -26,7 +26,7 @@ defmodule Crawler.Fetcher do
   end
 
   defp fetch_url_200(body, headers, opts) do
-    with opts        <- parse_headers(headers, opts),
+    with opts        <- prepare_headers(headers, opts),
          {:ok, _}    <- Recorder.store_page(opts[:url], body),
          {:ok, opts} <- record_referrer_url(opts),
          {:ok, _}    <- snap_page(body, opts)
@@ -43,10 +43,10 @@ defmodule Crawler.Fetcher do
     {:error, "Failed to fetch #{opts[:url]}, reason: #{reason}"}
   end
 
-  defp parse_headers(headers, opts) do
+  defp prepare_headers(headers, opts) do
     opts
     |> Map.put(:headers, headers)
-    |> HeaderParser.parse
+    |> HeaderPreparer.prepare
   end
 
   defp record_referrer_url(opts) do
