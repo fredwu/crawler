@@ -11,7 +11,7 @@ defmodule Crawler.FetcherTest do
     def perform(fetch_url, _opts), do: fetch_url.()
   end
 
-  @defaults [depth: 0, url_filter: UrlFilter, retrier: DummyRetrier, html_tag: "a"]
+  @defaults %{depth: 0, url_filter: UrlFilter, retrier: DummyRetrier, html_tag: "a"}
 
   test "success", %{bypass: bypass, url: url} do
     url = "#{url}/fetcher/200"
@@ -21,7 +21,7 @@ defmodule Crawler.FetcherTest do
     end
 
     @defaults
-    |> Keyword.merge([url: url])
+    |> Map.merge(%{url: url})
     |> Fetcher.fetch
 
     page = Store.find(url)
@@ -38,7 +38,7 @@ defmodule Crawler.FetcherTest do
     end
 
     fetcher = @defaults
-    |> Keyword.merge([url: url])
+    |> Map.merge(%{url: url})
     |> Fetcher.fetch
 
     assert fetcher == {:error, "Failed to fetch #{url}, status code: 500"}
@@ -55,7 +55,7 @@ defmodule Crawler.FetcherTest do
 
     wait fn ->
       fetcher = @defaults
-      |> Keyword.merge([url: url, timeout: 5])
+      |> Map.merge(%{url: url, timeout: 5})
       |> Fetcher.fetch
 
       assert fetcher == {:error, "Failed to fetch #{url}, reason: timeout"}
@@ -72,7 +72,7 @@ defmodule Crawler.FetcherTest do
 
     wait fn ->
       fetcher = @defaults
-      |> Keyword.merge([url: url, timeout: 100, retrier: Retrier])
+      |> Map.merge(%{url: url, timeout: 100, retrier: Retrier})
       |> Fetcher.fetch
 
       assert fetcher == {:error, "Failed to fetch #{url}, status code: 500"}
@@ -88,7 +88,7 @@ defmodule Crawler.FetcherTest do
     end
 
     fetcher = @defaults
-    |> Keyword.merge([url: url, save_to: "nope"])
+    |> Map.merge(%{url: url, save_to: "nope"})
     |> Fetcher.fetch
 
     assert {:error, "Cannot write to file nope/#{path}/fetcher/fail.html, reason: enoent"} == fetcher
@@ -102,7 +102,7 @@ defmodule Crawler.FetcherTest do
     end
 
     @defaults
-    |> Keyword.merge([url: url, save_to: tmp("fetcher")])
+    |> Map.merge(%{url: url, save_to: tmp("fetcher")})
     |> Fetcher.fetch
 
     wait fn ->
