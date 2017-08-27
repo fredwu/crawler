@@ -26,7 +26,7 @@ defmodule Crawler.Fetcher do
   end
 
   defp fetch_url_200(body, headers, opts) do
-    with opts        <- prepare_headers(headers, opts),
+    with opts        <- HeaderPreparer.prepare(headers, opts),
          {:ok, _}    <- Recorder.store_page(opts[:url], body),
          {:ok, opts} <- record_referrer_url(opts),
          {:ok, _}    <- snap_page(body, opts)
@@ -41,12 +41,6 @@ defmodule Crawler.Fetcher do
 
   defp fetch_url_failed(reason, opts) do
     {:error, "Failed to fetch #{opts[:url]}, reason: #{reason}"}
-  end
-
-  defp prepare_headers(headers, opts) do
-    opts
-    |> Map.put(:headers, headers)
-    |> HeaderPreparer.prepare
   end
 
   defp record_referrer_url(opts) do

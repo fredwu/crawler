@@ -9,26 +9,31 @@ defmodule Crawler.Fetcher.HeaderPreparer do
   ## Examples
 
       iex> HeaderPreparer.prepare(
+      iex>   [{"Content-Type", "text/html"}],
       iex>   %{}
       iex> )
-      %{content_type: "text/html"}
+      %{headers: [{"Content-Type", "text/html"}], content_type: "text/html"}
 
       iex> HeaderPreparer.prepare(
-      iex>   %{headers: [{"Content-Type", "text/css"}]}
+      iex>   [{"Content-Type", "text/css"}],
+      iex>   %{}
       iex> )
       %{headers: [{"Content-Type", "text/css"}], content_type: "text/css"}
 
       iex> HeaderPreparer.prepare(
-      iex>   %{headers: [{"Content-Type", "image/png; blah"}]}
+      iex>   [{"Content-Type", "image/png; blah"}],
+      iex>   %{}
       iex> )
       %{headers: [{"Content-Type", "image/png; blah"}], content_type: "image/png"}
   """
-  def prepare(opts) do
-    content_type = opts[:headers]
+  def prepare(headers, opts) do
+    content_type = headers
     |> get_content_type
     |> simplify_content_type
 
-    Map.put(opts, :content_type, content_type)
+    opts
+    |> Map.put(:headers, headers)
+    |> Map.put(:content_type, content_type)
   end
 
   defp get_content_type(nil), do: @default_content_type
