@@ -90,6 +90,10 @@ defmodule CustomParser do
 end
 ```
 
+## API Reference
+
+Please see https://hexdocs.pm/crawler.
+
 ## Changelog
 
 Please see [CHANGELOG.md](CHANGELOG.md).
