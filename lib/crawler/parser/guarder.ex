@@ -7,33 +7,27 @@ defmodule Crawler.Parser.Guarder do
   ## Examples
 
       iex> Guarder.pass?(
-      iex>   "",
       iex>   %{html_tag: "link"}
       iex> )
       true
 
       iex> Guarder.pass?(
-      iex>   "",
       iex>   %{html_tag: "img"}
       iex> )
       false
 
       iex> Guarder.pass?(
-      iex>   "",
       iex>   %{html_tag: "link", headers: [{"Content-Type", "image/png"}]}
       iex> )
       false
 
       iex> Guarder.pass?(
-      iex>   image_file(),
-      iex>   %{html_tag: "link"}
+      iex>   %{html_tag: "link", headers: [{"content-type", "image/png"}]}
       iex> )
       false
   """
-  def pass?(body, opts) do
-    is_text_link?(opts[:html_tag])
-      && is_text_file?(opts[:headers])
-      && String.valid?(body)
+  def pass?(opts) do
+    is_text_link?(opts[:html_tag]) && is_text_file?(opts[:headers])
   end
 
   defp is_text_link?(html_tag) do
@@ -47,9 +41,11 @@ defmodule Crawler.Parser.Guarder do
   end
 
   defp content_type(headers) do
-    case Enum.find(headers, fn({h, _}) -> h == "Content-Type" end) do
+    case Enum.find(headers, &find_content_type/1) do
       {_, value} -> value
       _          -> "text"
     end
   end
+
+  defp find_content_type({header, _}), do: String.downcase(header) == "content-type"
 end

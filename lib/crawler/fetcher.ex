@@ -26,13 +26,12 @@ defmodule Crawler.Fetcher do
   end
 
   defp fetch_url_200(body, headers, opts) do
-    with {:ok, _}    <- Recorder.store_page(opts[:url], body),
+    with opts        <- Map.put(opts, :headers, headers),
+         {:ok, _}    <- Recorder.store_page(opts[:url], body),
          {:ok, opts} <- record_referrer_url(opts),
          {:ok, _}    <- snap_page(body, opts)
     do
-      return_page(
-        body, Map.put(opts, :headers, headers)
-      )
+      return_page(body, opts)
     end
   end
 

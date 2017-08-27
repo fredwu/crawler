@@ -74,7 +74,7 @@ defmodule Crawler.Parser do
   end
 
   def parse_links(body, opts, link_handler) do
-    do_parse_links(Guarder.pass?(body, opts), body, opts, link_handler)
+    do_parse_links(Guarder.pass?(opts), body, opts, link_handler)
   end
 
   defp do_parse_links(false, _body, _opts, _link_handler), do: []
