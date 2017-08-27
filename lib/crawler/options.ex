@@ -58,14 +58,14 @@ defmodule Crawler.Options do
     Map.merge(opts, %{url: url})
   end
 
-  defp max_depths, do: Application.get_env(:crawler, :max_depths) || @max_depths
-  defp workers,    do: Application.get_env(:crawler, :workers)    || @workers
-  defp interval,   do: Application.get_env(:crawler, :interval)   || @interval
-  defp timeout,    do: Application.get_env(:crawler, :timeout)    || @timeout
-  defp user_agent, do: Application.get_env(:crawler, :user_agent) || @user_agent
-  defp save_to,    do: Application.get_env(:crawler, :save_to)    || @save_to
-  defp assets,     do: Application.get_env(:crawler, :assets)     || @assets
-  defp retrier,    do: Application.get_env(:crawler, :retrier)    || @retrier
-  defp url_filter, do: Application.get_env(:crawler, :url_filter) || @url_filter
-  defp parser,     do: Application.get_env(:crawler, :parser)     || @parser
+  defp max_depths, do: Application.get_env(:crawler, :max_depths, @max_depths)
+  defp workers,    do: Application.get_env(:crawler, :workers,    @workers)
+  defp interval,   do: Application.get_env(:crawler, :interval,   @interval)
+  defp timeout,    do: Application.get_env(:crawler, :timeout,    @timeout)
+  defp user_agent, do: Application.get_env(:crawler, :user_agent, @user_agent)
+  defp save_to,    do: Application.get_env(:crawler, :save_to,    @save_to)
+  defp assets,     do: Application.get_env(:crawler, :assets,     @assets)
+  defp retrier,    do: Application.get_env(:crawler, :retrier,    @retrier)
+  defp url_filter, do: Application.get_env(:crawler, :url_filter, @url_filter)
+  defp parser,     do: Application.get_env(:crawler, :parser,     @parser)
 end
