@@ -27,6 +27,12 @@ Crawler is under active development, below is a non-comprehensive list of featur
 - [x] The ability to retry a failed crawl.
 - [ ] DSL for scraping page content.
 
+## Architecture
+
+Below is a very high level architecture diagram demonstrating how Crawler works.
+
+![](architecture.svg)
+
 ## Usage
 
 ```elixir
