@@ -1,6 +1,6 @@
 defmodule Crawler.Fetcher.UrlFilter do
   @moduledoc """
-  A placeholder module that let all URLs pass through.
+  A placeholder module that lets all URLs pass through.
   """
 
   defmodule Spec do
