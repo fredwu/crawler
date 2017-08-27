@@ -1,6 +1,8 @@
 defmodule IntegrationTest do
   use Crawler.TestCase, async: true
 
+  import Plug.Conn
+
   test "integration", %{bypass: bypass, url: url, path: path, bypass2: bypass2, url2: url2, path2: path2} do
     linked_url1 = "#{url}/page1.html"
     linked_url2 = "#{url}/dir/page2.html"
@@ -13,16 +15,16 @@ defmodule IntegrationTest do
     page5_raw = "<html><a href='/page6'>6</a> <img src='/image2.png' /></html>"
     css_raw   = "img { url(image3.png); }"
 
-    Bypass.expect_once bypass,  "GET", "/page1.html",     &Plug.Conn.resp(&1, 200, page1_raw)
-    Bypass.expect_once bypass,  "GET", "/dir/page2.html", &Plug.Conn.resp(&1, 200, page2_raw)
-    Bypass.expect_once bypass2, "GET", "/page3.html",     &Plug.Conn.resp(&1, 200, page3_raw)
-    Bypass.expect_once bypass2, "GET", "/dir/page4",      &Plug.Conn.resp(&1, 200, page4_raw)
-    Bypass.expect_once bypass2, "GET", "/page5.html",     &Plug.Conn.resp(&1, 200, page5_raw)
-    Bypass.expect_once bypass2, "GET", "/image1.png",     &Plug.Conn.resp(&1, 200, "png")
-    Bypass.expect_once bypass2, "GET", "/image2.png",     &Plug.Conn.resp(&1, 200, "png")
-    Bypass.expect_once bypass2, "GET", "/image3.png",     &Plug.Conn.resp(&1, 200, "png")
-    Bypass.expect_once bypass2, "GET", "/styles.css",     &Plug.Conn.resp(&1, 200, css_raw)
-    Bypass.expect_once bypass2, "GET", "/javascript.js",  &Plug.Conn.resp(&1, 200, "js")
+    Bypass.expect_once bypass,  "GET", "/page1.html",     & &1 |> put_resp_header("content-type", "text/html") |> resp(200, page1_raw)
+    Bypass.expect_once bypass,  "GET", "/dir/page2.html", & &1 |> put_resp_header("content-type", "text/html") |> resp(200, page2_raw)
+    Bypass.expect_once bypass2, "GET", "/page3.html",     & &1 |> put_resp_header("content-type", "text/html") |> resp(200, page3_raw)
+    Bypass.expect_once bypass2, "GET", "/dir/page4",      & &1 |> put_resp_header("content-type", "text/html") |> resp(200, page4_raw)
+    Bypass.expect_once bypass2, "GET", "/page5.html",     & &1 |> put_resp_header("content-type", "text/html") |> resp(200, page5_raw)
+    Bypass.expect_once bypass2, "GET", "/image1.png",     & &1 |> put_resp_header("content-type", "image/png") |> resp(200, "png")
+    Bypass.expect_once bypass2, "GET", "/image2.png",     & &1 |> put_resp_header("content-type", "image/png") |> resp(200, "png")
+    Bypass.expect_once bypass2, "GET", "/image3.png",     & &1 |> put_resp_header("content-type", "image/png") |> resp(200, "png")
+    Bypass.expect_once bypass2, "GET", "/styles.css",     & &1 |> put_resp_header("content-type", "text/css") |> resp(200, css_raw)
+    Bypass.expect_once bypass2, "GET", "/javascript.js",  & &1 |> put_resp_header("content-type", "application/javascript") |> resp(200, "js")
 
     Crawler.crawl(linked_url1, save_to: tmp("integration"), max_depths: 4, assets: ["js", "css", "images"])
 

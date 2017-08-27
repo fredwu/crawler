@@ -15,6 +15,7 @@ defmodule Crawler.Snapper.LinkReplacer do
       iex>     depth: 1,
       iex>     max_depths: 2,
       iex>     html_tag: "a",
+      iex>     content_type: "text/html",
       iex>   }
       iex> )
       {:ok, "<a href='../../../another.domain/page.html'></a>"}
@@ -26,6 +27,7 @@ defmodule Crawler.Snapper.LinkReplacer do
       iex>     depth: 1,
       iex>     max_depths: 2,
       iex>     html_tag: "a",
+      iex>     content_type: "text/html",
       iex>   }
       iex> )
       {:ok, "<a href='../../another.domain/dir/page.html'></a>"}
@@ -37,6 +39,7 @@ defmodule Crawler.Snapper.LinkReplacer do
       iex>     depth: 1,
       iex>     max_depths: 2,
       iex>     html_tag: "a",
+      iex>     content_type: "text/html",
       iex>   }
       iex> )
       {:ok, "<a href='../../../another.domain/dir/page/index.html'></a>"}
@@ -49,6 +52,7 @@ defmodule Crawler.Snapper.LinkReplacer do
       iex>     depth: 1,
       iex>     max_depths: 2,
       iex>     html_tag: "a",
+      iex>     content_type: "text/html",
       iex>   }
       iex> )
       {:ok, "<a href='../../../main.domain/dir/page2.html'></a>"}
@@ -58,7 +62,7 @@ defmodule Crawler.Snapper.LinkReplacer do
     |> Parser.parse_links(opts, &get_link/2)
     |> List.flatten
     |> Enum.reject(& &1 == nil)
-    |> Enum.reduce(body, &modify_body(opts[:file_type], &2, opts[:url], &1))
+    |> Enum.reduce(body, &modify_body(opts[:content_type], &2, opts[:url], &1))
 
     {:ok, new_body}
   end
@@ -66,18 +70,18 @@ defmodule Crawler.Snapper.LinkReplacer do
   defp get_link({_, url}, _opts),          do: url
   defp get_link({_, link, _, url}, _opts), do: [link, url]
 
-  defp modify_body(file_type, body, current_url, link) do
+  defp modify_body(content_type, body, current_url, link) do
     String.replace(
       body,
-      regexes(file_type, link),
+      regexes(content_type, link),
       modify_link(current_url, link)
     )
   end
 
-  defp regexes(file_type, link) do
-    case file_type do
-      "css" -> ~r{((?!url)\(['"]?)#{link}(['"]?\))}
-      _     -> ~r{((?!src|href)=['"])#{link}(['"])}
+  defp regexes(content_type, link) do
+    case content_type do
+      "text/css" -> ~r{((?!url)\(['"]?)#{link}(['"]?\))}
+      _          -> ~r{((?!src|href)=['"])#{link}(['"])}
     end
   end
 

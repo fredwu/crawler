@@ -32,37 +32,37 @@ defmodule Crawler.Parser do
 
       iex> Parser.parse(%{page: %Page{
       iex>   body: "Body"
-      iex> }, opts: %{html_tag: "a"}})
+      iex> }, opts: %{html_tag: "a", content_type: "text/html"}})
       %Page{body: "Body"}
 
       iex> Parser.parse(%{page: %Page{
       iex>   body: "<a href='http://parser/1'>Link</a>"
-      iex> }, opts: %{html_tag: "a"}})
+      iex> }, opts: %{html_tag: "a", content_type: "text/html"}})
       %Page{body: "<a href='http://parser/1'>Link</a>"}
 
       iex> Parser.parse(%{page: %Page{
       iex>   body: "<a name='hello'>Link</a>"
-      iex> }, opts: %{html_tag: "a"}})
+      iex> }, opts: %{html_tag: "a", content_type: "text/html"}})
       %Page{body: "<a name='hello'>Link</a>"}
 
       iex> Parser.parse(%{page: %Page{
       iex>   body: "<a href='http://parser/2' target='_blank'>Link</a>"
-      iex> }, opts: %{html_tag: "a"}})
+      iex> }, opts: %{html_tag: "a", content_type: "text/html"}})
       %Page{body: "<a href='http://parser/2' target='_blank'>Link</a>"}
 
       iex> Parser.parse(%{page: %Page{
       iex>   body: "<a href='parser/2'>Link</a>"
-      iex> }, opts: %{html_tag: "a", referrer_url: "http://hello"}})
+      iex> }, opts: %{html_tag: "a", content_type: "text/html", referrer_url: "http://hello"}})
       %Page{body: "<a href='parser/2'>Link</a>"}
 
       iex> Parser.parse(%{page: %Page{
       iex>   body: "<a href='../parser/2'>Link</a>"
-      iex> }, opts: %{html_tag: "a", referrer_url: "http://hello"}})
+      iex> }, opts: %{html_tag: "a", content_type: "text/html", referrer_url: "http://hello"}})
       %Page{body: "<a href='../parser/2'>Link</a>"}
 
       iex> Parser.parse(%{page: %Page{
       iex>   body: image_file()
-      iex> }, opts: %{html_tag: "img"}})
+      iex> }, opts: %{html_tag: "img", content_type: "image/png"}})
       %Page{body: "\#{image_file()}"}
   """
   def parse(input, link_handler \\ &Dispatcher.dispatch(&1, &2))
@@ -74,7 +74,9 @@ defmodule Crawler.Parser do
   end
 
   def parse_links(body, opts, link_handler) do
-    do_parse_links(Guarder.pass?(opts), body, opts, link_handler)
+    opts
+    |> Guarder.pass?
+    |> do_parse_links(body, opts, link_handler)
   end
 
   defp do_parse_links(false, _body, _opts, _link_handler), do: []
@@ -85,6 +87,6 @@ defmodule Crawler.Parser do
     )
   end
 
-  defp parse_file(body, %{file_type: "css"}), do: CssParser.parse(body)
-  defp parse_file(body, opts),                do: HtmlParser.parse(body, opts)
+  defp parse_file(body, %{content_type: "text/css"}), do: CssParser.parse(body)
+  defp parse_file(body, opts),                        do: HtmlParser.parse(body, opts)
 end
