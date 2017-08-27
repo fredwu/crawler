@@ -3,7 +3,7 @@ defmodule Crawler.Parser.LinkParser do
   Parses links and transforms them if necessary.
   """
 
-  alias __MODULE__.{LinkExpander, FileTypeDetector}
+  alias __MODULE__.LinkExpander
 
   @tag_attr %{
     "a"      => "href",
