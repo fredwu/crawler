@@ -2,6 +2,8 @@
 
 ## master
 
+- [Improved] Varies small fixes and improvements
+
 ## v0.3.0 [2017-08-27]
 
 - [Added] `:retrier` option to allow custom fetch retrying logic
