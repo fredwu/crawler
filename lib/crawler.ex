@@ -5,7 +5,7 @@ defmodule Crawler do
 
   use Application
 
-  alias Crawler.{Options, Store, WorkerSupervisor, Worker, QueueHandler}
+  alias Crawler.{Options, Store, WorkerSupervisor, QueueHandler}
 
   def start(_type, _args) do
     {:ok, _pid} = Store.init
@@ -24,6 +24,6 @@ defmodule Crawler do
   def crawl_now(opts) do
     {:ok, worker} = WorkerSupervisor.start_child(opts)
 
-    Worker.cast(worker, opts)
+    GenServer.cast(worker, opts)
   end
 end

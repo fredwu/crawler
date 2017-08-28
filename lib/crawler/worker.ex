@@ -20,10 +20,6 @@ defmodule Crawler.Worker do
     {:noreply, state}
   end
 
-  def cast(pid, term \\ []) do
-    GenServer.cast(pid, term)
-  end
-
   defp mark_processed(%Page{url: url}), do: Store.processed(url)
   defp mark_processed(_),               do: nil
 end
