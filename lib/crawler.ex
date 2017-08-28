@@ -3,16 +3,27 @@ defmodule Crawler do
   A high performance web crawler in Elixir.
   """
 
+  alias Crawler.{Options, Store, QueueHandler, Worker}
+
   use Application
 
-  alias Crawler.{Options, Store, WorkerSupervisor, QueueHandler}
+  @doc """
+  Crawler is an application that gets started automatically with:
 
+  - a `Crawler.Store` that initiates a `Registry` for keeping internal data
+  """
   def start(_type, _args) do
     {:ok, _pid} = Store.init
-
-    WorkerSupervisor.start_link
   end
 
+  @doc """
+  Enqueues a crawl, via `Crawler.QueueHandler.enqueue/1`.
+
+  This is the default crawl behaviour as the queue determines when an actual
+  crawl should happen based on the available workers and the rate limit. The
+  queue kicks off `Crawler.Dispatcher.Worker` which in term calls
+  `Crawler.crawl_now/1`.
+  """
   def crawl(url, opts \\ []) do
     opts
     |> Enum.into(%{})
@@ -21,9 +32,12 @@ defmodule Crawler do
     |> QueueHandler.enqueue
   end
 
-  def crawl_now(opts) do
-    {:ok, worker} = WorkerSupervisor.start_child(opts)
+  @doc """
+  Crawls immediately, this is used by `Crawler.Dispatcher.Worker.start_link/1`.
 
-    GenServer.cast(worker, opts)
+  For general purpose use cases, always use `Crawler.crawl/2` instead.
+  """
+  def crawl_now(opts) do
+    Worker.run(opts)
   end
 end

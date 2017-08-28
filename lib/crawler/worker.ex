@@ -1,16 +1,27 @@
 defmodule Crawler.Worker do
   @moduledoc """
-  Starts the crawl tasks.
+  Handles the crawl tasks.
   """
 
-  alias Crawler.{Worker, Fetcher, Store, Store.Page}
+  alias Crawler.{Fetcher, Store, Store.Page}
 
-  use GenServer, restart: :transient, start: {Worker, :start_link, []}
+  use GenServer
 
-  def start_link(args) do
-    GenServer.start_link(__MODULE__, args)
+  @doc """
+  Runs the worker that casts data to itself to kick off the crawl workflow.
+  """
+  def run(opts) do
+    {:ok, pid} = GenServer.start_link(__MODULE__, opts)
+
+    GenServer.cast(pid, opts)
   end
 
+  @doc """
+  A crawl workflow that delegates responsibilities to:
+
+  - `Crawler.Fetcher.fetch/1`
+  - `Crawler.Parser.parse/2` (or a custom parser)
+  """
   def handle_cast(_req, state) do
     state
     |> Fetcher.fetch
