@@ -13,6 +13,8 @@ defmodule Crawler.Parser.LinkParser do
   }
 
   @doc """
+  Parses links and transforms them if necessary.
+
   ## Examples
 
       iex> LinkParser.parse(

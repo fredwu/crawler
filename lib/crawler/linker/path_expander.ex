@@ -2,7 +2,7 @@ defmodule Crawler.Linker.PathExpander do
   @moduledoc """
   Expands the path by expanding any `.` and `..` characters.
 
-  See https://github.com/elixir-lang/elixir/pull/6486
+  See [this pull request](https://github.com/elixir-lang/elixir/pull/6486).
   """
 
   @doc """

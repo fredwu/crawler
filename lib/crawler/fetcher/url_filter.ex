@@ -18,8 +18,9 @@ defmodule Crawler.Fetcher.UrlFilter do
 
   @doc """
   Whether to pass through a given URL.
-    - `true` for letting the url through.
-    - `false` for rejecting the url.
+
+  - `true` for letting the url through
+  - `false` for rejecting the url
   """
   def filter(_url, _opts), do: {:ok, true}
 end

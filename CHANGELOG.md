@@ -3,6 +3,7 @@
 ## master
 
 - [Improved] `Crawler.Store.DB` now stores the `opts` meta data
+- [Improved] Code documentation
 - [Improved] Varies small fixes and improvements
 
 ## v0.3.0 [2017-08-27]

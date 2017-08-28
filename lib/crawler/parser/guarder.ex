@@ -4,6 +4,8 @@ defmodule Crawler.Parser.Guarder do
   """
 
   @doc """
+  Detects whether a page is parsable.
+
   ## Examples
 
       iex> Guarder.pass?(

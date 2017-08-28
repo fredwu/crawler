@@ -6,6 +6,8 @@ defmodule Crawler.Snapper.DirMaker do
   alias Crawler.{Linker, Linker.PathFinder}
 
   @doc """
+  Makes a new (nested) folder according to the options provided.
+
   ## Examples
 
       iex> DirMaker.make_dir(

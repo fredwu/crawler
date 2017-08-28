@@ -6,6 +6,11 @@ defmodule Crawler.Snapper do
   alias __MODULE__.{LinkReplacer, DirMaker}
 
   @doc """
+  In order to store pages offline, it provides the following functionalities:
+
+  - replaces all URLs to their equivalent relative paths
+  - creates directories when necessary to store the files
+
   ## Examples
 
       iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://hello-world.local"})

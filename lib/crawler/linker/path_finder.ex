@@ -3,11 +3,13 @@ defmodule Crawler.Linker.PathFinder do
   Finds different components of a given URL, e.g. its domain name, directory
   path, or full path.
 
-  The `safe` option indicates whether the return value should be transformed
-  in order to be safely used as folder and file names.
+  The `safe` option in some the functions indicates whether the return value
+  should be transformed in order to be safely used as folder and file names.
   """
 
   @doc """
+  Finds the URL scheme (e.g. `https://`).
+
   ## Examples
 
       iex> PathFinder.find_scheme("http://hi.hello")
@@ -25,6 +27,8 @@ defmodule Crawler.Linker.PathFinder do
   end
 
   @doc """
+  Finds the domain name with port number (e.g. `example.org:8080`).
+
   ## Examples
 
       iex> PathFinder.find_domain("http://hi.hello")
@@ -44,6 +48,8 @@ defmodule Crawler.Linker.PathFinder do
   end
 
   @doc """
+  Finds the base path of a given page.
+
   ## Examples
 
       iex> PathFinder.find_base_path("http://hi.hello")
@@ -73,6 +79,8 @@ defmodule Crawler.Linker.PathFinder do
   end
 
   @doc """
+  Finds the full path of a given page.
+
   ## Examples
 
       iex> PathFinder.find_path("http://hi.hello")

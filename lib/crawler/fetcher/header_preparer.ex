@@ -6,6 +6,8 @@ defmodule Crawler.Fetcher.HeaderPreparer do
   @default_content_type "text/html"
 
   @doc """
+  Captures and prepares HTTP response headers.
+
   ## Examples
 
       iex> HeaderPreparer.prepare(

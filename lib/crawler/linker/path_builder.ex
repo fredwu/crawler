@@ -7,6 +7,9 @@ defmodule Crawler.Linker.PathBuilder do
   alias Crawler.Linker.{PathFinder, PathExpander}
 
   @doc """
+  Builds a path for a link (can be a URL itself or a relative link) based on
+  the input string which is a URL with or without its protocol.
+
   ## Examples
 
       iex> PathBuilder.build_path(

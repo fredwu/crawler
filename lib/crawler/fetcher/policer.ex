@@ -1,7 +1,6 @@
 defmodule Crawler.Fetcher.Policer do
   @moduledoc """
-  Checks a series of conditions to determine whether it is okay to continue,
-  i.e. to allow `Crawler.Fetcher.fetch/1` to begin its tasks.
+  Checks a series of conditions to determine whether it is okay to continue.
   """
 
   alias Crawler.Store
@@ -10,6 +9,9 @@ defmodule Crawler.Fetcher.Policer do
   @asset_extra_depth 2
 
   @doc """
+  Checks a series of conditions to determine whether it is okay to continue,
+  i.e. to allow `Crawler.Fetcher.fetch/1` to begin its tasks.
+
   ## Examples
 
       iex> Policer.police([

@@ -6,6 +6,8 @@ defmodule Crawler.Fetcher.Recorder do
   alias Crawler.Store
 
   @doc """
+  Records information about each crawl for internal use.
+
   ## Examples
 
       iex> Recorder.record(url: "url1", depth: 2)
@@ -24,6 +26,9 @@ defmodule Crawler.Fetcher.Recorder do
     end
   end
 
+  @doc """
+  Stores page data in `Crawler.Store.DB` for internal or external consumption.
+  """
   def store_page(body, opts) do
     {:ok, Store.add_page_data(opts[:url], body, opts)}
   end

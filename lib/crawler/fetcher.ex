@@ -6,6 +6,14 @@ defmodule Crawler.Fetcher do
   alias __MODULE__.{Policer, Recorder, Requester, HeaderPreparer}
   alias Crawler.{Snapper, Store.Page}
 
+  @doc """
+  Fetches a URL by:
+
+  - verifying whether the URL needs fetching through `Crawler.Fetcher.Policer.police/1`
+  - recording data for internal use through `Crawler.Fetcher.Recorder.record/1`
+  - fetching the URL
+  - performing retries upon failed fetches through `Crawler.Fetcher.Retrier.perform/2`
+  """
   def fetch(opts) do
     with {:ok, opts} <- Policer.police(opts),
          {:ok, opts} <- Recorder.record(opts)

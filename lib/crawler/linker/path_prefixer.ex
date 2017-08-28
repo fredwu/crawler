@@ -1,11 +1,13 @@
 defmodule Crawler.Linker.PathPrefixer do
   @moduledoc """
-  Returns prefixes ("../") according to the given URL's structure.
+  Returns prefixes (`../`s) according to the given URL's structure.
   """
 
   alias Crawler.Linker.{PathFinder, PathOffliner}
 
   @doc """
+  Returns prefixes (`../`s) according to the given URL's structure.
+
   ## Examples
 
       iex> PathPrefixer.prefix("https://hello.world/")

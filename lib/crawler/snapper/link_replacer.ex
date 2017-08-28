@@ -6,6 +6,8 @@ defmodule Crawler.Snapper.LinkReplacer do
   alias Crawler.{Parser, Linker}
 
   @doc """
+  Replaces links found in a page so they work offline.
+
   ## Examples
 
       iex> LinkReplacer.replace_links(

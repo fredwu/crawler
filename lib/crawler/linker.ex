@@ -6,6 +6,9 @@ defmodule Crawler.Linker do
   alias __MODULE__.{PathPrefixer, PathBuilder, PathFinder, PathOffliner}
 
   @doc """
+  Given the `current_link`, it works out what the offline URL should be for
+  `link`.
+
   ## Examples
 
       iex> Linker.offline_url(
@@ -57,6 +60,9 @@ defmodule Crawler.Linker do
   end
 
   @doc """
+  Given the `current_link`, it works out what the relative
+  offline link should be for `link`.
+
   ## Examples
 
       iex> Linker.offline_link(
@@ -102,6 +108,8 @@ defmodule Crawler.Linker do
   end
 
   @doc """
+  Given the `current_link`, it works out what the URL should be for `link`.
+
   ## Examples
 
       iex> Linker.url(
@@ -124,6 +132,9 @@ defmodule Crawler.Linker do
   end
 
   @doc """
+  Given the `current_link`, it works out what the relative link should be for
+  `link`.
+
   ## Examples
 
       iex> Linker.link(

@@ -11,6 +11,8 @@ defmodule Crawler.Parser.HtmlParser do
   }
 
   @doc """
+  Parses HTML files.
+
   ## Examples
 
       iex> HtmlParser.parse(

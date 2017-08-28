@@ -17,6 +17,8 @@ defmodule Crawler.Options do
   @parser     Crawler.Parser
 
   @doc """
+  Assigns default option values.
+
   ## Examples
 
       iex> Options.assign_defaults(%{}) |> Map.has_key?(:depth)
@@ -46,6 +48,11 @@ defmodule Crawler.Options do
   end
 
   @doc """
+  Takes the `url` argument and puts it in the `opts`.
+
+  The `opts` map gets passed around internally and eventually gets stored in
+  the registry.
+
   ## Examples
 
       iex> Options.assign_url(%{}, "http://options/")

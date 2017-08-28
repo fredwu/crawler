@@ -19,7 +19,7 @@ defmodule Crawler.Fetcher.Retrier do
   use Retry
 
   @doc """
-  More information: https://github.com/safwank/ElixirRetry
+  More information: [https://github.com/safwank/ElixirRetry](https://github.com/safwank/ElixirRetry)
   """
   def perform(fetch_url, opts) do
     retry with: exp_backoff() |> expiry(opts[:timeout]) do

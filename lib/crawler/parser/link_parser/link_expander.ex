@@ -6,6 +6,8 @@ defmodule Crawler.Parser.LinkParser.LinkExpander do
   alias Crawler.Linker
 
   @doc """
+  Expands a link into a full URL.
+
   ## Examples
 
       iex> LinkExpander.expand({"href", "http://hello.world"}, %{})

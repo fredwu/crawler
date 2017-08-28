@@ -28,6 +28,12 @@ defmodule Crawler.Parser do
   @behaviour __MODULE__.Spec
 
   @doc """
+  Parses the links and returns the page.
+
+  The second argument `link_handler` is useful when a custom parser calls
+  this default parser and utilises a different link handler for processing
+  links.
+
   ## Examples
 
       iex> Parser.parse(%{page: %Page{

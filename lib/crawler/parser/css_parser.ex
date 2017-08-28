@@ -6,6 +6,8 @@ defmodule Crawler.Parser.CssParser do
   @url_unsafe_chars ")'\""
 
   @doc """
+  Parses CSS files.
+
   ## Examples
 
       iex> CssParser.parse(
