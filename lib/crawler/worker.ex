@@ -20,7 +20,7 @@ defmodule Crawler.Worker do
   A crawl workflow that delegates responsibilities to:
 
   - `Crawler.Fetcher.fetch/1`
-  - `Crawler.Parser.parse/2` (or a custom parser)
+  - `Crawler.Parser.parse/1` (or a custom parser)
   """
   def handle_cast(_req, state) do
     state

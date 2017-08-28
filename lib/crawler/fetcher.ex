@@ -39,7 +39,7 @@ defmodule Crawler.Fetcher do
          {:ok, opts} <- record_referrer_url(opts),
          {:ok, _}    <- snap_page(body, opts)
     do
-      return_page(body, opts)
+      %Page{url: opts[:url], body: body, opts: opts}
     end
   end
 
@@ -61,12 +61,5 @@ defmodule Crawler.Fetcher do
     else
       {:ok, ""}
     end
-  end
-
-  defp return_page(body, opts) do
-    %{
-      page: %Page{url: opts[:url], body: body},
-      opts: opts
-    }
   end
 end

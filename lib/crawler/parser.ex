@@ -15,14 +15,13 @@ defmodule Crawler.Parser do
 
     alias Crawler.Store.Page
 
-    @type element      :: {String.t, String.t} | {String.t, String.t, String.t, String.t}
-    @type opts         :: map
-    @type page         :: %Page{body: String.t}
-    @type input        :: %{page: page, opts: opts}
-    @type link_handler :: (element, opts -> term)
+    @type element :: {String.t, String.t} | {String.t, String.t, String.t, String.t}
+    @type opts    :: map
+    @type page    :: %Page{body: String.t}
+    @type input   :: %{page: page, opts: opts}
 
-    @callback parse(input, link_handler) :: page
-    @callback parse({:error, term}, link_handler) :: :ok
+    @callback parse(input) :: page
+    @callback parse({:error, term}) :: :ok
   end
 
   @behaviour __MODULE__.Spec
@@ -30,52 +29,63 @@ defmodule Crawler.Parser do
   @doc """
   Parses the links and returns the page.
 
-  The second argument `link_handler` is useful when a custom parser calls
-  this default parser and utilises a different link handler for processing
-  links.
+  There are two hooks:
+
+  - `link_handler` is useful when a custom parser calls this default parser and
+  utilises a different link handler for processing links.
+  - `scraper` is useful for scraping content immediately as the parser parses
+  the page, alternatively you can simply access the crawled data
+  asynchronously, refer to the [README](https://github.com/fredwu/crawler#usage)
 
   ## Examples
 
-      iex> Parser.parse(%{page: %Page{
-      iex>   body: "Body"
-      iex> }, opts: %{html_tag: "a", content_type: "text/html"}})
-      %Page{body: "Body"}
+      iex> Parser.parse(%Page{
+      iex>   body: "Body",
+      iex>   opts: %{html_tag: "a", content_type: "text/html"}
+      iex> }).body
+      "Body"
 
-      iex> Parser.parse(%{page: %Page{
-      iex>   body: "<a href='http://parser/1'>Link</a>"
-      iex> }, opts: %{html_tag: "a", content_type: "text/html"}})
-      %Page{body: "<a href='http://parser/1'>Link</a>"}
+      iex> Parser.parse(%Page{
+      iex>   body: "<a href='http://parser/1'>Link</a>",
+      iex>   opts: %{html_tag: "a", content_type: "text/html"}
+      iex> }).body
+      "<a href='http://parser/1'>Link</a>"
 
-      iex> Parser.parse(%{page: %Page{
-      iex>   body: "<a name='hello'>Link</a>"
-      iex> }, opts: %{html_tag: "a", content_type: "text/html"}})
-      %Page{body: "<a name='hello'>Link</a>"}
+      iex> Parser.parse(%Page{
+      iex>   body: "<a name='hello'>Link</a>",
+      iex>   opts: %{html_tag: "a", content_type: "text/html"}
+      iex> }).body
+      "<a name='hello'>Link</a>"
 
-      iex> Parser.parse(%{page: %Page{
-      iex>   body: "<a href='http://parser/2' target='_blank'>Link</a>"
-      iex> }, opts: %{html_tag: "a", content_type: "text/html"}})
-      %Page{body: "<a href='http://parser/2' target='_blank'>Link</a>"}
+      iex> Parser.parse(%Page{
+      iex>   body: "<a href='http://parser/2' target='_blank'>Link</a>",
+      iex>   opts: %{html_tag: "a", content_type: "text/html"}
+      iex> }).body
+      "<a href='http://parser/2' target='_blank'>Link</a>"
 
-      iex> Parser.parse(%{page: %Page{
-      iex>   body: "<a href='parser/2'>Link</a>"
-      iex> }, opts: %{html_tag: "a", content_type: "text/html", referrer_url: "http://hello"}})
-      %Page{body: "<a href='parser/2'>Link</a>"}
+      iex> Parser.parse(%Page{
+      iex>   body: "<a href='parser/2'>Link</a>",
+      iex>   opts: %{html_tag: "a", content_type: "text/html", referrer_url: "http://hello"}
+      iex> }).body
+      "<a href='parser/2'>Link</a>"
 
-      iex> Parser.parse(%{page: %Page{
-      iex>   body: "<a href='../parser/2'>Link</a>"
-      iex> }, opts: %{html_tag: "a", content_type: "text/html", referrer_url: "http://hello"}})
-      %Page{body: "<a href='../parser/2'>Link</a>"}
+      iex> Parser.parse(%Page{
+      iex>   body: "<a href='../parser/2'>Link</a>",
+      iex>   opts: %{html_tag: "a", content_type: "text/html", referrer_url: "http://hello"}
+      iex> }).body
+      "<a href='../parser/2'>Link</a>"
 
-      iex> Parser.parse(%{page: %Page{
-      iex>   body: image_file()
-      iex> }, opts: %{html_tag: "img", content_type: "image/png"}})
-      %Page{body: "\#{image_file()}"}
+      iex> Parser.parse(%Page{
+      iex>   body: image_file(),
+      iex>   opts: %{html_tag: "img", content_type: "image/png"}
+      iex> }).body
+      "\#{image_file()}"
   """
-  def parse(input, link_handler \\ &Dispatcher.dispatch(&1, &2))
+  def parse(input)
 
-  def parse({:error, reason}, _), do: Logger.debug(reason)
-  def parse(%{page: page, opts: opts}, link_handler) do
-    parse_links(page.body, opts, link_handler)
+  def parse({:error, reason}), do: Logger.debug(reason)
+  def parse(%{body: body, opts: opts} = page) do
+    parse_links(body, opts, &Dispatcher.dispatch(&1, &2))
     page
   end
 
