@@ -2,6 +2,10 @@
 
 ## master
 
+- [Improved] Varies small fixes and improvements
+
+## v0.4.0 [2017-08-28]
+
 - [Added] `:scraper` option to allow scraping content
 - [Improved] Varies small fixes and improvements
 
