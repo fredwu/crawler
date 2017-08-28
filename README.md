@@ -39,6 +39,13 @@ Below is a very high level architecture diagram demonstrating how Crawler works.
 Crawler.crawl("http://elixir-lang.org", max_depths: 2)
 ```
 
+There are several ways of accessing the crawled page data:
+
+1. Use [`Crawler.Store`](https://hexdocs.pm/crawler/Crawler.Store.html)
+2. Tap into the registry([?](https://hexdocs.pm/elixir/Registry.html)) [`Crawler.Store.DB`](lib/crawler/store.ex)
+3. If the `:save_to` option is set, pages will be saved to disk in addition to the above mentioned places
+4. Provide your own [custom parser](#custom-modules) and manage how data is stored and accessed yourself
+
 ## Configurations
 
 | Option          | Type    | Default Value               | Description |
