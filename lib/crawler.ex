@@ -7,8 +7,6 @@ defmodule Crawler do
 
   alias Crawler.{Options, Store, WorkerSupervisor, Worker, QueueHandler}
 
-  def version, do: "0.1.0"
-
   def start(_type, _args) do
     {:ok, _pid} = Store.init
 
