@@ -12,20 +12,17 @@ A high performance web crawler in Elixir, with worker pooling and rate limiting 
 
 Crawler is under active development, below is a non-comprehensive list of features (to be) implemented.
 
-- [x] Set the maximum crawl depth.
+- [x] Crawl assets (javascript, css and images).
 - [x] Save to disk.
-- [x] Set timeouts.
-- [x] Crawl assets.
-  - [x] js
-  - [x] css
-  - [x] images
-- [ ] The ability to manually stop/pause/restart the crawler.
-- [x] Restrict crawlable domains, paths or file types.
+- [ ] Hook for scraping content.
+- [x] Restrict crawlable domains, paths or content types.
 - [x] Limit concurrent crawlers.
 - [x] Limit rate of crawling.
+- [x] Set the maximum crawl depth.
+- [x] Set timeouts.
+- [x] Set retries strategy.
 - [x] Set crawler's user agent.
-- [x] The ability to retry a failed crawl.
-- [ ] DSL for scraping page content.
+- [ ] Manually stop/pause/restart the crawler.
 
 ## Architecture
 
@@ -39,7 +36,7 @@ Below is a very high level architecture diagram demonstrating how Crawler works.
 Crawler.crawl("http://elixir-lang.org", max_depths: 2)
 ```
 
-There are several ways of accessing the crawled page data:
+There are several ways to access the crawled page data:
 
 1. Use [`Crawler.Store`](https://hexdocs.pm/crawler/Crawler.Store.html)
 2. Tap into the registry([?](https://hexdocs.pm/elixir/Registry.html)) [`Crawler.Store.DB`](lib/crawler/store.ex)
@@ -50,15 +47,15 @@ There are several ways of accessing the crawled page data:
 
 | Option          | Type    | Default Value               | Description |
 |-----------------|---------|-----------------------------|-------------|
-| `:max_depths`   | integer | `3`                         | Maximum nested depth of pages to crawl.
+| `:assets`       | list    | `[]`                        | Whether to fetch any asset files, available options: `"css"`, `"js"`, `"images"`.
+| `:save_to`      | string  | `nil`                       | When provided, the path for saving crawled pages.
 | `:workers`      | integer | `10`                        | Maximum number of concurrent workers for crawling.
 | `:interval`     | integer | `0`                         | Rate limit control - number of milliseconds before crawling more pages, defaults to `0` which is effectively no rate limit.
+| `:max_depths`   | integer | `3`                         | Maximum nested depth of pages to crawl.
 | `:timeout`      | integer | `5000`                      | Timeout value for fetching a page, in ms.
 | `:user_agent`   | string  | `Crawler/x.x.x (...)`       | User-Agent value sent by the fetch requests.
-| `:save_to`      | string  | `nil`                       | When provided, the path for saving crawled pages.
-| `:assets`       | list    | `[]`                        | Whether to fetch any asset files, available options: `"css"`, `"js"`, `"images"`.
+| `:url_filter`   | module  | `Crawler.Fetcher.UrlFilter` | Custom URL filter, useful when you need to restrict crawlable domains, paths or content types.
 | `:retrier`      | module  | `Crawler.Fetcher.Retrier`   | Custom fetch retrier, useful when you need to retry failed crawls.
-| `:url_filter`   | module  | `Crawler.Fetcher.UrlFilter` | Custom URL filter, useful when you need to restrict crawlable domains, paths or file types.
 | `:parser`       | module  | `Crawler.Parser`            | Custom parser, useful when you need to handle parsing differently or to add extra functionalities.
 
 ## Custom Modules
