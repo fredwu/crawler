@@ -2,6 +2,7 @@
 
 ## master
 
+- [Added] `:scraper` option to allow scraping content
 - [Improved] Varies small fixes and improvements
 
 ## v0.3.1 [2017-08-28]

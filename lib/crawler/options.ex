@@ -14,6 +14,7 @@ defmodule Crawler.Options do
   @user_agent "Crawler/#{Mixfile.project[:version]} (https://github.com/fredwu/crawler)"
   @url_filter Crawler.Fetcher.UrlFilter
   @retrier    Crawler.Fetcher.Retrier
+  @scraper    Crawler.Scraper
   @parser     Crawler.Parser
 
   @doc """
@@ -43,6 +44,7 @@ defmodule Crawler.Options do
       user_agent: user_agent(),
       url_filter: url_filter(),
       retrier:    retrier(),
+      scraper:    scraper(),
       parser:     parser(),
     }, opts)
   end
@@ -74,5 +76,6 @@ defmodule Crawler.Options do
   defp user_agent, do: Application.get_env(:crawler, :user_agent, @user_agent)
   defp url_filter, do: Application.get_env(:crawler, :url_filter, @url_filter)
   defp retrier,    do: Application.get_env(:crawler, :retrier,    @retrier)
+  defp scraper,    do: Application.get_env(:crawler, :scraper,    @scraper)
   defp parser,     do: Application.get_env(:crawler, :parser,     @parser)
 end

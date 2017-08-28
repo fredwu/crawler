@@ -15,12 +15,12 @@ defmodule Crawler.Parser do
 
     alias Crawler.Store.Page
 
-    @type element :: {String.t, String.t} | {String.t, String.t, String.t, String.t}
-    @type opts    :: map
-    @type page    :: %Page{body: String.t}
-    @type input   :: %{page: page, opts: opts}
+    @type url  :: String.t
+    @type body :: String.t
+    @type opts :: map
+    @type page :: %Page{url: url, body: body, opts: opts}
 
-    @callback parse(input) :: page
+    @callback parse(page) :: {:ok, page}
     @callback parse({:error, term}) :: :ok
   end
 
@@ -39,46 +39,53 @@ defmodule Crawler.Parser do
 
   ## Examples
 
-      iex> Parser.parse(%Page{
+      iex> {:ok, page} = Parser.parse(%Page{
       iex>   body: "Body",
-      iex>   opts: %{html_tag: "a", content_type: "text/html"}
-      iex> }).body
+      iex>   opts: %{scraper: Crawler.Scraper, html_tag: "a", content_type: "text/html"}
+      iex> })
+      iex> page.body
       "Body"
 
-      iex> Parser.parse(%Page{
+      iex> {:ok, page} = Parser.parse(%Page{
       iex>   body: "<a href='http://parser/1'>Link</a>",
-      iex>   opts: %{html_tag: "a", content_type: "text/html"}
-      iex> }).body
+      iex>   opts: %{scraper: Crawler.Scraper, html_tag: "a", content_type: "text/html"}
+      iex> })
+      iex> page.body
       "<a href='http://parser/1'>Link</a>"
 
-      iex> Parser.parse(%Page{
+      iex> {:ok, page} = Parser.parse(%Page{
       iex>   body: "<a name='hello'>Link</a>",
-      iex>   opts: %{html_tag: "a", content_type: "text/html"}
-      iex> }).body
+      iex>   opts: %{scraper: Crawler.Scraper, html_tag: "a", content_type: "text/html"}
+      iex> })
+      iex> page.body
       "<a name='hello'>Link</a>"
 
-      iex> Parser.parse(%Page{
+      iex> {:ok, page} = Parser.parse(%Page{
       iex>   body: "<a href='http://parser/2' target='_blank'>Link</a>",
-      iex>   opts: %{html_tag: "a", content_type: "text/html"}
-      iex> }).body
+      iex>   opts: %{scraper: Crawler.Scraper, html_tag: "a", content_type: "text/html"}
+      iex> })
+      iex> page.body
       "<a href='http://parser/2' target='_blank'>Link</a>"
 
-      iex> Parser.parse(%Page{
+      iex> {:ok, page} = Parser.parse(%Page{
       iex>   body: "<a href='parser/2'>Link</a>",
-      iex>   opts: %{html_tag: "a", content_type: "text/html", referrer_url: "http://hello"}
-      iex> }).body
+      iex>   opts: %{scraper: Crawler.Scraper, html_tag: "a", content_type: "text/html", referrer_url: "http://hello"}
+      iex> })
+      iex> page.body
       "<a href='parser/2'>Link</a>"
 
-      iex> Parser.parse(%Page{
+      iex> {:ok, page} = Parser.parse(%Page{
       iex>   body: "<a href='../parser/2'>Link</a>",
-      iex>   opts: %{html_tag: "a", content_type: "text/html", referrer_url: "http://hello"}
-      iex> }).body
+      iex>   opts: %{scraper: Crawler.Scraper, html_tag: "a", content_type: "text/html", referrer_url: "http://hello"}
+      iex> })
+      iex> page.body
       "<a href='../parser/2'>Link</a>"
 
-      iex> Parser.parse(%Page{
+      iex> {:ok, page} = Parser.parse(%Page{
       iex>   body: image_file(),
-      iex>   opts: %{html_tag: "img", content_type: "image/png"}
-      iex> }).body
+      iex>   opts: %{scraper: Crawler.Scraper, html_tag: "img", content_type: "image/png"}
+      iex> })
+      iex> page.body
       "\#{image_file()}"
   """
   def parse(input)
@@ -86,7 +93,8 @@ defmodule Crawler.Parser do
   def parse({:error, reason}), do: Logger.debug(reason)
   def parse(%{body: body, opts: opts} = page) do
     parse_links(body, opts, &Dispatcher.dispatch(&1, &2))
-    page
+
+    {:ok, _page} = opts[:scraper].scrape(page)
   end
 
   def parse_links(body, opts, link_handler) do

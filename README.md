@@ -14,7 +14,7 @@ Crawler is under active development, below is a non-comprehensive list of featur
 
 - [x] Crawl assets (javascript, css and images).
 - [x] Save to disk.
-- [ ] Hook for scraping content.
+- [x] Hook for scraping content.
 - [x] Restrict crawlable domains, paths or content types.
 - [x] Limit concurrent crawlers.
 - [x] Limit rate of crawling.
@@ -40,8 +40,9 @@ There are several ways to access the crawled page data:
 
 1. Use [`Crawler.Store`](https://hexdocs.pm/crawler/Crawler.Store.html)
 2. Tap into the registry([?](https://hexdocs.pm/elixir/Registry.html)) [`Crawler.Store.DB`](lib/crawler/store.ex)
-3. If the `:save_to` option is set, pages will be saved to disk in addition to the above mentioned places
-4. Provide your own [custom parser](#custom-modules) and manage how data is stored and accessed yourself
+3. Use your own [scraper](#custom-modules)
+4. If the `:save_to` option is set, pages will be saved to disk in addition to the above mentioned places
+5. Provide your own [custom parser](#custom-modules) and manage how data is stored and accessed yourself
 
 ## Configurations
 
@@ -54,9 +55,10 @@ There are several ways to access the crawled page data:
 | `:max_depths`   | integer | `3`                         | Maximum nested depth of pages to crawl.
 | `:timeout`      | integer | `5000`                      | Timeout value for fetching a page, in ms.
 | `:user_agent`   | string  | `Crawler/x.x.x (...)`       | User-Agent value sent by the fetch requests.
-| `:url_filter`   | module  | `Crawler.Fetcher.UrlFilter` | Custom URL filter, useful when you need to restrict crawlable domains, paths or content types.
-| `:retrier`      | module  | `Crawler.Fetcher.Retrier`   | Custom fetch retrier, useful when you need to retry failed crawls.
-| `:parser`       | module  | `Crawler.Parser`            | Custom parser, useful when you need to handle parsing differently or to add extra functionalities.
+| `:url_filter`   | module  | `Crawler.Fetcher.UrlFilter` | Custom URL filter, useful for restricting crawlable domains, paths or content types.
+| `:retrier`      | module  | `Crawler.Fetcher.Retrier`   | Custom fetch retrier, useful for retrying failed crawls.
+| `:scraper`      | module  | `Crawler.Scraper`           | Custom scraper, useful for scraping content as soon as the parser parses it.
+| `:parser`       | module  | `Crawler.Parser`            | Custom parser, useful for handling parsing differently or to add extra functionalities.
 
 ## Custom Modules
 
@@ -81,6 +83,16 @@ See [`Crawler.Fetcher.UrlFilter`](lib/crawler/fetcher/url_filter.ex).
 ```elixir
 defmodule CustomUrlFilter do
   @behaviour Crawler.Fetcher.UrlFilter.Spec
+end
+```
+
+### Scraper
+
+See [`Crawler.Scraper`](lib/crawler/scraper.ex).
+
+```elixir
+defmodule CustomScraper do
+  @behaviour Crawler.Scraper.Spec
 end
 ```
 
