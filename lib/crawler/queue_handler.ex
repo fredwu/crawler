@@ -5,15 +5,21 @@ defmodule Crawler.QueueHandler do
 
   alias Crawler.Dispatcher.Worker
 
+  @doc """
+  Enqueues a crawl request.
+
+  Also initialises the queue if it's not already initialised, this is necessary
+  so that consumer apps don't have to manually handle the queue initialisation.
+  """
   def enqueue(opts) do
-    opts = init_queue(opts, opts[:queue])
+    opts = init_queue(opts[:queue], opts)
 
     OPQ.enqueue(opts[:queue], opts)
 
     {:ok, opts}
   end
 
-  defp init_queue(opts, nil) do
+  defp init_queue(nil, opts) do
     {:ok, opq} = OPQ.init(
       worker:   Worker,
       workers:  opts[:workers],
@@ -24,5 +30,5 @@ defmodule Crawler.QueueHandler do
     Map.merge(opts, %{queue: opq})
   end
 
-  defp init_queue(opts, _), do: opts
+  defp init_queue(_queue, opts), do: opts
 end
