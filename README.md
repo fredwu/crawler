@@ -10,19 +10,17 @@ A high performance web crawler in Elixir, with worker pooling and rate limiting 
 
 ## Features
 
-Crawler is under active development, below is a non-comprehensive list of features (to be) implemented.
-
-- [x] Crawl assets (javascript, css and images).
-- [x] Save to disk.
-- [x] Hook for scraping content.
-- [x] Restrict crawlable domains, paths or content types.
-- [x] Limit concurrent crawlers.
-- [x] Limit rate of crawling.
-- [x] Set the maximum crawl depth.
-- [x] Set timeouts.
-- [x] Set retries strategy.
-- [x] Set crawler's user agent.
-- [x] Manually pause/resume/stop the crawler.
+- Crawl assets (javascript, css and images).
+- Save to disk.
+- Hook for scraping content.
+- Restrict crawlable domains, paths or content types.
+- Limit concurrent crawlers.
+- Limit rate of crawling.
+- Set the maximum crawl depth.
+- Set timeouts.
+- Set retries strategy.
+- Set crawler's user agent.
+- Manually pause/resume/stop the crawler.
 
 ## Architecture
 
