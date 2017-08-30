@@ -31,6 +31,11 @@ defmodule Crawler.Worker do
     {:noreply, state}
   end
 
+  @doc false
+  def handle_info(_msg, state) do
+    {:noreply, state}
+  end
+
   defp mark_processed({:ok, %Page{url: url}}), do: Store.processed(url)
   defp mark_processed(_),                      do: nil
 end
