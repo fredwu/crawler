@@ -22,7 +22,7 @@ Crawler is under active development, below is a non-comprehensive list of featur
 - [x] Set timeouts.
 - [x] Set retries strategy.
 - [x] Set crawler's user agent.
-- [ ] Manually stop/pause/restart the crawler.
+- [x] Manually pause/resume/stop the crawler.
 
 ## Architecture
 
@@ -53,7 +53,7 @@ There are several ways to access the crawled page data:
 | `:workers`      | integer | `10`                        | Maximum number of concurrent workers for crawling.
 | `:interval`     | integer | `0`                         | Rate limit control - number of milliseconds before crawling more pages, defaults to `0` which is effectively no rate limit.
 | `:max_depths`   | integer | `3`                         | Maximum nested depth of pages to crawl.
-| `:timeout`      | integer | `5000`                      | Timeout value for fetching a page, in ms.
+| `:timeout`      | integer | `5000`                      | Timeout value for fetching a page, in ms. Can also be set to `:infinity`, useful when combined with `Crawler.pause/1`.
 | `:user_agent`   | string  | `Crawler/x.x.x (...)`       | User-Agent value sent by the fetch requests.
 | `:url_filter`   | module  | `Crawler.Fetcher.UrlFilter` | Custom URL filter, useful for restricting crawlable domains, paths or content types.
 | `:retrier`      | module  | `Crawler.Fetcher.Retrier`   | Custom fetch retrier, useful for retrying failed crawls.
@@ -105,6 +105,22 @@ defmodule CustomParser do
   @behaviour Crawler.Parser.Spec
 end
 ```
+
+## Pause / Resume / Stop Crawler
+
+Crawler provides `pause/1`, `resume/1` and `stop/1`, see below.
+
+```elixir
+{:ok, opts} = Crawler.crawl("http://elixir-lang.org")
+
+Crawler.pause(opts)
+
+Crawler.resume(opts)
+
+Crawler.stop(opts)
+```
+
+Please note that when pausing Crawler, you would need to set a large enough `:timeout` (or even set it to `:infinity`) otherwise parser would timeout due to unprocessed links.
 
 ## API Reference
 

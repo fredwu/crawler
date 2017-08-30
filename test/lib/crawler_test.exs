@@ -39,8 +39,14 @@ defmodule CrawlerTest do
 
     {:ok, opts} = Crawler.crawl(url, max_depths: 3, workers: 3, interval: 100)
 
+    Crawler.pause(opts)
+
     assert opts[:workers] == 3
-    assert OPQ.info(opts[:queue]) == {{[], []}, 2}
+    assert OPQ.info(opts[:queue]) == {:paused, {[], []}, 2}
+
+    Crawler.resume(opts)
+
+    assert OPQ.info(opts[:queue]) == {:normal, {[], []}, 2}
 
     wait fn ->
       page = Store.find_processed(url)
@@ -55,7 +61,16 @@ defmodule CrawlerTest do
     end
 
     wait fn ->
-      assert OPQ.info(opts[:queue]) == {{[], []}, 3}
+      assert OPQ.info(opts[:queue]) == {:normal, {[], []}, 3}
     end
+  end
+
+  test ".crawl stopped", %{url: url} do
+    {:ok, opts} = Crawler.crawl(url)
+
+    Crawler.stop(opts)
+    Process.sleep(10)
+
+    refute Store.find(url)
   end
 end

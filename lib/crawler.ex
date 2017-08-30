@@ -33,6 +33,24 @@ defmodule Crawler do
   end
 
   @doc """
+  Stops the crawler.
+  """
+  def stop(opts) do
+    Process.flag(:trap_exit, true)
+    OPQ.stop(opts[:queue])
+  end
+
+  @doc """
+  Pauses the crawler.
+  """
+  def pause(opts), do: OPQ.pause(opts[:queue])
+
+  @doc """
+  Resumes the crawler after it was paused.
+  """
+  def resume(opts), do: OPQ.resume(opts[:queue])
+
+  @doc """
   Crawls immediately, this is used by `Crawler.Dispatcher.Worker.start_link/1`.
 
   For general purpose use cases, always use `Crawler.crawl/2` instead.

@@ -22,8 +22,15 @@ defmodule Crawler.Fetcher.Retrier do
   More information: [https://github.com/safwank/ElixirRetry](https://github.com/safwank/ElixirRetry)
   """
   def perform(fetch_url, opts) do
-    retry with: exp_backoff() |> expiry(opts[:timeout]) do
+    retry with: exp_backoff() |> expiry(timeout_value(opts[:timeout])) do
       fetch_url.()
+    end
+  end
+
+  defp timeout_value(value) do
+    case Kernel.is_integer(value) do
+      true  -> value
+      false -> 5_000
     end
   end
 end

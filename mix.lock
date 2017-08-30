@@ -17,9 +17,9 @@
   "mime": {:hex, :mime, "1.1.0", "01c1d6f4083d8aa5c7b8c246ade95139620ef8effb009edde934e0ec3b28090a", [:mix], [], "hexpm"},
   "mimerl": {:hex, :mimerl, "1.0.2", "993f9b0e084083405ed8252b99460c4f0563e41729ab42d9074fd5e52439be88", [:rebar3], [], "hexpm"},
   "mochiweb": {:hex, :mochiweb, "2.15.0", "e1daac474df07651e5d17cc1e642c4069c7850dc4508d3db7263a0651330aacc", [:rebar3], [], "hexpm"},
-  "opq": {:hex, :opq, "1.0.1", "9427b1960e837090b8eed228e5df4e3c6b11dd1f11004b3876f2d90cc7053b21", [:mix], [{:gen_stage, "~> 0.12", [hex: :gen_stage, repo: "hexpm", optional: false]}], "hexpm"},
+  "opq": {:hex, :opq, "2.0.1", "e033f2c7a5441f208151d1d4fb2ec970c6a119321afe79be31ab21bf3706a3a9", [:mix], [{:gen_stage, "~> 0.12", [hex: :gen_stage, repo: "hexpm", optional: false]}], "hexpm"},
   "plug": {:hex, :plug, "1.4.3", "236d77ce7bf3e3a2668dc0d32a9b6f1f9b1f05361019946aae49874904be4aed", [:mix], [{:cowboy, "~> 1.0.1 or ~> 1.1", [hex: :cowboy, repo: "hexpm", optional: true]}, {:mime, "~> 1.0", [hex: :mime, repo: "hexpm", optional: false]}], "hexpm"},
   "ranch": {:hex, :ranch, "1.3.2", "e4965a144dc9fbe70e5c077c65e73c57165416a901bd02ea899cfd95aa890986", [:rebar3], [], "hexpm"},
-  "retry": {:hex, :retry, "0.7.0", "894a32223433501b33e95cc54bda72f3d162a930d2eba749ed7766f05721986d", [], [], "hexpm"},
+  "retry": {:hex, :retry, "0.7.0", "894a32223433501b33e95cc54bda72f3d162a930d2eba749ed7766f05721986d", [:mix], [], "hexpm"},
   "ssl_verify_fun": {:hex, :ssl_verify_fun, "1.1.1", "28a4d65b7f59893bc2c7de786dec1e1555bd742d336043fe644ae956c3497fbe", [:make, :rebar], [], "hexpm"},
   "unicode_util_compat": {:hex, :unicode_util_compat, "0.3.1", "a1f612a7b512638634a603c8f401892afbf99b8ce93a45041f8aaca99cadb85e", [:rebar3], [], "hexpm"}}
