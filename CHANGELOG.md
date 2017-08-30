@@ -2,6 +2,10 @@
 
 ## master
 
+- [Improved] Varies small fixes and improvements
+
+## v1.0.0 [2017-08-31]
+
 - [Added] Pause / resume / stop Crawler
 - [Improved] Varies small fixes and improvements
 
