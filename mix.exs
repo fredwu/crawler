@@ -29,7 +29,7 @@ defmodule Crawler.Mixfile do
     [
       {:httpoison,   "~> 0.13"},
       {:floki,       "~> 0.18"},
-      {:opq,         "~> 2.0"},
+      {:opq,         "~> 3.0"},
       {:retry,       "~> 0.7"},
       {:ex_doc,      ">= 0.0.0", only: :dev},
       {:dialyxir,    "~> 0.5",   only: [:dev, :test], runtime: false},
