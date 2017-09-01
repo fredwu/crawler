@@ -55,13 +55,13 @@ defmodule Crawler.Linker.PathBuilder do
     link
     |> normalise(path)
     |> PathFinder.find_path(safe)
-    |> PathExpander.expand_dot
+    |> PathExpander.expand_dot()
   end
 
   defp normalise(link, path) do
     link
     |> String.split("://", parts: 2)
-    |> Enum.count
+    |> Enum.count()
     |> join_path(link, path)
   end
 

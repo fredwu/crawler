@@ -27,17 +27,17 @@ defmodule Crawler.Linker.PathPrefixer do
   """
   def prefix(current_url) do
     current_url
-    |> PathFinder.find_path
-    |> PathOffliner.transform
-    |> count_depth
-    |> make_prefix
+    |> PathFinder.find_path()
+    |> PathOffliner.transform()
+    |> count_depth()
+    |> make_prefix()
   end
 
   defp count_depth(string, token \\ "/") do
     (
       string
       |> String.split(token)
-      |> Enum.count
+      |> Enum.count()
     ) - 1
   end
 

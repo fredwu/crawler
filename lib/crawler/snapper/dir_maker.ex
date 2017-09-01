@@ -19,7 +19,7 @@ defmodule Crawler.Snapper.DirMaker do
   """
   def make_dir(opts) do
     opts[:url]
-    |> prep_filepath
+    |> prep_filepath()
     |> build_save_path(opts[:save_to])
     |> make_save_path(opts[:save_to])
   end
@@ -27,7 +27,7 @@ defmodule Crawler.Snapper.DirMaker do
   defp prep_filepath(url) do
     url
     |> Linker.offline_url(url)
-    |> PathFinder.find_path
+    |> PathFinder.find_path()
   end
 
   defp build_save_path(path, save_to) do

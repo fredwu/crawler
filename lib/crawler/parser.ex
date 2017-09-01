@@ -3,10 +3,10 @@ defmodule Crawler.Parser do
   Parses pages and calls a link handler to handle the detected links.
   """
 
-  require Logger
-
   alias __MODULE__.{Guarder, CssParser, HtmlParser, LinkParser}
   alias Crawler.Dispatcher
+
+  require Logger
 
   defmodule Spec do
     @moduledoc """
@@ -99,7 +99,7 @@ defmodule Crawler.Parser do
 
   def parse_links(body, opts, link_handler) do
     opts
-    |> Guarder.pass?
+    |> Guarder.pass?()
     |> do_parse_links(body, opts, link_handler)
   end
 

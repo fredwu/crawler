@@ -22,7 +22,7 @@ defmodule Crawler.Linker.PathFinder do
     (
       url
       |> String.split("://", part: 2)
-      |> Kernel.hd
+      |> Kernel.hd()
     ) <> "://"
   end
 
@@ -44,7 +44,7 @@ defmodule Crawler.Linker.PathFinder do
     url
     |> find_path(safe)
     |> String.split("/", parts: 2)
-    |> Kernel.hd
+    |> Kernel.hd()
   end
 
   @doc """
@@ -74,8 +74,8 @@ defmodule Crawler.Linker.PathFinder do
     [_head | tail] = Enum.reverse(list)
 
     tail
-    |> Enum.reverse
-    |> Path.join
+    |> Enum.reverse()
+    |> Path.join()
   end
 
   @doc """

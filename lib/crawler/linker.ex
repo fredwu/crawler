@@ -56,7 +56,7 @@ defmodule Crawler.Linker do
   def offline_url(current_url, link) do
     current_url
     |> url(link)
-    |> PathOffliner.transform
+    |> PathOffliner.transform()
   end
 
   @doc """
@@ -104,7 +104,7 @@ defmodule Crawler.Linker do
   def offline_link(current_url, link) do
     current_url
     |> link(link)
-    |> PathOffliner.transform
+    |> PathOffliner.transform()
   end
 
   @doc """

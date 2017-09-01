@@ -18,7 +18,7 @@ defmodule Crawler.Parser.LinkParser.LinkExpander do
   """
   def expand({_src, link} = element, opts) do
     link
-    |> is_url?
+    |> is_url?()
     |> transform_link(element, opts)
   end
 

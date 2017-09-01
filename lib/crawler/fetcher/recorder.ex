@@ -20,8 +20,7 @@ defmodule Crawler.Fetcher.Recorder do
   def record(opts) do
     with opts        <- Enum.into(opts, %{}),
          {:ok, _pid} <- store_url(opts),
-         opts        <- store_url_depth(opts)
-    do
+         opts        <- store_url_depth(opts) do
       {:ok, opts}
     end
   end

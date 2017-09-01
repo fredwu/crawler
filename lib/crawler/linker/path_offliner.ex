@@ -30,9 +30,9 @@ defmodule Crawler.Linker.PathOffliner do
   """
   def transform(link) do
     link
-    |> PathFinder.find_path
+    |> PathFinder.find_path()
     |> String.split("/", trim: true)
-    |> Enum.count
+    |> Enum.count()
     |> last_segment(link)
   end
 
@@ -44,7 +44,7 @@ defmodule Crawler.Linker.PathOffliner do
     link
     |> String.split("/")
     |> Enum.take(-1)
-    |> Kernel.hd
+    |> Kernel.hd()
     |> transform_segment(link)
   end
 

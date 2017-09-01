@@ -14,9 +14,9 @@ defmodule Crawler.Fetcher.Retrier do
     @callback perform(fetch_url, opts) :: term
   end
 
-  @behaviour __MODULE__.Spec
-
   use Retry
+
+  @behaviour __MODULE__.Spec
 
   @doc """
   More information: [https://github.com/safwank/ElixirRetry](https://github.com/safwank/ElixirRetry)

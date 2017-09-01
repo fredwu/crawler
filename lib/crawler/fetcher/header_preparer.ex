@@ -29,9 +29,10 @@ defmodule Crawler.Fetcher.HeaderPreparer do
       %{headers: [{"Content-Type", "image/png; blah"}], content_type: "image/png"}
   """
   def prepare(headers, opts) do
-    content_type = headers
-    |> get_content_type
-    |> simplify_content_type
+    content_type =
+      headers
+      |> get_content_type()
+      |> simplify_content_type()
 
     opts
     |> Map.put(:headers, headers)
@@ -54,6 +55,6 @@ defmodule Crawler.Fetcher.HeaderPreparer do
   defp simplify_content_type(content_type) do
     content_type
     |> String.split(";", parts: 2)
-    |> Kernel.hd
+    |> Kernel.hd()
   end
 end

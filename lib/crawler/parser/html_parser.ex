@@ -34,7 +34,7 @@ defmodule Crawler.Parser.HtmlParser do
   defp selectors(opts) do
     @tag_selectors
     |> Map.take(["pages"] ++ (opts[:assets] || []))
-    |> Map.values
+    |> Map.values()
     |> Enum.join(", ")
   end
 end

@@ -13,7 +13,7 @@ defmodule Crawler do
   - a `Crawler.Store` that initiates a `Registry` for keeping internal data
   """
   def start(_type, _args) do
-    {:ok, _pid} = Store.init
+    {:ok, _pid} = Store.init()
   end
 
   @doc """
@@ -27,9 +27,9 @@ defmodule Crawler do
   def crawl(url, opts \\ []) do
     opts
     |> Enum.into(%{})
-    |> Options.assign_defaults
+    |> Options.assign_defaults()
     |> Options.assign_url(url)
-    |> QueueHandler.enqueue
+    |> QueueHandler.enqueue()
   end
 
   @doc """

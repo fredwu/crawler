@@ -18,9 +18,9 @@ defmodule Crawler.Scraper do
     @callback scrape(page) :: {:ok, page}
   end
 
-  @behaviour __MODULE__.Spec
-
   alias Crawler.Store.Page
+
+  @behaviour __MODULE__.Spec
 
   @doc """
   """
