@@ -90,7 +90,7 @@ defmodule Crawler.Parser do
   """
   def parse(input)
 
-  def parse({:error, reason}), do: Logger.debug(reason)
+  def parse({:error, reason}), do: Logger.debug("#{inspect reason}")
   def parse(%{body: body, opts: opts} = page) do
     parse_links(body, opts, &Dispatcher.dispatch(&1, &2))
 
