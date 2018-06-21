@@ -16,6 +16,7 @@ defmodule Crawler.Options do
   @retrier    Crawler.Fetcher.Retrier
   @scraper    Crawler.Scraper
   @parser     Crawler.Parser
+  @encode     false
 
   @doc """
   Assigns default option values.
@@ -46,6 +47,7 @@ defmodule Crawler.Options do
       retrier:    retrier(),
       scraper:    scraper(),
       parser:     parser(),
+      encode_uri: encode_uri(),
     }, opts)
   end
 
@@ -63,6 +65,9 @@ defmodule Crawler.Options do
       iex> Options.assign_url(%{url: "http://example.com/"}, "http://options/")
       %{url: "http://options/"}
   """
+  def assign_url(%{encode_uri: true} = opts, url) do
+    Map.merge(opts, %{url: URI.encode(url)})
+  end
   def assign_url(opts, url) do
     Map.merge(opts, %{url: url})
   end
@@ -78,4 +83,5 @@ defmodule Crawler.Options do
   defp retrier,    do: Application.get_env(:crawler, :retrier,    @retrier)
   defp scraper,    do: Application.get_env(:crawler, :scraper,    @scraper)
   defp parser,     do: Application.get_env(:crawler, :parser,     @parser)
+  defp encode_uri, do: Application.get_env(:crawler, :encode_uri, @encode_uri)
 end

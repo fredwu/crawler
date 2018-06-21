@@ -57,6 +57,7 @@ There are several ways to access the crawled page data:
 | `:retrier`      | module  | `Crawler.Fetcher.Retrier`   | Custom fetch retrier, useful for retrying failed crawls.
 | `:scraper`      | module  | `Crawler.Scraper`           | Custom scraper, useful for scraping content as soon as the parser parses it.
 | `:parser`       | module  | `Crawler.Parser`            | Custom parser, useful for handling parsing differently or to add extra functionalities.
+| `:encode_uri`   | boolean | `false`                     | When set to `true` apply the `URI.encode` to the URL to be crawled.
 
 ## Custom Modules
 
