@@ -15,7 +15,7 @@ defmodule Crawler.Fetcher.Requester do
 
   ## Examples
 
-      iex> Requester.make(url: "fake_url")
+      iex> Requester.make(url: "fake_url", modifier: Crawler.Fetcher.Modifier)
       {:error, %HTTPoison.Error{id: nil, reason: :nxdomain}}
   """
   def make(opts) do
