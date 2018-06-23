@@ -7,7 +7,7 @@ defmodule Crawler.Fetcher.Requester do
 
   @fetch_opts [
     follow_redirect: true,
-    max_redirect:    5
+    max_redirect:    5,
   ]
 
   @doc """
@@ -15,7 +15,7 @@ defmodule Crawler.Fetcher.Requester do
 
   ## Examples
 
-      iex> Requester.make(url: "fake_url")
+      iex> Requester.make(url: "fake_url", modifier: Crawler.Fetcher.Modifier)
       {:error, %HTTPoison.Error{id: nil, reason: :nxdomain}}
   """
   def make(opts) do
@@ -24,11 +24,12 @@ defmodule Crawler.Fetcher.Requester do
 
   defp fetch_headers(opts) do
     [{"User-Agent", opts[:user_agent]}]
+    ++ opts[:modifier].headers(opts)
   end
 
   defp fetch_opts(opts) do
     @fetch_opts ++ [
       recv_timeout: opts[:timeout]
-    ]
+    ] ++ opts[:modifier].opts(opts)
   end
 end
