@@ -23,13 +23,10 @@ defmodule Crawler.Fetcher.Requester do
   end
 
   defp fetch_headers(opts) do
-    [{"User-Agent", opts[:user_agent]}]
-    ++ opts[:modifier].headers(opts)
+    [{"User-Agent", opts[:user_agent]}] ++ opts[:modifier].headers(opts)
   end
 
   defp fetch_opts(opts) do
-    @fetch_opts ++ [
-      recv_timeout: opts[:timeout]
-    ] ++ opts[:modifier].opts(opts)
+    @fetch_opts ++ [recv_timeout: opts[:timeout]] ++ opts[:modifier].opts(opts)
   end
 end

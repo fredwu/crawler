@@ -17,7 +17,7 @@ defmodule Crawler.Options do
   @modifier   Crawler.Fetcher.Modifier
   @scraper    Crawler.Scraper
   @parser     Crawler.Parser
-  @encode     false
+  @encode_uri false
 
   @doc """
   Assigns default option values.
