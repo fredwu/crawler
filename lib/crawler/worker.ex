@@ -7,6 +7,10 @@ defmodule Crawler.Worker do
 
   use GenServer
 
+  def init(args) do
+    {:ok, args}
+  end
+
   @doc """
   Runs the worker that casts data to itself to kick off the crawl workflow.
   """

@@ -37,6 +37,6 @@ defmodule Crawler.Fetcher.Recorder do
   end
 
   defp store_url_depth(opts) do
-    Map.replace(opts, :depth, opts[:depth] + 1)
+    Map.replace!(opts, :depth, opts[:depth] + 1)
   end
 end

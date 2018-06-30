@@ -1,5 +1,5 @@
 defmodule CrawlerTest do
-  use Crawler.TestCase, async: true
+  use Crawler.TestCase, async: false
 
   alias Crawler.Store
 
@@ -65,12 +65,22 @@ defmodule CrawlerTest do
     end
   end
 
-  test ".crawl stopped", %{url: url} do
-    {:ok, opts} = Crawler.crawl(url)
+  test ".crawl stopped", %{bypass: bypass, url: url} do
+    url        = "#{url}/stop"
+    linked_url = "#{url}/stop1"
+
+    Bypass.expect_once bypass, "GET", "/stop", fn (conn) ->
+      Plug.Conn.resp(conn, 200, """
+        <html><a href="#{linked_url}">1</a></html>
+      """)
+    end
+
+    {:ok, opts} = Crawler.crawl(url, workers: 1, interval: 500)
+
+    Process.sleep(200)
 
     Crawler.stop(opts)
-    Process.sleep(10)
 
-    refute Store.find(url)
+    refute Store.find(linked_url)
   end
 end

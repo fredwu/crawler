@@ -24,7 +24,7 @@ defmodule Crawler.QueueHandler do
       worker:   Worker,
       workers:  opts[:workers],
       interval: opts[:interval],
-      timeout:  opts[:timeout],
+      timeout:  opts[:timeout]
     )
 
     Map.merge(opts, %{queue: opq})
