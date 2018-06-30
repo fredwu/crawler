@@ -55,7 +55,7 @@ There are several ways to access the crawled page data:
 | `:user_agent`   | string  | `Crawler/x.x.x (...)`       | User-Agent value sent by the fetch requests.
 | `:url_filter`   | module  | `Crawler.Fetcher.UrlFilter` | Custom URL filter, useful for restricting crawlable domains, paths or content types.
 | `:retrier`      | module  | `Crawler.Fetcher.Retrier`   | Custom fetch retrier, useful for retrying failed crawls.
-| `:modifier`     | module  | `Crawler.Fetcher.Modifier`  | Custom modifier, useful for adding custom request headers or options
+| `:modifier`     | module  | `Crawler.Fetcher.Modifier`  | Custom modifier, useful for adding custom request headers or options.
 | `:scraper`      | module  | `Crawler.Scraper`           | Custom scraper, useful for scraping content as soon as the parser parses it.
 | `:parser`       | module  | `Crawler.Parser`            | Custom parser, useful for handling parsing differently or to add extra functionalities.
 | `:encode_uri`   | boolean | `false`                     | When set to `true` apply the `URI.encode` to the URL to be crawled.
