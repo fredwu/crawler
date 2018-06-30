@@ -24,6 +24,10 @@ defmodule Crawler.Fetcher.Retrier do
   def perform(fetch_url, opts) do
     retry with: exp_backoff() |> expiry(timeout_value(opts[:timeout])) do
       fetch_url.()
+    after
+      result -> result
+    else
+      error -> error
     end
   end
 
