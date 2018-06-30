@@ -1,5 +1,5 @@
 defmodule IntegrationTest do
-  use Crawler.TestCase, async: true
+  use Crawler.TestCase, async: false
 
   import Plug.Conn
 

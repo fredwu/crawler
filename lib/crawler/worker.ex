@@ -5,6 +5,11 @@ defmodule Crawler.Worker do
 
   alias Crawler.{Fetcher, Store, Store.Page}
 
+  use GenServer
+
+  def init(args) do
+    {:ok, args}
+  end
 
   @doc """
   A crawl workflow that delegates responsibilities to:
