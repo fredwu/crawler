@@ -16,7 +16,8 @@ defmodule Crawler.Fetcher do
   """
   def fetch(opts) do
     with {:ok, opts} <- Policer.police(opts),
-         {:ok, opts} <- Recorder.record(opts) do
+         {:ok, opts} <- Recorder.record(opts)
+    do
       opts[:retrier].perform(fn -> fetch_url(opts) end, opts)
     end
   end
@@ -36,7 +37,8 @@ defmodule Crawler.Fetcher do
     with opts        <- HeaderPreparer.prepare(headers, opts),
          {:ok, _}    <- Recorder.store_page(body, opts),
          {:ok, opts} <- record_referrer_url(opts),
-         {:ok, _}    <- snap_page(body, opts) do
+         {:ok, _}    <- snap_page(body, opts)
+    do
       %Page{url: opts[:url], body: body, opts: opts}
     end
   end

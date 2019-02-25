@@ -35,7 +35,8 @@ defmodule Crawler.Parser.LinkParser do
     src = @tag_attr[tag]
 
     with {_tag, link} <- detect_link(src, attrs),
-         element      <- LinkExpander.expand({src, link}, opts) do
+         element      <- LinkExpander.expand({src, link}, opts)
+    do
       opts = Map.merge(opts, %{html_tag: tag})
 
       link_handler.(element, opts)

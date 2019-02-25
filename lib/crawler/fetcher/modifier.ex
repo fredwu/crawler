@@ -17,14 +17,14 @@ defmodule Crawler.Fetcher.Modifier do
   @doc """
   Allows modifing headers prior to making a crawl request.
 
-  ## Example implementaion
+  ## Example implementation
 
-    def headers(opts) do
-      if opts[:url] == "http://modifier" do
-        [{"Referer", "http://fetcher"}]
+      def headers(opts) do
+        if opts[:url] == "http://modifier" do
+          [{"Referer", "http://fetcher"}]
+        end
+        []
       end
-      []
-    end
   """
   def headers(_opts), do: []
 
@@ -33,13 +33,13 @@ defmodule Crawler.Fetcher.Modifier do
 
   ## Example implementation
 
-    def opts(opts) do
-      if opts[:url] == "http://modifier" do
-        # add a new pool to hackney
-        [hackney: [pool: :modifier]]
+      def opts(opts) do
+        if opts[:url] == "http://modifier" do
+          # add a new pool to hackney
+          [hackney: [pool: :modifier]]
+        end
+        []
       end
-      []
-    end
   """
   def opts(_opts), do: []
 end

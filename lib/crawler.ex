@@ -21,7 +21,7 @@ defmodule Crawler do
 
   This is the default crawl behaviour as the queue determines when an actual
   crawl should happen based on the available workers and the rate limit. The
-  queue kicks off `Crawler.Dispatcher.Worker` which in term calls
+  queue kicks off `Crawler.Dispatcher.Worker` which in turn calls
   `Crawler.crawl_now/1`.
   """
   def crawl(url, opts \\ []) do
