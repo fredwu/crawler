@@ -2,6 +2,8 @@
 
 ## master
 
+- [Added] `:modifier` option
+- [Added] `:encode_uri` option
 - [Improved] Varies small fixes and improvements
 
 ## v1.0.0 [2017-08-31]
