@@ -31,7 +31,7 @@ defmodule Crawler.Mixfile do
       {:floki,       "~> 0.18"},
       {:opq,         "~> 3.0"},
       {:retry,       "~> 0.10"},
-      {:plug_cowboy, "~> 1.0"},
+      {:plug_cowboy, "~> 1.0",   only: :test},
       {:ex_doc,      ">= 0.0.0", only: :dev},
       {:dialyxir,    "~> 0.5",   only: [:dev, :test], runtime: false},
       {:bypass,      "~> 0.8",   only: :test},
