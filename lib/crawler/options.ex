@@ -15,6 +15,7 @@ defmodule Crawler.Options do
   @url_filter Crawler.Fetcher.UrlFilter
   @retrier    Crawler.Fetcher.Retrier
   @modifier   Crawler.Fetcher.Modifier
+  @reporter   Crawler.Fetcher.Reporter
   @scraper    Crawler.Scraper
   @parser     Crawler.Parser
   @encode_uri false
@@ -47,6 +48,7 @@ defmodule Crawler.Options do
       url_filter: url_filter(),
       retrier:    retrier(),
       modifier:   modifier(),
+      reporter:   reporter(),
       scraper:    scraper(),
       parser:     parser(),
       encode_uri: encode_uri(),
@@ -84,6 +86,7 @@ defmodule Crawler.Options do
   defp url_filter, do: Application.get_env(:crawler, :url_filter, @url_filter)
   defp retrier,    do: Application.get_env(:crawler, :retrier,    @retrier)
   defp modifier,   do: Application.get_env(:crawler, :modifier,   @modifier)
+  defp reporter,   do: Application.get_env(:crawler, :reporter,   @reporter)
   defp scraper,    do: Application.get_env(:crawler, :scraper,    @scraper)
   defp parser,     do: Application.get_env(:crawler, :parser,     @parser)
   defp encode_uri, do: Application.get_env(:crawler, :encode_uri, @encode_uri)

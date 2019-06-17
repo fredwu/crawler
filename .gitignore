@@ -19,3 +19,5 @@ erl_crash.dump
 *.ez
 
 /test/tmp/*
+
+/.elixir_ls

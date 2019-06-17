@@ -44,14 +44,19 @@ defmodule Crawler.Fetcher do
   end
 
   defp fetch_url_non_200(status_code, opts) do
-    {:error, "Failed to fetch #{opts[:url]}, status code: #{status_code}"}
+    error_msg = "Failed to fetch #{opts[:url]}, status code: #{status_code}"
+    opts[:reporter].report_fail(opts, error_msg, status_code)
+    {:error, error_msg}
   end
 
   defp fetch_url_failed(reason, opts) do
-    {:error, "Failed to fetch #{opts[:url]}, reason: #{reason}"}
+    error_msg = "Failed to fetch #{opts[:url]}, reason: #{reason}"
+    opts[:reporter].report_fail(opts, error_msg, 0)
+    {:error, error_msg}
   end
 
   defp record_referrer_url(opts) do
+    opts[:reporter].report_success(opts)
     {:ok, Map.put(opts, :referrer_url, opts[:url])}
   end
 
