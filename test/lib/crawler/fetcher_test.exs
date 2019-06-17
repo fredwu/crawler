@@ -1,7 +1,7 @@
 defmodule Crawler.FetcherTest do
   use Crawler.TestCase, async: true
 
-  alias Crawler.{Fetcher, Fetcher.UrlFilter, Fetcher.Retrier, Fetcher.Modifier, Store}
+  alias Crawler.{Fetcher, Fetcher.UrlFilter, Fetcher.Retrier, Fetcher.Modifier, Fetcher.Reporter, Store}
 
   doctest Fetcher
 
@@ -11,7 +11,7 @@ defmodule Crawler.FetcherTest do
     def perform(fetch_url, _opts), do: fetch_url.()
   end
 
-  @defaults %{depth: 0, url_filter: UrlFilter, modifier: Modifier, retrier: DummyRetrier, html_tag: "a"}
+  @defaults %{depth: 0, url_filter: UrlFilter, modifier: Modifier, reporter: Reporter, retrier: DummyRetrier, html_tag: "a"}
 
   test "success", %{bypass: bypass, url: url} do
     url = "#{url}/fetcher/200"
