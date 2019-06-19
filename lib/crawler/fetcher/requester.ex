@@ -11,6 +11,7 @@ defmodule Crawler.Fetcher.Requester do
   ]
 
   @doc """
+
   Makes HTTP requests via `Crawler.HTTP`.
 
   ## Examples
@@ -19,7 +20,20 @@ defmodule Crawler.Fetcher.Requester do
       {:error, %HTTPoison.Error{id: nil, reason: :nxdomain}}
   """
   def make(opts) do
-    HTTP.get(opts[:url], fetch_headers(opts), fetch_opts(opts))
+    options = fetch_opts(opts) ++ [url: opts[:url]]
+
+    res = HTTP.get(opts[:url], fetch_headers(opts), options)
+
+    case res do
+      {:ok, %HTTPoison.Response{status_code: 200}} ->
+        opts[:reporter].report_success(options)
+      {:ok, %HTTPoison.Response{status_code: status_code}} ->
+        opts[:reporter].report_fail(options, "Non-200 status code", status_code)
+      {:error, %HTTPoison.Error{reason: reason}} ->
+        opts[:reporter].report_fail(options, reason, 0)
+    end
+
+    res
   end
 
   defp fetch_headers(opts) do
