@@ -2,6 +2,10 @@
 
 ## master
 
+- [Improved] Updated `floki` and other dependencies
+
+## v1.1.0 [2019-02-25]
+
 - [Added] `:modifier` option
 - [Added] `:encode_uri` option
 - [Improved] Varies small fixes and improvements
