@@ -28,7 +28,8 @@ defmodule Crawler.Parser.HtmlParser do
       []
   """
   def parse(body, opts) do
-    Floki.find(body, selectors(opts))
+    {:ok, document} = Floki.parse_document(body)
+    Floki.find(document, selectors(opts))
   end
 
   defp selectors(opts) do
