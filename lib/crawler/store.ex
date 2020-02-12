@@ -1,9 +1,14 @@
 defmodule Crawler.Store do
   @moduledoc """
   An internal data store for information related to each crawl.
+  include the ets in a gen_server in order for it to be garbage collected.
+  However don't go through the process to access it, for the process to not
+  be a bottleneck.
   """
+  use GenServer
+  @table :db
 
-  alias __MODULE__.DB
+  @type url :: String.t
 
   defmodule Page do
     @moduledoc """
@@ -16,15 +21,28 @@ defmodule Crawler.Store do
   @doc """
   Initialises a new `Registry` named `Crawler.Store.DB`.
   """
-  def init do
-    Registry.start_link(keys: :unique, name: DB)
+  def start_link do
+    GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+  end
+
+  def init(nil) do
+    :ets.new(@table, [
+      :set,
+      :public,
+      :named_table,
+      read_concurrency: true,
+      write_concurrency: true
+    ])
+
+    {:ok, nil}
   end
 
   @doc """
   Finds a stored URL and returns its page data.
   """
+  @spec find(url) :: %Page{} | nil
   def find(url) do
-    case Registry.lookup(DB, url) do
+    case :ets.lookup(@table, url) do
       [{_, page}] -> page
       _           -> nil
     end
@@ -33,8 +51,9 @@ defmodule Crawler.Store do
   @doc """
   Finds a stored URL and returns its page data only if it's processed.
   """
+  @spec find_processed(url) :: %Page{} | nil
   def find_processed(url) do
-    case Registry.match(DB, url, %{processed: true}) do
+    case :ets.match_object(@table, {url, %{processed: true}}) do
       [{_, page}] -> page
       _           -> nil
     end
@@ -43,21 +62,34 @@ defmodule Crawler.Store do
   @doc """
   Adds a URL to the registry.
   """
+  @spec add(url) :: {:ok, boolean}
   def add(url) do
-    Registry.register(DB, url, %Page{url: url})
+    {:ok, :ets.insert_new(@table, {url, %Page{url: url}})}
+  end
+
+  @spec update(url, map) :: boolean
+  defp update(url, args) do
+    case find(url) do
+      nil -> false
+      page ->
+        page
+        |> Map.merge(args)
+        |> update!()
+    end
+  end
+
+  @spec update!(%Page{}) :: boolean
+  defp update!(page) do
+    :ets.insert(@table, {page.url, page})
   end
 
   @doc """
   Adds the page data for a URL to the registry.
   """
-  def add_page_data(url, body, opts) do
-    {_new, _old} = Registry.update_value(DB, url, & %{&1 | body: body, opts: opts})
-  end
+  def add_page_data(url, body, opts), do: update(url, %{body: body, opts: opts})
 
   @doc """
   Marks a URL as processed in the registry.
   """
-  def processed(url) do
-    {_new, _old} = Registry.update_value(DB, url, & %{&1 | processed: true})
-  end
+  def processed(url), do: update(url, %{processed: true})
 end

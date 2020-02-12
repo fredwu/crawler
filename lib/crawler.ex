@@ -13,7 +13,7 @@ defmodule Crawler do
   - a `Crawler.Store` that initiates a `Registry` for keeping internal data
   """
   def start(_type, _args) do
-    {:ok, _pid} = Store.init()
+    {:ok, _pid} = Store.start_link()
   end
 
   @doc """
