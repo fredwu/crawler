@@ -92,4 +92,12 @@ defmodule Crawler.Store do
   Marks a URL as processed in the registry.
   """
   def processed(url), do: update(url, %{processed: true})
+
+  @doc """
+  clear the store of all the pages.
+  Useful for periodic crawl tasks.
+  """
+  def reset() do
+    :ets.delete_all_objects(@table)
+  end
 end
