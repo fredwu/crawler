@@ -2,6 +2,8 @@
 
 ## master
 
+## v1.1.1 [2020-05-15]
+
 - [Improved] Updated `floki` and other dependencies
 
 ## v1.1.0 [2019-02-25]

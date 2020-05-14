@@ -4,7 +4,7 @@ defmodule Crawler.Mixfile do
   def project do
     [
       app:               :crawler,
-      version:           "1.1.0",
+      version:           "1.1.1",
       elixir:            "~> 1.5",
       package:           package(),
       name:              "Crawler",
