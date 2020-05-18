@@ -12,32 +12,18 @@ defmodule Crawler.Worker do
   end
 
   @doc """
-  Runs the worker that casts data to itself to kick off the crawl workflow.
-  """
-  def run(opts) do
-    {:ok, pid} = GenServer.start_link(__MODULE__, opts)
-
-    GenServer.cast(pid, opts)
-  end
-
-  @doc """
   A crawl workflow that delegates responsibilities to:
 
   - `Crawler.Fetcher.fetch/1`
   - `Crawler.Parser.parse/1` (or a custom parser)
   """
-  def handle_cast(_req, state) do
-    state
+  def run(opts) do
+    opts
     |> Fetcher.fetch()
-    |> state[:parser].parse()
+    |> opts[:parser].parse()
     |> mark_processed()
 
-    {:noreply, state}
-  end
-
-  @doc false
-  def handle_info(_msg, state) do
-    {:noreply, state}
+    {:noreply, opts}
   end
 
   defp mark_processed({:ok, %Page{url: url}}), do: Store.processed(url)
