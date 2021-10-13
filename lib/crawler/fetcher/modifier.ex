@@ -15,7 +15,7 @@ defmodule Crawler.Fetcher.Modifier do
   @behaviour __MODULE__.Spec
 
   @doc """
-  Allows modifing headers prior to making a crawl request.
+  Allows modifying headers prior to making a crawl request.
 
   ## Example implementation
 

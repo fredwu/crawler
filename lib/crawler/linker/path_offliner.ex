@@ -1,6 +1,6 @@
 defmodule Crawler.Linker.PathOffliner do
   @moduledoc """
-  Transforms a link to be storeable and linkable offline.
+  Transforms a link to be storable and linkable offline.
   """
 
   alias Crawler.Linker.PathFinder

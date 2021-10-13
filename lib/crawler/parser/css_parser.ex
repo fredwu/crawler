@@ -21,7 +21,7 @@ defmodule Crawler.Parser.CssParser do
       [{"link", [{"href", "icons.ttf"}], []}]
 
       iex> CssParser.parse(
-      iex>   "@font-face { src: url('data:applicatin/blah'); }"
+      iex>   "@font-face { src: url('data:application/blah'); }"
       iex> )
       []
   """

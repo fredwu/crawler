@@ -3,7 +3,11 @@
 [![Travis](https://img.shields.io/travis/fredwu/crawler.svg)](https://travis-ci.org/fredwu/crawler)
 [![CodeBeat](https://codebeat.co/badges/76916047-5b66-466d-91d3-7131a269899a)](https://codebeat.co/projects/github-com-fredwu-crawler-master)
 [![Coverage](https://img.shields.io/coveralls/fredwu/crawler.svg)](https://coveralls.io/github/fredwu/crawler?branch=master)
-[![Hex.pm](https://img.shields.io/hexpm/v/crawler.svg)](https://hex.pm/packages/crawler)
+[![Module Version](https://img.shields.io/hexpm/v/crawler.svg)](https://hex.pm/packages/crawler)
+[![Hex Docs](https://img.shields.io/badge/hex-docs-lightgreen.svg)](https://hexdocs.pm/crawler/)
+[![Total Download](https://img.shields.io/hexpm/dt/crawler.svg)](https://hex.pm/packages/crawler)
+[![License](https://img.shields.io/hexpm/l/crawler.svg)](https://github.com/fredwu/crawler/blob/master/LICENSE.md)
+[![Last Updated](https://img.shields.io/github/last-commit/fredwu/crawler.svg)](https://github.com/fredwu/crawler/commits/master)
 
 A high performance web crawler in Elixir, with worker pooling and rate limiting via [OPQ](https://github.com/fredwu/opq).
 
@@ -139,6 +143,9 @@ Please see https://hexdocs.pm/crawler.
 
 Please see [CHANGELOG.md](CHANGELOG.md).
 
-## License
+## Copyright and License
 
-Licensed under [MIT](http://fredwu.mit-license.org/).
+Copyright (c) 2016 Fred Wu
+
+This work is free. You can redistribute it and/or modify it under the
+terms of the [MIT License](http://fredwu.mit-license.org/).
