@@ -8,7 +8,7 @@ defmodule Crawler.Fetcher.UrlFilter do
     Spec for defining an url filter.
     """
 
-    @type url  :: String.t
+    @type url :: String.t()
     @type opts :: map
 
     @callback filter(url, opts) :: {:ok, boolean} | {:error, term}

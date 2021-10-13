@@ -16,8 +16,7 @@ defmodule Crawler.Fetcher do
   """
   def fetch(opts) do
     with {:ok, opts} <- Policer.police(opts),
-         {:ok, opts} <- Recorder.record(opts)
-    do
+         {:ok, opts} <- Recorder.record(opts) do
       opts[:retrier].perform(fn -> fetch_url(opts) end, opts)
     end
   end
@@ -26,19 +25,20 @@ defmodule Crawler.Fetcher do
     case Requester.make(opts) do
       {:ok, %HTTPoison.Response{status_code: 200, body: body, headers: headers}} ->
         fetch_url_200(body, headers, opts)
+
       {:ok, %HTTPoison.Response{status_code: status_code}} ->
         fetch_url_non_200(status_code, opts)
+
       {:error, %HTTPoison.Error{reason: reason}} ->
         fetch_url_failed(reason, opts)
     end
   end
 
   defp fetch_url_200(body, headers, opts) do
-    with opts        <- HeaderPreparer.prepare(headers, opts),
-         {:ok, _}    <- Recorder.store_page(body, opts),
+    with opts <- HeaderPreparer.prepare(headers, opts),
+         {:ok, _} <- Recorder.store_page(body, opts),
          {:ok, opts} <- record_referrer_url(opts),
-         {:ok, _}    <- snap_page(body, opts)
-    do
+         {:ok, _} <- snap_page(body, opts) do
       %Page{url: opts[:url], body: body, opts: opts}
     end
   end

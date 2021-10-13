@@ -44,7 +44,7 @@ defmodule Crawler.Fetcher.HeaderPreparer do
   defp get_content_type(headers) do
     case Enum.find(headers, &find_content_type/1) do
       {_, value} -> value
-      _          -> @default_content_type
+      _ -> @default_content_type
     end
   end
 

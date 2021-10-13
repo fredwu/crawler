@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## master
 
+## v1.1.2 [2021-10-14]
+
+- [Improved] Documentation improvements (thanks @kianmeng)
+
 ## v1.1.1 [2020-05-15]
 
 - [Improved] Updated `floki` and other dependencies

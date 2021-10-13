@@ -19,11 +19,9 @@ defmodule Crawler.Linker.PathFinder do
       "https://"
   """
   def find_scheme(url) do
-    (
-      url
-      |> String.split("://", part: 2)
-      |> Kernel.hd()
-    ) <> "://"
+    (url
+     |> String.split("://", part: 2)
+     |> Kernel.hd()) <> "://"
   end
 
   @doc """

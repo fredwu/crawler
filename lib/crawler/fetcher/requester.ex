@@ -7,7 +7,7 @@ defmodule Crawler.Fetcher.Requester do
 
   @fetch_opts [
     follow_redirect: true,
-    max_redirect:    5,
+    max_redirect: 5
   ]
 
   @doc """

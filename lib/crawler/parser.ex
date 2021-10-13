@@ -15,8 +15,8 @@ defmodule Crawler.Parser do
 
     alias Crawler.Store.Page
 
-    @type url  :: String.t
-    @type body :: String.t
+    @type url :: String.t()
+    @type body :: String.t()
     @type opts :: map
     @type page :: %Page{url: url, body: body, opts: opts}
 
@@ -91,6 +91,7 @@ defmodule Crawler.Parser do
   def parse(input)
 
   def parse({:error, reason}), do: Logger.debug(fn -> "#{inspect(reason)}" end)
+
   def parse(%{body: body, opts: opts} = page) do
     parse_links(body, opts, &Dispatcher.dispatch(&1, &2))
 
@@ -104,6 +105,7 @@ defmodule Crawler.Parser do
   end
 
   defp do_parse_links(false, _body, _opts, _link_handler), do: []
+
   defp do_parse_links(true, body, opts, link_handler) do
     Enum.map(
       parse_file(body, opts),
@@ -112,5 +114,5 @@ defmodule Crawler.Parser do
   end
 
   defp parse_file(body, %{content_type: "text/css"}), do: CssParser.parse(body)
-  defp parse_file(body, opts),                        do: HtmlParser.parse(body, opts)
+  defp parse_file(body, opts), do: HtmlParser.parse(body, opts)
 end

@@ -2,6 +2,7 @@
 defmodule Helpers do
   def wait(fun), do: wait(500, fun)
   def wait(0, fun), do: fun.()
+
   def wait(timeout, fun) do
     try do
       fun.()
@@ -13,7 +14,7 @@ defmodule Helpers do
   end
 
   def tmp(path \\ "", filename \\ "") do
-    tmp_path = Path.join([File.cwd!, "test", "tmp", path])
+    tmp_path = Path.join([File.cwd!(), "test", "tmp", path])
 
     File.mkdir_p(tmp_path)
 

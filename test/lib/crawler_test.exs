@@ -6,36 +6,36 @@ defmodule CrawlerTest do
   doctest Crawler
 
   test ".crawl", %{bypass: bypass, url: url} do
-    url         = "#{url}/crawler"
+    url = "#{url}/crawler"
     linked_url1 = "#{url}/link1"
     linked_url2 = "#{url}/link2"
     linked_url3 = "#{url}/link3"
     linked_url4 = "#{url}/link4"
 
-    Bypass.expect_once bypass, "GET", "/crawler", fn (conn) ->
+    Bypass.expect_once(bypass, "GET", "/crawler", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html><a href="#{linked_url1}">1</a></html>
         <html><a href="#{linked_url2}">2</a></html>
       """)
-    end
+    end)
 
-    Bypass.expect_once bypass, "GET", "/crawler/link1", fn (conn) ->
+    Bypass.expect_once(bypass, "GET", "/crawler/link1", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html><a id="link2" href="#{linked_url2}" target="_blank">2</a></html>
       """)
-    end
+    end)
 
-    Bypass.expect_once bypass, "GET", "/crawler/link2", fn (conn) ->
+    Bypass.expect_once(bypass, "GET", "/crawler/link2", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html><a href="#{linked_url3}">3</a></html>
       """)
-    end
+    end)
 
-    Bypass.expect_once bypass, "GET", "/crawler/link3", fn (conn) ->
+    Bypass.expect_once(bypass, "GET", "/crawler/link3", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html><a href="#{linked_url4}">4</a></html>
       """)
-    end
+    end)
 
     {:ok, opts} = Crawler.crawl(url, max_depths: 3, workers: 3, interval: 100)
 
@@ -48,7 +48,7 @@ defmodule CrawlerTest do
 
     assert OPQ.info(opts[:queue]) == {:normal, {[], []}, 2}
 
-    wait fn ->
+    wait(fn ->
       page = Store.find_processed(url)
 
       assert page
@@ -58,22 +58,22 @@ defmodule CrawlerTest do
       assert Store.find_processed(linked_url2)
       assert Store.find_processed(linked_url3)
       refute Store.find(linked_url4)
-    end
+    end)
 
-    wait fn ->
+    wait(fn ->
       assert OPQ.info(opts[:queue]) == {:normal, {[], []}, 3}
-    end
+    end)
   end
 
   test ".crawl stopped", %{bypass: bypass, url: url} do
-    url        = "#{url}/stop"
+    url = "#{url}/stop"
     linked_url = "#{url}/stop1"
 
-    Bypass.expect_once bypass, "GET", "/stop", fn (conn) ->
+    Bypass.expect_once(bypass, "GET", "/stop", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html><a href="#{linked_url}">1</a></html>
       """)
-    end
+    end)
 
     {:ok, opts} = Crawler.crawl(url, workers: 1, interval: 500)
 

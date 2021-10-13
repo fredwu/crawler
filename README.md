@@ -1,6 +1,6 @@
 # Crawler
 
-[![Travis](https://img.shields.io/travis/fredwu/crawler.svg)](https://travis-ci.org/fredwu/crawler)
+[![Build Status](https://github.com/fredwu/crawler/actions/workflows/ci.yml/badge.svg)](https://github.com/fredwu/crawler/actions)
 [![CodeBeat](https://codebeat.co/badges/76916047-5b66-466d-91d3-7131a269899a)](https://codebeat.co/projects/github-com-fredwu-crawler-master)
 [![Coverage](https://img.shields.io/coveralls/fredwu/crawler.svg)](https://coveralls.io/github/fredwu/crawler?branch=master)
 [![Module Version](https://img.shields.io/hexpm/v/crawler.svg)](https://hex.pm/packages/crawler)

@@ -60,16 +60,17 @@ defmodule Crawler.Snapper.LinkReplacer do
       {:ok, "<a href='../../../main.domain/dir/page2.html'></a>"}
   """
   def replace_links(body, opts) do
-    new_body = body
-    |> Parser.parse_links(opts, &get_link/2)
-    |> List.flatten()
-    |> Enum.reject(& &1 == nil)
-    |> Enum.reduce(body, &modify_body(opts[:content_type], &2, opts[:url], &1))
+    new_body =
+      body
+      |> Parser.parse_links(opts, &get_link/2)
+      |> List.flatten()
+      |> Enum.reject(&(&1 == nil))
+      |> Enum.reduce(body, &modify_body(opts[:content_type], &2, opts[:url], &1))
 
     {:ok, new_body}
   end
 
-  defp get_link({_, url}, _opts),          do: url
+  defp get_link({_, url}, _opts), do: url
   defp get_link({_, link, _, url}, _opts), do: [link, url]
 
   defp modify_body(content_type, body, current_url, link) do
@@ -83,7 +84,7 @@ defmodule Crawler.Snapper.LinkReplacer do
   defp regexes(content_type, link) do
     case content_type do
       "text/css" -> ~r{((?!url)\(['"]?)#{link}(['"]?\))}
-      _          -> ~r{((?!src|href)=['"])#{link}(['"])}
+      _ -> ~r{((?!src|href)=['"])#{link}(['"])}
     end
   end
 

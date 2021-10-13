@@ -6,10 +6,10 @@ defmodule Crawler.Parser.LinkParser do
   alias __MODULE__.LinkExpander
 
   @tag_attr %{
-    "a"      => "href",
-    "link"   => "href",
+    "a" => "href",
+    "link" => "href",
     "script" => "src",
-    "img"    => "src",
+    "img" => "src"
   }
 
   @doc """
@@ -35,8 +35,7 @@ defmodule Crawler.Parser.LinkParser do
     src = @tag_attr[tag]
 
     with {_tag, link} <- detect_link(src, attrs),
-         element      <- LinkExpander.expand({src, link}, opts)
-    do
+         element <- LinkExpander.expand({src, link}, opts) do
       opts = Map.merge(opts, %{html_tag: tag})
 
       link_handler.(element, opts)
@@ -44,7 +43,7 @@ defmodule Crawler.Parser.LinkParser do
   end
 
   defp detect_link(src, attrs) do
-    Enum.find(attrs, fn(attr) ->
+    Enum.find(attrs, fn attr ->
       Kernel.match?({^src, _link}, attr)
     end)
   end

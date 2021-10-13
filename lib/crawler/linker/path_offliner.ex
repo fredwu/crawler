@@ -54,6 +54,6 @@ defmodule Crawler.Linker.PathOffliner do
     |> transform_link(link)
   end
 
-  defp transform_link(true,  link), do: link
+  defp transform_link(true, link), do: link
   defp transform_link(false, link), do: Path.join(link, "index.html")
 end

@@ -4,10 +4,10 @@ defmodule Crawler.Parser.HtmlParser do
   """
 
   @tag_selectors %{
-    "pages"  => "a",
-    "js"     => "script[type='text/javascript'][src]",
-    "css"    => "link[rel='stylesheet']",
-    "images" => "img",
+    "pages" => "a",
+    "js" => "script[type='text/javascript'][src]",
+    "css" => "link[rel='stylesheet']",
+    "images" => "img"
   }
 
   @doc """

@@ -62,10 +62,10 @@ defmodule Crawler.Snapper do
   """
   def snap(body, opts) do
     {:ok, body} = LinkReplacer.replace_links(body, opts)
-    file_path   = DirMaker.make_dir(opts)
+    file_path = DirMaker.make_dir(opts)
 
     case File.write(file_path, body) do
-      :ok              -> {:ok, opts}
+      :ok -> {:ok, opts}
       {:error, reason} -> {:error, "Cannot write to file #{file_path}, reason: #{reason}"}
     end
   end

@@ -9,7 +9,7 @@ defmodule Crawler.Fetcher.Retrier do
     """
 
     @type fetch_url :: fun
-    @type opts      :: map
+    @type opts :: map
 
     @callback perform(fetch_url, opts) :: term
   end
@@ -33,7 +33,7 @@ defmodule Crawler.Fetcher.Retrier do
 
   defp timeout_value(value) do
     case Kernel.is_integer(value) do
-      true  -> value
+      true -> value
       false -> 5_000
     end
   end

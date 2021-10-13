@@ -49,7 +49,7 @@ defmodule Crawler.Linker.PathBuilder do
   end
 
   defp base_path(url, "/" <> _link, safe), do: PathFinder.find_domain(url, safe)
-  defp base_path(url, _link, safe),        do: PathFinder.find_base_path(url, safe)
+  defp base_path(url, _link, safe), do: PathFinder.find_base_path(url, safe)
 
   defp build(path, link, safe) do
     link
@@ -66,5 +66,5 @@ defmodule Crawler.Linker.PathBuilder do
   end
 
   defp join_path(2, link, _path), do: link
-  defp join_path(1, link, path),  do: Path.join(path, link)
+  defp join_path(1, link, path), do: Path.join(path, link)
 end

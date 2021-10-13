@@ -10,8 +10,8 @@ defmodule Crawler.Scraper do
 
     alias Crawler.Store.Page
 
-    @type url  :: String.t
-    @type body :: String.t
+    @type url :: String.t()
+    @type body :: String.t()
     @type opts :: map
     @type page :: %Page{url: url, body: body, opts: opts}
 

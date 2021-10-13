@@ -7,8 +7,8 @@ defmodule Crawler.Dispatcher.Worker do
   Kicks off `Crawler.crawl_now/1`.
   """
   def start_link(opts) do
-    Task.start_link fn ->
+    Task.start_link(fn ->
       Crawler.crawl_now(opts)
-    end
+    end)
   end
 end

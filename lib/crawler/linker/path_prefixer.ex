@@ -34,11 +34,9 @@ defmodule Crawler.Linker.PathPrefixer do
   end
 
   defp count_depth(string, token \\ "/") do
-    (
-      string
-      |> String.split(token)
-      |> Enum.count()
-    ) - 1
+    (string
+     |> String.split(token)
+     |> Enum.count()) - 1
   end
 
   defp make_prefix(depth) do

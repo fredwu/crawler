@@ -20,12 +20,13 @@ defmodule Crawler.QueueHandler do
   end
 
   defp init_queue(nil, opts) do
-    {:ok, opq} = OPQ.init(
-      worker:   Worker,
-      workers:  opts[:workers],
-      interval: opts[:interval],
-      timeout:  opts[:timeout]
-    )
+    {:ok, opq} =
+      OPQ.init(
+        worker: Worker,
+        workers: opts[:workers],
+        interval: opts[:interval],
+        timeout: opts[:timeout]
+      )
 
     Map.merge(opts, %{queue: opq})
   end

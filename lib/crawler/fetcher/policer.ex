@@ -5,7 +5,7 @@ defmodule Crawler.Fetcher.Policer do
 
   alias Crawler.Store
 
-  @uri_schemes       ["http", "https"]
+  @uri_schemes ["http", "https"]
   @asset_extra_depth 2
 
   @doc """
@@ -57,8 +57,7 @@ defmodule Crawler.Fetcher.Policer do
     with {_, true} <- within_fetch_depth?(opts),
          {_, true} <- acceptable_uri_scheme?(opts),
          {_, true} <- not_fetched_yet?(opts),
-         {_, true} <- perform_url_filtering(opts)
-    do
+         {_, true} <- perform_url_filtering(opts) do
       {:ok, opts}
     else
       {fail_type, _} ->
@@ -70,16 +69,17 @@ defmodule Crawler.Fetcher.Policer do
     max_depths =
       case opts[:html_tag] do
         "a" -> opts[:max_depths]
-        _   -> opts[:max_depths] + @asset_extra_depth
+        _ -> opts[:max_depths] + @asset_extra_depth
       end
 
     {:within_fetch_depth?, opts[:depth] < max_depths}
   end
 
   defp acceptable_uri_scheme?(opts) do
-    scheme = opts[:url]
-    |> String.split("://", parts: 2)
-    |> Kernel.hd()
+    scheme =
+      opts[:url]
+      |> String.split("://", parts: 2)
+      |> Kernel.hd()
 
     {:acceptable_uri_scheme?, Enum.member?(@uri_schemes, scheme)}
   end

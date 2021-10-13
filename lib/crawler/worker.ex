@@ -41,5 +41,5 @@ defmodule Crawler.Worker do
   end
 
   defp mark_processed({:ok, %Page{url: url}}), do: Store.processed(url)
-  defp mark_processed(_),                      do: nil
+  defp mark_processed(_), do: nil
 end
