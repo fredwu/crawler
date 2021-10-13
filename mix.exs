@@ -1,16 +1,20 @@
 defmodule Crawler.Mixfile do
   use Mix.Project
 
+  @source_url "https://github.com/fredwu/crawler"
+  @version    "1.1.1"
+
   def project do
     [
       app:               :crawler,
-      version:           "1.1.1",
+      version:           @version,
       elixir:            "~> 1.5",
       package:           package(),
       name:              "Crawler",
       description:       "A high performance web crawler in Elixir.",
       start_permanent:   Mix.env == :prod,
       deps:              deps(),
+      docs:              docs(),
       test_coverage:     [tool: ExCoveralls],
       preferred_cli_env: [coveralls: :test],
       aliases:           [publish: ["hex.publish", &git_tag/1]],
@@ -43,7 +47,7 @@ defmodule Crawler.Mixfile do
     [
       maintainers: ["Fred Wu"],
       licenses:    ["MIT"],
-      links:       %{"GitHub" => "https://github.com/fredwu/crawler"}
+      links:       %{"GitHub" => @source_url}
     ]
   end
 
@@ -51,5 +55,15 @@ defmodule Crawler.Mixfile do
     System.cmd "git", ["tag", "v" <> Mix.Project.config[:version]]
     System.cmd "git", ["push"]
     System.cmd "git", ["push", "--tags"]
+  end
+
+  defp docs do
+    [
+      extras:     ["CHANGELOG.md": [title: "Changelog"], "README.md": [title: "Overview"]],
+      main:       "readme",
+      source_url: @source_url,
+      source_ref: "v#{@version}",
+      formatters: ["html"]
+    ]
   end
 end
