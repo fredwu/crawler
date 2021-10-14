@@ -44,7 +44,7 @@ defmodule Crawler.Mixfile do
       {:retry, "~> 0.10"},
       {:plug_cowboy, "~> 1.0", only: :test},
       {:ex_doc, ">= 0.0.0", only: :dev},
-      {:dialyxir, "~> 0.5", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.1", only: [:dev, :test], runtime: false},
       {:bypass, "~> 1.0", only: :test},
       {:excoveralls, "~> 0.7", only: :test}
     ]
