@@ -9,8 +9,7 @@ defmodule Crawler.HTTPTest do
     Agent.start_link(fn -> "" end, name: HTTP.DefaultUA)
 
     Bypass.expect_once(bypass, "GET", "/http/default_ua", fn conn ->
-      {_, ua} = Enum.find(conn.req_headers, fn {"user-agent", _} -> true end)
-
+      {_, ua} = Enum.find(conn.req_headers, fn {header, _} -> header == "user-agent" end)
       Agent.update(HTTP.DefaultUA, fn _ -> ua end)
 
       Plug.Conn.resp(conn, 200, "")
@@ -30,7 +29,7 @@ defmodule Crawler.HTTPTest do
     Agent.start_link(fn -> "" end, name: HTTP.CustomUA)
 
     Bypass.expect_once(bypass, "GET", "/http/custom_ua", fn conn ->
-      {_, ua} = Enum.find(conn.req_headers, fn {"user-agent", _} -> true end)
+      {_, ua} = Enum.find(conn.req_headers, fn {header, _} -> header == "user-agent" end)
 
       Agent.update(HTTP.CustomUA, fn _ -> ua end)
 
