@@ -1,6 +1,3 @@
-Code.require_file("test/helpers.ex")
-Code.require_file("test/test_case.ex")
-
 [File.cwd!(), "test", "tmp", "*"]
 |> Path.join()
 |> Path.wildcard()
