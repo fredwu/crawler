@@ -28,8 +28,8 @@ defmodule Crawler.Mixfile do
 
   def application do
     [
-      extra_applications: [:logger],
-      mod: {Crawler, []}
+      mod: {Crawler, []},
+      extra_applications: [:logger]
     ]
   end
 

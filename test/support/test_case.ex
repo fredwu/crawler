@@ -3,7 +3,7 @@ defmodule Crawler.TestCase do
 
   using do
     quote do
-      import Helpers
+      import Crawler.TestHelpers
     end
   end
 
