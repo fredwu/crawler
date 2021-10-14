@@ -25,6 +25,8 @@ A high performance web crawler in Elixir, with worker pooling and rate limiting 
 - Set crawler's user agent.
 - Manually pause/resume/stop the crawler.
 
+See [Hex documentation](https://hexdocs.pm/crawler/).
+
 ## Architecture
 
 Below is a very high level architecture diagram demonstrating how Crawler works.
