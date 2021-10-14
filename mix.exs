@@ -9,6 +9,7 @@ defmodule Crawler.Mixfile do
       app: :crawler,
       version: @version,
       elixir: "~> 1.5",
+      elixirc_paths: elixirc_paths(Mix.env()),
       package: package(),
       name: "Crawler",
       description: "A high performance web crawler in Elixir.",
@@ -31,6 +32,9 @@ defmodule Crawler.Mixfile do
       mod: {Crawler, []}
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 
   defp deps do
     [
