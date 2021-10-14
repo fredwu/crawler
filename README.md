@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/hexpm/l/crawler.svg)](https://github.com/fredwu/crawler/blob/master/LICENSE.md)
 [![Last Updated](https://img.shields.io/github/last-commit/fredwu/crawler.svg)](https://github.com/fredwu/crawler/commits/master)
 
-A high performance web crawler in Elixir, with worker pooling and rate limiting via [OPQ](https://github.com/fredwu/opq).
+A high performance web crawler / scraper in Elixir, with worker pooling and rate limiting via [OPQ](https://github.com/fredwu/opq).
 
 ## Features
 
