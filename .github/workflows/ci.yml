@@ -28,6 +28,4 @@ jobs:
     - name: Install dependencies
       run: mix deps.get
     - name: Run tests
-      env:
-        MIX_ENV: ${{ matrix.env }}
       run: mix test
