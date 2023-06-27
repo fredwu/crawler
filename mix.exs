@@ -39,7 +39,7 @@ defmodule Crawler.Mixfile do
   defp deps do
     [
       {:httpoison, "~> 1.5"},
-      {:floki, "~> 0.25"},
+      {:floki, "~> 0.30"},
       {:opq, "~> 3.0"},
       {:retry, "~> 0.10"},
       {:plug_cowboy, "~> 2.0", only: :test},
