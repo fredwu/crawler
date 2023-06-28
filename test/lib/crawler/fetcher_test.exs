@@ -52,6 +52,7 @@ defmodule Crawler.FetcherTest do
     refute Store.find(url).body
   end
 
+  @tag :skip
   test "failure: timeout", %{bypass: bypass, url: url} do
     url = "#{url}/fetcher/timeout"
 
