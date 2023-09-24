@@ -42,11 +42,11 @@ defmodule CrawlerTest do
     Crawler.pause(opts)
 
     assert opts[:workers] == 3
-    assert OPQ.info(opts[:queue]) == {:paused, {[], []}, 2}
+    assert OPQ.info(opts[:queue]) == {:paused, %OPQ.Queue{data: {[], []}}, 2}
 
     Crawler.resume(opts)
 
-    assert OPQ.info(opts[:queue]) == {:normal, {[], []}, 2}
+    assert OPQ.info(opts[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 2}
 
     wait(fn ->
       page = Store.find_processed(url)
@@ -61,7 +61,7 @@ defmodule CrawlerTest do
     end)
 
     wait(fn ->
-      assert OPQ.info(opts[:queue]) == {:normal, {[], []}, 3}
+      assert OPQ.info(opts[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 3}
     end)
   end
 
