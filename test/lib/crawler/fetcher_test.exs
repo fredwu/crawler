@@ -1,6 +1,8 @@
 defmodule Crawler.FetcherTest do
   use Crawler.TestCase, async: true
 
+  import ExUnit.CaptureLog
+
   alias Crawler.{Fetcher, Fetcher.UrlFilter, Fetcher.Retrier, Fetcher.Modifier, Store}
 
   doctest Fetcher
@@ -52,19 +54,19 @@ defmodule Crawler.FetcherTest do
     refute Store.find(url).body
   end
 
-  @tag :skip
   test "failure: timeout", %{bypass: bypass, url: url} do
     url = "#{url}/fetcher/timeout"
 
-    Bypass.expect_once(bypass, "GET", "/fetcher/timeout", fn conn ->
-      :timer.sleep(10)
+    Bypass.stub(bypass, "GET", "/fetcher/timeout", fn conn ->
+      Process.flag(:trap_exit, true)
+      :timer.sleep(100)
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end)
 
-    wait(fn ->
+    capture_log(fn ->
       fetcher =
         @defaults
-        |> Map.merge(%{url: url, timeout: 5})
+        |> Map.merge(%{url: url, timeout: 50})
         |> Fetcher.fetch()
 
       assert fetcher == {:error, "Failed to fetch #{url}, reason: timeout"}
