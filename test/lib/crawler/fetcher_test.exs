@@ -57,7 +57,7 @@ defmodule Crawler.FetcherTest do
   test "failure: timeout", %{bypass: bypass, url: url} do
     url = "#{url}/fetcher/timeout"
 
-    Bypass.stub(bypass, "GET", "/fetcher/timeout", fn conn ->
+    Bypass.expect_once(bypass, "GET", "/fetcher/timeout", fn conn ->
       Process.flag(:trap_exit, true)
       :timer.sleep(100)
       Plug.Conn.resp(conn, 200, "<html>200</html>")
