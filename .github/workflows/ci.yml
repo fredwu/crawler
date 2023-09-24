@@ -3,22 +3,13 @@ on: [push, pull_request]
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - elixir: 1.15.0
-            otp: 26.0.1
-          - elixir: 1.15.0
-            otp: 25.3.2.2
-          - elixir: 1.14.5
-            otp: 25.3.2.2
     steps:
       - uses: actions/checkout@v3
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
         with:
-          elixir-version: ${{ matrix.elixir }}
-          otp-version: ${{ matrix.otp }}
+          version-type: strict
+          version-file: .tool-versions
       - name: Restore dependencies cache
         uses: actions/cache@v3
         with:
