@@ -3,7 +3,8 @@ defmodule Crawler.Snapper.LinkReplacer do
   Replaces links found in a page so they work offline.
   """
 
-  alias Crawler.{Parser, Linker}
+  alias Crawler.Linker
+  alias Crawler.Parser
 
   @doc """
   Replaces links found in a page so they work offline.

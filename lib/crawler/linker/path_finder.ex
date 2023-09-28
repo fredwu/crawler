@@ -63,7 +63,7 @@ defmodule Crawler.Linker.PathFinder do
     url
     |> find_path(safe)
     |> String.split("/")
-    |> base_path
+    |> base_path()
   end
 
   defp base_path([path]), do: path

@@ -3,7 +3,8 @@ defmodule Crawler.Snapper do
   Stores crawled pages offline.
   """
 
-  alias __MODULE__.{LinkReplacer, DirMaker}
+  alias Crawler.Snapper.DirMaker
+  alias Crawler.Snapper.LinkReplacer
 
   @doc """
   In order to store pages offline, it provides the following functionalities:

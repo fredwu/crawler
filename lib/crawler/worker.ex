@@ -5,7 +5,9 @@ defmodule Crawler.Worker do
 
   require Logger
 
-  alias Crawler.{Fetcher, Store, Store.Page}
+  alias Crawler.Fetcher
+  alias Crawler.Store
+  alias Crawler.Store.Page
 
   use GenServer
 

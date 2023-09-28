@@ -3,8 +3,11 @@ defmodule Crawler.Parser do
   Parses pages and calls a link handler to handle the detected links.
   """
 
-  alias __MODULE__.{Guarder, CssParser, HtmlParser, LinkParser}
   alias Crawler.Dispatcher
+  alias Crawler.Parser.CssParser
+  alias Crawler.Parser.Guarder
+  alias Crawler.Parser.HtmlParser
+  alias Crawler.Parser.LinkParser
 
   require Logger
 

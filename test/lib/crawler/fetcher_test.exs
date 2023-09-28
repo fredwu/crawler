@@ -3,7 +3,11 @@ defmodule Crawler.FetcherTest do
 
   import ExUnit.CaptureLog
 
-  alias Crawler.{Fetcher, Fetcher.UrlFilter, Fetcher.Retrier, Fetcher.Modifier, Store}
+  alias Crawler.Fetcher
+  alias Crawler.Fetcher.Modifier
+  alias Crawler.Fetcher.Retrier
+  alias Crawler.Fetcher.UrlFilter
+  alias Crawler.Store
 
   doctest Fetcher
 

@@ -3,7 +3,10 @@ defmodule Crawler do
   A high performance web crawler in Elixir.
   """
 
-  alias Crawler.{Options, Store, QueueHandler, Worker}
+  alias Crawler.Options
+  alias Crawler.QueueHandler
+  alias Crawler.Store
+  alias Crawler.Worker
 
   use Application
 

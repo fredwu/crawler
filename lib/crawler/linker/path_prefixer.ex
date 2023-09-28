@@ -3,7 +3,8 @@ defmodule Crawler.Linker.PathPrefixer do
   Returns prefixes (`../`s) according to the given URL's structure.
   """
 
-  alias Crawler.Linker.{PathFinder, PathOffliner}
+  alias Crawler.Linker.PathFinder
+  alias Crawler.Linker.PathOffliner
 
   @doc """
   Returns prefixes (`../`s) according to the given URL's structure.

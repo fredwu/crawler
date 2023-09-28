@@ -3,7 +3,10 @@ defmodule Crawler.Linker do
   A set of high level functions for making online and offline URLs and links.
   """
 
-  alias __MODULE__.{PathPrefixer, PathBuilder, PathFinder, PathOffliner}
+  alias Crawler.Linker.PathBuilder
+  alias Crawler.Linker.PathFinder
+  alias Crawler.Linker.PathOffliner
+  alias Crawler.Linker.PathPrefixer
 
   @doc """
   Given the `current_link`, it works out what the offline URL should be for

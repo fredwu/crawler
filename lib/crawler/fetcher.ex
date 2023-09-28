@@ -5,8 +5,12 @@ defmodule Crawler.Fetcher do
 
   require Logger
 
-  alias __MODULE__.{Policer, Recorder, Requester, HeaderPreparer}
-  alias Crawler.{Snapper, Store.Page}
+  alias Crawler.Fetcher.HeaderPreparer
+  alias Crawler.Fetcher.Policer
+  alias Crawler.Fetcher.Recorder
+  alias Crawler.Fetcher.Requester
+  alias Crawler.Snapper
+  alias Crawler.Store.Page
 
   @doc """
   Fetches a URL by:

@@ -8,7 +8,7 @@ defmodule Crawler.Mixfile do
     [
       app: :crawler,
       version: @version,
-      elixir: "~> 1.5",
+      elixir: "~> 1.13",
       elixirc_paths: elixirc_paths(Mix.env()),
       package: package(),
       name: "Crawler",
@@ -42,9 +42,10 @@ defmodule Crawler.Mixfile do
       {:floki, "~> 0.30"},
       {:opq, "~> 4.0"},
       {:retry, "~> 0.10"},
-      {:plug_cowboy, "~> 2.0", only: :test},
+      {:recode, "~> 0.6", only: :dev},
       {:ex_doc, ">= 0.0.0", only: :dev},
       {:dialyxir, "~> 1.1", only: [:dev, :test], runtime: false},
+      {:plug_cowboy, "~> 2.0", only: :test},
       {:bypass, "~> 2.1", only: :test},
       {:excoveralls, "~> 0.7", only: :test}
     ]

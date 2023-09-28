@@ -3,7 +3,8 @@ defmodule Crawler.Snapper.DirMaker do
   Makes a new (nested) folder according to the options provided.
   """
 
-  alias Crawler.{Linker, Linker.PathFinder}
+  alias Crawler.Linker
+  alias Crawler.Linker.PathFinder
 
   @doc """
   Makes a new (nested) folder according to the options provided.
