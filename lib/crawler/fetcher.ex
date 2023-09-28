@@ -29,13 +29,13 @@ defmodule Crawler.Fetcher do
 
   defp fetch_url(opts) do
     case Requester.make(opts) do
-      {:ok, %HTTPoison.Response{status_code: 200, body: body, headers: headers}} ->
+      {:ok, %Tesla.Env{status: 200, body: body, headers: headers}} ->
         fetch_url_200(body, headers, opts)
 
-      {:ok, %HTTPoison.Response{status_code: status_code}} ->
+      {:ok, %Tesla.Env{status: status_code}} ->
         fetch_url_non_200(status_code, opts)
 
-      {:error, %HTTPoison.Error{reason: reason}} ->
+      {:error, reason} ->
         fetch_url_failed(reason, opts)
     end
   end

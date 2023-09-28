@@ -17,7 +17,8 @@ defmodule Crawler do
   """
   def start(_type, _args) do
     children = [
-      {Store, []}
+      {Store, []},
+      {Finch, name: Crawler.Finch}
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Crawler)

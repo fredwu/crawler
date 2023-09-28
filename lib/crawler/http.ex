@@ -1,7 +1,9 @@
 defmodule Crawler.HTTP do
   @moduledoc """
-  Custom HTTPoison base module for potential customisation.
+  Custom Tesla base module for potential customisation.
   """
 
-  use HTTPoison.Base
+  use Tesla
+
+  plug(Tesla.Middleware.FollowRedirects)
 end
