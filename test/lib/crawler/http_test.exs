@@ -5,6 +5,8 @@ defmodule Crawler.HTTPTest do
 
   doctest HTTP
 
+  @moduletag capture_log: true
+
   test "default user agent", %{bypass: bypass, url: url} do
     Agent.start_link(fn -> "" end, name: HTTP.DefaultUA)
 

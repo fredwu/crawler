@@ -5,6 +5,8 @@ defmodule CrawlerTest do
 
   doctest Crawler
 
+  @moduletag capture_log: true
+
   test ".crawl", %{bypass: bypass, url: url} do
     url = "#{url}/crawler"
     linked_url1 = "#{url}/link1"

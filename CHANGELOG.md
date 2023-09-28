@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## master
 
+- [Improved] Memory usage optimisations
+
 ## v1.1.2 [2021-10-14]
 
 - [Improved] Documentation improvements (thanks @kianmeng)

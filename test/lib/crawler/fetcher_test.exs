@@ -7,6 +7,8 @@ defmodule Crawler.FetcherTest do
 
   doctest Fetcher
 
+  @moduletag capture_log: true
+
   defmodule DummyRetrier do
     @behaviour Retrier.Spec
 
@@ -69,7 +71,7 @@ defmodule Crawler.FetcherTest do
         |> Map.merge(%{url: url, timeout: 50})
         |> Fetcher.fetch()
 
-      assert fetcher == {:error, "Failed to fetch #{url}, reason: timeout"}
+      assert fetcher == {:error, "Failed to fetch #{url}, reason: :timeout"}
       refute Store.find(url).body
     end)
   end

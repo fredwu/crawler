@@ -3,6 +3,8 @@ defmodule Crawler.Fetcher do
   Fetches pages and perform tasks on them.
   """
 
+  require Logger
+
   alias __MODULE__.{Policer, Recorder, Requester, HeaderPreparer}
   alias Crawler.{Snapper, Store.Page}
 
@@ -39,16 +41,26 @@ defmodule Crawler.Fetcher do
          {:ok, _} <- Recorder.store_page(body, opts),
          {:ok, opts} <- record_referrer_url(opts),
          {:ok, _} <- snap_page(body, opts) do
+      Logger.info("Fetched #{opts[:url]}")
+
       %Page{url: opts[:url], body: body, opts: opts}
     end
   end
 
   defp fetch_url_non_200(status_code, opts) do
-    {:error, "Failed to fetch #{opts[:url]}, status code: #{status_code}"}
+    msg = "Failed to fetch #{opts[:url]}, status code: #{status_code}"
+
+    Logger.warning(msg)
+
+    {:error, msg}
   end
 
   defp fetch_url_failed(reason, opts) do
-    {:error, "Failed to fetch #{opts[:url]}, reason: #{reason}"}
+    msg = "Failed to fetch #{opts[:url]}, reason: #{inspect(reason)}"
+
+    Logger.warning(msg)
+
+    {:error, msg}
   end
 
   defp record_referrer_url(opts) do

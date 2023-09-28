@@ -3,6 +3,8 @@ defmodule IntegrationTest do
 
   import Plug.Conn
 
+  @moduletag capture_log: true
+
   test "integration", %{
     bypass: bypass,
     url: url,
