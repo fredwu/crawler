@@ -60,4 +60,8 @@ defmodule Crawler.Store do
   def processed(url) do
     {_new, _old} = Registry.update_value(DB, url, &%{&1 | processed: true})
   end
+
+  def all_urls do
+    Registry.select(DB, [{{:"$1", :_, :_}, [], [:"$1"]}])
+  end
 end

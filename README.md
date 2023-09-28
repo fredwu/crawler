@@ -126,7 +126,7 @@ end
 Crawler provides `pause/1`, `resume/1` and `stop/1`, see below.
 
 ```elixir
-{:ok, opts} = Crawler.crawl("http://elixir-lang.org")
+{:ok, opts} = Crawler.crawl("https://elixir-lang.org")
 
 Crawler.pause(opts)
 
@@ -136,6 +136,12 @@ Crawler.stop(opts)
 ```
 
 Please note that when pausing Crawler, you would need to set a large enough `:timeout` (or even set it to `:infinity`) otherwise parser would timeout due to unprocessed links.
+
+## Find All Scraped URLs
+
+```elixir
+Crawler.Store.all_urls() # => ["https://elixir-lang.org", "https://google.com", ...]
+```
 
 ## API Reference
 

@@ -60,6 +60,14 @@ defmodule CrawlerTest do
       assert Store.find_processed(linked_url2)
       assert Store.find_processed(linked_url3)
       refute Store.find(linked_url4)
+
+      urls = Crawler.Store.all_urls()
+
+      assert Enum.member?(urls, url)
+      assert Enum.member?(urls, linked_url1)
+      assert Enum.member?(urls, linked_url2)
+      assert Enum.member?(urls, linked_url3)
+      refute Enum.member?(urls, linked_url4)
     end)
 
     wait(fn ->
