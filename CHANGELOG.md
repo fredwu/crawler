@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## master
 
+## v1.2.0 [2023-09-29]
+
 - [Added] `Crawler.Store.all_urls/0` to find all scraped URLs
 - [Improved] Memory usage optimisations
 

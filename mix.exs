@@ -2,7 +2,7 @@ defmodule Crawler.Mixfile do
   use Mix.Project
 
   @source_url "https://github.com/fredwu/crawler"
-  @version "1.1.2"
+  @version "1.2.0"
 
   def project do
     [
