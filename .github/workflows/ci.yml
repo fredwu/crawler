@@ -1,5 +1,5 @@
 name: CI
-on: [push, pull_request]
+on: push
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -11,6 +11,7 @@ jobs:
           version-type: strict
           version-file: .tool-versions
       - name: Restore dependencies cache
+        id: mix-cache
         uses: actions/cache@v3
         with:
           path: |
@@ -19,6 +20,10 @@ jobs:
           key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
           restore-keys: ${{ runner.os }}-mix-
       - name: Install dependencies
-        run: mix deps.get
+        if: steps.mix-cache.outputs.cache-hit != 'true'
+        run: |
+          mix local.rebar --force
+          mix local.hex --force
+          mix deps.get
       - name: Run tests
         run: mix test
