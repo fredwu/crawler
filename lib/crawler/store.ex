@@ -12,7 +12,7 @@ defmodule Crawler.Store do
   def start_link(opts) do
     children = [
       {Registry, keys: :unique, name: DB},
-      {Counter, name: Counter}
+      Counter
     ]
 
     Supervisor.start_link(
@@ -74,26 +74,14 @@ defmodule Crawler.Store do
   end
 
   def ops_inc do
-    __MODULE__
-    |> Supervisor.which_children()
-    |> Enum.find(&Kernel.match?({Counter, _pid, _type, [Counter]}, &1))
-    |> elem(1)
-    |> Counter.inc()
+    Counter.inc()
   end
 
   def ops_count do
-    __MODULE__
-    |> Supervisor.which_children()
-    |> Enum.find(&Kernel.match?({Counter, _pid, _type, [Counter]}, &1))
-    |> elem(1)
-    |> Counter.count()
+    Counter.value()
   end
 
   def ops_reset do
-    __MODULE__
-    |> Supervisor.which_children()
-    |> Enum.find(&Kernel.match?({Counter, _pid, _type, [Counter]}, &1))
-    |> elem(1)
-    |> Counter.reset()
+    Counter.reset()
   end
 end

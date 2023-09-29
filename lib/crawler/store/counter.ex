@@ -1,36 +1,19 @@
 defmodule Crawler.Store.Counter do
-  use GenServer
+  use Agent
 
-  def inc(pid) when is_pid(pid) do
-    GenServer.call(pid, :inc)
+  def start_link(_args) do
+    Agent.start_link(fn -> 0 end, name: __MODULE__)
   end
 
-  def count(pid) when is_pid(pid) do
-    GenServer.call(pid, :count)
+  def value do
+    Agent.get(__MODULE__, & &1)
   end
 
-  def reset(pid) when is_pid(pid) do
-    GenServer.call(pid, :reset)
+  def inc do
+    Agent.update(__MODULE__, &(&1 + 1))
   end
 
-  def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, 0, opts)
-  end
-
-  def init(args) do
-    {:ok, args}
-  end
-
-  def handle_call(:inc, _from, state) do
-    count = state + 1
-    {:reply, count, count}
-  end
-
-  def handle_call(:count, _from, state) do
-    {:reply, state, state}
-  end
-
-  def handle_call(:reset, _from, _state) do
-    {:reply, 0, 0}
+  def reset do
+    Agent.update(__MODULE__, fn _ -> 0 end)
   end
 end
