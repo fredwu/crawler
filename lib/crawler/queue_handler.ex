@@ -20,15 +20,25 @@ defmodule Crawler.QueueHandler do
   end
 
   defp init_queue(nil, opts) do
-    {:ok, opq} =
-      OPQ.init(
-        worker: Worker,
-        workers: opts[:workers],
-        interval: opts[:interval],
-        timeout: opts[:timeout]
+    {:ok, _} =
+      DynamicSupervisor.start_child(
+        Crawler.QueueSupervisor,
+        {OPQ,
+         [
+           worker: Worker,
+           workers: opts[:workers],
+           interval: opts[:interval],
+           timeout: opts[:timeout]
+         ]}
       )
 
-    Map.merge(opts, %{queue: opq})
+    pid =
+      Crawler.QueueSupervisor
+      |> Supervisor.which_children()
+      |> List.last()
+      |> elem(1)
+
+    Map.merge(opts, %{queue: pid})
   end
 
   defp init_queue(_queue, opts), do: opts

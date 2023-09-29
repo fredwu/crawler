@@ -3,9 +3,9 @@ defmodule CrawlerTest do
 
   alias Crawler.Store
 
-  doctest Crawler
-
   @moduletag capture_log: true
+
+  doctest Crawler
 
   test ".crawl", %{bypass: bypass, url: url} do
     Store.ops_reset()

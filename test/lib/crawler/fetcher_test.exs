@@ -7,9 +7,9 @@ defmodule Crawler.FetcherTest do
   alias Crawler.Fetcher.UrlFilter
   alias Crawler.Store
 
-  doctest Fetcher
-
   @moduletag capture_log: true
+
+  doctest Fetcher
 
   defmodule DummyRetrier do
     @behaviour Retrier.Spec

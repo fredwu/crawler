@@ -3,9 +3,9 @@ defmodule Crawler.HTTPTest do
 
   alias Crawler.HTTP
 
-  doctest HTTP
-
   @moduletag capture_log: true
+
+  doctest HTTP
 
   test "default user agent", %{bypass: bypass, url: url} do
     Agent.start_link(fn -> "" end, name: HTTP.DefaultUA)
