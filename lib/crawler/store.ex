@@ -4,16 +4,9 @@ defmodule Crawler.Store do
   """
 
   alias Crawler.Store.DB
+  alias Crawler.Store.Page
 
   use GenServer
-
-  defmodule Page do
-    @moduledoc """
-    An internal struct for keeping the url and content of a crawled page.
-    """
-
-    defstruct [:url, :body, :opts, :processed]
-  end
 
   def start_link(arg) do
     GenServer.start_link(__MODULE__, arg, name: __MODULE__)
