@@ -73,10 +73,6 @@ defmodule Crawler.Fetcher.Policer do
   defp perform_url_filtering(_opts), do: {:perform_url_filtering, true}
 
   defp police_error(fail_type, opts) do
-    msg = "Fetch failed '#{fail_type}', with opts: #{Kernel.inspect(opts)}."
-
-    Logger.warning(msg)
-
-    {:error, msg}
+    {:error, "Fetch failed '#{fail_type}', with opts: #{Kernel.inspect(opts)}."}
   end
 end
