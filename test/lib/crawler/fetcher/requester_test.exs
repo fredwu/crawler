@@ -3,5 +3,7 @@ defmodule Crawler.Fetcher.RequesterTest do
 
   alias Crawler.Fetcher.Requester
 
+  @moduletag capture_log: true
+
   doctest Requester
 end

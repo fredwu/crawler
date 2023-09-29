@@ -43,14 +43,17 @@ defmodule CrawlerTest do
 
     {:ok, opts} = Crawler.crawl(url, max_depths: 3, workers: 3, interval: 100, store: Store)
 
+    assert Crawler.running?(opts)
+
     Crawler.pause(opts)
 
+    refute Crawler.running?(opts)
+
     assert opts[:workers] == 3
-    assert OPQ.info(opts[:queue]) == {:paused, %OPQ.Queue{data: {[], []}}, 2}
 
     Crawler.resume(opts)
 
-    assert OPQ.info(opts[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 2}
+    assert Crawler.running?(opts)
 
     wait(fn ->
       assert Store.ops_count() == 4
@@ -74,6 +77,7 @@ defmodule CrawlerTest do
     end)
 
     wait(fn ->
+      refute Crawler.running?(opts)
       assert OPQ.info(opts[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 3}
     end)
   end

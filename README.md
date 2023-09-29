@@ -130,11 +130,19 @@ Crawler provides `pause/1`, `resume/1` and `stop/1`, see below.
 ```elixir
 {:ok, opts} = Crawler.crawl("https://elixir-lang.org")
 
+Crawler.running?(opts) # => true
+
 Crawler.pause(opts)
+
+Crawler.running?(opts) # => false
 
 Crawler.resume(opts)
 
+Crawler.running?(opts) # => true
+
 Crawler.stop(opts)
+
+Crawler.running?(opts) # => false
 ```
 
 Please note that when pausing Crawler, you would need to set a large enough `:timeout` (or even set it to `:infinity`) otherwise parser would timeout due to unprocessed links.

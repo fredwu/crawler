@@ -17,7 +17,7 @@ defmodule Crawler do
   """
   def start(_type, _args) do
     children = [
-      {Store, []},
+      Store,
       {DynamicSupervisor, name: Crawler.QueueSupervisor, strategy: :one_for_one}
     ]
 
@@ -61,6 +61,20 @@ defmodule Crawler do
   Resumes the crawler after it was paused.
   """
   def resume(opts), do: OPQ.resume(opts[:queue])
+
+  @doc """
+  Checks whether the crawler is still crawling.
+  """
+  def running?(opts) do
+    Process.sleep(10)
+
+    cond do
+      opts[:queue] |> OPQ.info() |> elem(0) == :paused -> false
+      Store.ops_count() == 0 -> true
+      OPQ.queue(opts[:queue]) |> Enum.any?() -> true
+      true -> false
+    end
+  end
 
   @doc """
   Crawls immediately, this is used by `Crawler.Dispatcher.Worker.start_link/1`.
