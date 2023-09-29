@@ -24,6 +24,7 @@ defmodule Crawler.FetcherTest do
     url_filter: UrlFilter,
     modifier: Modifier,
     retrier: DummyRetrier,
+    store: Store,
     html_tag: "a"
   }
 

@@ -26,10 +26,23 @@ defmodule Crawler.Fetcher.Recorder do
   end
 
   @doc """
-  Stores page data in `Crawler.Store.DB` for internal or external consumption.
+  Stores page data in `Crawler.Store.DB` for internal or external consumption, if enabled.
+
+  ## Examples
+
+      iex> Recorder.maybe_store_page("body", %{store: nil})
+      {:ok, nil}
+
+      iex> Recorder.record(url: "url", depth: 2)
+      iex> Recorder.maybe_store_page("body", %{store: Store, url: "url"})
+      {:ok, {%Page{url: "url", body: "body", opts: %{store: Store, url: "url"}}, %Page{url: "url", body: nil}}}
   """
-  def store_page(body, opts) do
-    {:ok, Store.add_page_data(opts[:url], body, opts)}
+  def maybe_store_page(_body, %{store: nil} = _opts) do
+    {:ok, nil}
+  end
+
+  def maybe_store_page(body, opts) do
+    {:ok, opts[:store].add_page_data(opts[:url], body, opts)}
   end
 
   defp store_url(opts) do

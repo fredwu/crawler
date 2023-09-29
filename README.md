@@ -49,21 +49,22 @@ There are several ways to access the crawled page data:
 
 ## Configurations
 
-| Option        | Type    | Default Value               | Description                                                                                                                 |
-| ------------- | ------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `:assets`     | list    | `[]`                        | Whether to fetch any asset files, available options: `"css"`, `"js"`, `"images"`.                                           |
-| `:save_to`    | string  | `nil`                       | When provided, the path for saving crawled pages.                                                                           |
-| `:workers`    | integer | `10`                        | Maximum number of concurrent workers for crawling.                                                                          |
-| `:interval`   | integer | `0`                         | Rate limit control - number of milliseconds before crawling more pages, defaults to `0` which is effectively no rate limit. |
-| `:max_depths` | integer | `3`                         | Maximum nested depth of pages to crawl.                                                                                     |
-| `:timeout`    | integer | `5000`                      | Timeout value for fetching a page, in ms. Can also be set to `:infinity`, useful when combined with `Crawler.pause/1`.      |
-| `:user_agent` | string  | `Crawler/x.x.x (...)`       | User-Agent value sent by the fetch requests.                                                                                |
-| `:url_filter` | module  | `Crawler.Fetcher.UrlFilter` | Custom URL filter, useful for restricting crawlable domains, paths or content types.                                        |
-| `:retrier`    | module  | `Crawler.Fetcher.Retrier`   | Custom fetch retrier, useful for retrying failed crawls.                                                                    |
-| `:modifier`   | module  | `Crawler.Fetcher.Modifier`  | Custom modifier, useful for adding custom request headers or options.                                                       |
-| `:scraper`    | module  | `Crawler.Scraper`           | Custom scraper, useful for scraping content as soon as the parser parses it.                                                |
-| `:parser`     | module  | `Crawler.Parser`            | Custom parser, useful for handling parsing differently or to add extra functionalities.                                     |
-| `:encode_uri` | boolean | `false`                     | When set to `true` apply the `URI.encode` to the URL to be crawled.                                                         |
+| Option        | Type    | Default Value               | Description                                                                                                                                                                                            |
+| ------------- | ------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `:assets`     | list    | `[]`                        | Whether to fetch any asset files, available options: `"css"`, `"js"`, `"images"`.                                                                                                                      |
+| `:save_to`    | string  | `nil`                       | When provided, the path for saving crawled pages.                                                                                                                                                      |
+| `:workers`    | integer | `10`                        | Maximum number of concurrent workers for crawling.                                                                                                                                                     |
+| `:interval`   | integer | `0`                         | Rate limit control - number of milliseconds before crawling more pages, defaults to `0` which is effectively no rate limit.                                                                            |
+| `:max_depths` | integer | `3`                         | Maximum nested depth of pages to crawl.                                                                                                                                                                |
+| `:timeout`    | integer | `5000`                      | Timeout value for fetching a page, in ms. Can also be set to `:infinity`, useful when combined with `Crawler.pause/1`.                                                                                 |
+| `:store`      | module  | `nil`                       | Module for storing the crawled page data and crawling metadata, defaults to `nil`. You can also set it to `Crawler.Store` or your own, see `Crawler.Store.add_page_data/3` for implementation details. |
+| `:user_agent` | string  | `Crawler/x.x.x (...)`       | User-Agent value sent by the fetch requests.                                                                                                                                                           |
+| `:url_filter` | module  | `Crawler.Fetcher.UrlFilter` | Custom URL filter, useful for restricting crawlable domains, paths or content types.                                                                                                                   |
+| `:retrier`    | module  | `Crawler.Fetcher.Retrier`   | Custom fetch retrier, useful for retrying failed crawls.                                                                                                                                               |
+| `:modifier`   | module  | `Crawler.Fetcher.Modifier`  | Custom modifier, useful for adding custom request headers or options.                                                                                                                                  |
+| `:scraper`    | module  | `Crawler.Scraper`           | Custom scraper, useful for scraping content as soon as the parser parses it.                                                                                                                           |
+| `:parser`     | module  | `Crawler.Parser`            | Custom parser, useful for handling parsing differently or to add extra functionalities.                                                                                                                |
+| `:encode_uri` | boolean | `false`                     | When set to `true` apply the `URI.encode` to the URL to be crawled.                                                                                                                                    |
 
 ## Custom Modules
 

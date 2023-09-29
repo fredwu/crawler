@@ -11,6 +11,7 @@ defmodule Crawler.Options do
   @interval 0
   @max_depths 3
   @timeout 5_000
+  @store nil
   @user_agent "Crawler/#{Mixfile.project()[:version]} (https://github.com/fredwu/crawler)"
   @url_filter Crawler.Fetcher.UrlFilter
   @retrier Crawler.Fetcher.Retrier
@@ -44,6 +45,7 @@ defmodule Crawler.Options do
         interval: interval(),
         max_depths: max_depths(),
         timeout: timeout(),
+        store: store(),
         user_agent: user_agent(),
         url_filter: url_filter(),
         retrier: retrier(),
@@ -84,6 +86,7 @@ defmodule Crawler.Options do
   defp interval, do: Application.get_env(:crawler, :interval, @interval)
   defp max_depths, do: Application.get_env(:crawler, :max_depths, @max_depths)
   defp timeout, do: Application.get_env(:crawler, :timeout, @timeout)
+  defp store, do: Application.get_env(:crawler, :store, @store)
   defp user_agent, do: Application.get_env(:crawler, :user_agent, @user_agent)
   defp url_filter, do: Application.get_env(:crawler, :url_filter, @url_filter)
   defp retrier, do: Application.get_env(:crawler, :retrier, @retrier)

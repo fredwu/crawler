@@ -42,7 +42,7 @@ defmodule Crawler.Fetcher do
 
   defp fetch_url_200(body, headers, opts) do
     with opts <- HeaderPreparer.prepare(headers, opts),
-         {:ok, _} <- Recorder.store_page(body, opts),
+         {:ok, _} <- Recorder.maybe_store_page(body, opts),
          {:ok, opts} <- record_referrer_url(opts),
          {:ok, _} <- snap_page(body, opts) do
       Logger.info("Fetched #{opts[:url]}")

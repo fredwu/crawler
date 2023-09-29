@@ -39,7 +39,7 @@ defmodule CrawlerTest do
       """)
     end)
 
-    {:ok, opts} = Crawler.crawl(url, max_depths: 3, workers: 3, interval: 100)
+    {:ok, opts} = Crawler.crawl(url, max_depths: 3, workers: 3, interval: 100, store: Store)
 
     Crawler.pause(opts)
 
@@ -51,10 +51,7 @@ defmodule CrawlerTest do
     assert OPQ.info(opts[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 2}
 
     wait(fn ->
-      page = Store.find_processed(url)
-
-      assert page
-      assert page.opts[:workers] == 3
+      assert %Store.Page{url: ^url, opts: %{workers: 3}} = Store.find_processed(url)
 
       assert Store.find_processed(linked_url1)
       assert Store.find_processed(linked_url2)
@@ -72,6 +69,24 @@ defmodule CrawlerTest do
 
     wait(fn ->
       assert OPQ.info(opts[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 3}
+    end)
+  end
+
+  test ".crawl without a store", %{bypass: bypass, url: url} do
+    url = "#{url}/crawler_without_store"
+
+    Bypass.expect_once(bypass, "GET", "/crawler_without_store", fn conn ->
+      Plug.Conn.resp(conn, 200, "200")
+    end)
+
+    {:ok, opts} = Crawler.crawl(url, max_depths: 1, workers: 1, interval: 100)
+
+    wait(fn ->
+      assert %Store.Page{url: ^url, body: nil, opts: nil} = Store.find_processed(url)
+    end)
+
+    wait(fn ->
+      assert OPQ.info(opts[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 1}
     end)
   end
 
