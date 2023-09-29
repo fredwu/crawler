@@ -1,8 +1,6 @@
 defmodule Crawler.FetcherTest do
   use Crawler.TestCase, async: true
 
-  import ExUnit.CaptureLog
-
   alias Crawler.Fetcher
   alias Crawler.Fetcher.Modifier
   alias Crawler.Fetcher.Retrier
@@ -70,15 +68,13 @@ defmodule Crawler.FetcherTest do
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end)
 
-    capture_log(fn ->
-      fetcher =
-        @defaults
-        |> Map.merge(%{url: url, timeout: 50})
-        |> Fetcher.fetch()
+    fetcher =
+      @defaults
+      |> Map.merge(%{url: url, timeout: 50})
+      |> Fetcher.fetch()
 
-      assert fetcher == {:error, "Failed to fetch #{url}, reason: :timeout"}
-      refute Store.find(url).body
-    end)
+    assert fetcher == {:error, "Failed to fetch #{url}, reason: :timeout"}
+    refute Store.find(url).body
   end
 
   test "failure: retries", %{bypass: bypass, url: url} do
