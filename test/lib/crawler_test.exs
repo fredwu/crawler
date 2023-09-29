@@ -8,6 +8,8 @@ defmodule CrawlerTest do
   @moduletag capture_log: true
 
   test ".crawl", %{bypass: bypass, url: url} do
+    Store.ops_reset()
+
     url = "#{url}/crawler"
     linked_url1 = "#{url}/link1"
     linked_url2 = "#{url}/link2"
@@ -51,6 +53,10 @@ defmodule CrawlerTest do
     assert OPQ.info(opts[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 2}
 
     wait(fn ->
+      assert Store.ops_count() == 4
+    end)
+
+    wait(fn ->
       assert %Store.Page{url: ^url, opts: %{workers: 3}} = Store.find_processed(url)
 
       assert Store.find_processed(linked_url1)
@@ -87,6 +93,53 @@ defmodule CrawlerTest do
 
     wait(fn ->
       assert OPQ.info(opts[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 1}
+    end)
+  end
+
+  test ".crawl with max_pages", %{bypass: bypass, url: url} do
+    Store.ops_reset()
+
+    url = "#{url}/crawler_with_max_pages"
+    linked_url1 = "#{url}/link1"
+    linked_url2 = "#{url}/link2"
+    linked_url3 = "#{url}/link3"
+    linked_url4 = "#{url}/link4"
+
+    Bypass.expect_once(bypass, "GET", "/crawler_with_max_pages", fn conn ->
+      Plug.Conn.resp(conn, 200, """
+        <html><a href="#{linked_url1}">1</a></html>
+        <html><a href="#{linked_url2}">2</a></html>
+      """)
+    end)
+
+    Bypass.expect_once(bypass, "GET", "/crawler_with_max_pages/link1", fn conn ->
+      Plug.Conn.resp(conn, 200, """
+        <html><a id="link2" href="#{linked_url2}" target="_blank">2</a></html>
+      """)
+    end)
+
+    Bypass.expect_once(bypass, "GET", "/crawler_with_max_pages/link2", fn conn ->
+      Plug.Conn.resp(conn, 200, """
+        <html><a href="#{linked_url3}">3</a></html>
+      """)
+    end)
+
+    {:ok, opts} = Crawler.crawl(url, max_depths: 3, workers: 10, max_pages: 3, interval: 100)
+
+    wait(fn ->
+      assert Store.ops_count() == 3
+    end)
+
+    wait(fn ->
+      assert Store.find_processed(url)
+      assert Store.find_processed(linked_url1)
+      assert Store.find_processed(linked_url2)
+      refute Store.find(linked_url3)
+      refute Store.find(linked_url4)
+    end)
+
+    wait(fn ->
+      assert OPQ.info(opts[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 10}
     end)
   end
 

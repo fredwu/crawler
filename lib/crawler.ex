@@ -32,11 +32,15 @@ defmodule Crawler do
   `Crawler.crawl_now/1`.
   """
   def crawl(url, opts \\ []) do
-    opts
-    |> Enum.into(%{})
-    |> Options.assign_defaults()
-    |> Options.assign_url(url)
-    |> QueueHandler.enqueue()
+    opts =
+      opts
+      |> Enum.into(%{})
+      |> Options.assign_defaults()
+      |> Options.assign_url(url)
+
+    if Store.ops_count() < opts[:max_pages] do
+      QueueHandler.enqueue(opts)
+    end
   end
 
   @doc """

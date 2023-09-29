@@ -3,6 +3,8 @@ defmodule Crawler.Snapper do
   Stores crawled pages offline.
   """
 
+  require Logger
+
   alias Crawler.Snapper.DirMaker
   alias Crawler.Snapper.LinkReplacer
 
@@ -66,8 +68,15 @@ defmodule Crawler.Snapper do
     file_path = DirMaker.make_dir(opts)
 
     case File.write(file_path, body) do
-      :ok -> {:ok, opts}
-      {:error, reason} -> {:error, "Cannot write to file #{file_path}, reason: #{reason}"}
+      :ok ->
+        {:ok, opts}
+
+      {:error, reason} ->
+        msg = "Cannot write to file #{file_path}, reason: #{reason}"
+
+        Logger.error(msg)
+
+        {:error, msg}
     end
   end
 end

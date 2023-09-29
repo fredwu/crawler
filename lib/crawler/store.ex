@@ -3,21 +3,28 @@ defmodule Crawler.Store do
   An internal data store for information related to each crawl.
   """
 
+  alias Crawler.Store.Counter
   alias Crawler.Store.DB
   alias Crawler.Store.Page
 
   use GenServer
 
-  def start_link(arg) do
-    GenServer.start_link(__MODULE__, arg, name: __MODULE__)
+  def start_link(opts) do
+    children = [
+      {Registry, keys: :unique, name: DB},
+      {Counter, name: Counter}
+    ]
+
+    Supervisor.start_link(
+      children,
+      [strategy: :one_for_one, name: __MODULE__] ++ opts
+    )
   end
 
   @doc """
   Initialises a new `Registry` named `Crawler.Store.DB`.
   """
   def init(args) do
-    Registry.start_link(keys: :unique, name: DB)
-
     {:ok, args}
   end
 
@@ -64,5 +71,29 @@ defmodule Crawler.Store do
 
   def all_urls do
     Registry.select(DB, [{{:"$1", :_, :_}, [], [:"$1"]}])
+  end
+
+  def ops_inc do
+    __MODULE__
+    |> Supervisor.which_children()
+    |> Enum.find(&Kernel.match?({Counter, _pid, _type, [Counter]}, &1))
+    |> elem(1)
+    |> Counter.inc()
+  end
+
+  def ops_count do
+    __MODULE__
+    |> Supervisor.which_children()
+    |> Enum.find(&Kernel.match?({Counter, _pid, _type, [Counter]}, &1))
+    |> elem(1)
+    |> Counter.count()
+  end
+
+  def ops_reset do
+    __MODULE__
+    |> Supervisor.which_children()
+    |> Enum.find(&Kernel.match?({Counter, _pid, _type, [Counter]}, &1))
+    |> elem(1)
+    |> Counter.reset()
   end
 end
