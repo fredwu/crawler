@@ -21,7 +21,7 @@ defmodule Crawler.Worker do
   Runs the worker that casts data to itself to kick off the crawl workflow.
   """
   def run(opts) do
-    Logger.info("Running worker with opts: #{inspect(opts)}")
+    Logger.debug("Running worker with opts: #{inspect(opts)}")
 
     {:ok, pid} = GenServer.start_link(__MODULE__, opts, hibernate_after: 0)
 
@@ -35,7 +35,7 @@ defmodule Crawler.Worker do
   - `Crawler.Parser.parse/1` (or a custom parser)
   """
   def handle_cast(_req, state) do
-    Logger.info("Running worker with opts: #{inspect(state)}")
+    Logger.debug("Running worker with opts: #{inspect(state)}")
 
     state
     |> Fetcher.fetch()

@@ -45,7 +45,7 @@ defmodule Crawler.Fetcher do
          {:ok, _} <- Recorder.maybe_store_page(body, opts),
          {:ok, opts} <- record_referrer_url(opts),
          {:ok, _} <- snap_page(body, opts) do
-      Logger.info("Fetched #{opts[:url]}")
+      Logger.debug("Fetched #{opts[:url]}")
 
       %Page{url: opts[:url], body: body, opts: opts}
     end
@@ -54,17 +54,17 @@ defmodule Crawler.Fetcher do
   defp fetch_url_non_200(status_code, opts) do
     msg = "Failed to fetch #{opts[:url]}, status code: #{status_code}"
 
-    Logger.warning(msg)
+    Logger.debug(msg)
 
-    {:error, msg}
+    {:warn, msg}
   end
 
   defp fetch_url_failed(reason, opts) do
     msg = "Failed to fetch #{opts[:url]}, reason: #{inspect(reason)}"
 
-    Logger.warning(msg)
+    Logger.debug(msg)
 
-    {:error, msg}
+    {:warn, msg}
   end
 
   defp record_referrer_url(opts) do

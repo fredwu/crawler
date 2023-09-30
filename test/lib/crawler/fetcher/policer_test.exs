@@ -26,7 +26,7 @@ defmodule Crawler.Fetcher.PolicerTest do
     Store.ops_inc()
     Store.ops_inc()
 
-    assert {:error, "Fetch failed 'within_max_pages?', with opts: " <> _} =
+    assert {:warn, "Fetch failed check 'within_max_pages?', with opts: " <> _} =
              Policer.police(%{max_pages: 1})
   end
 
@@ -35,7 +35,7 @@ defmodule Crawler.Fetcher.PolicerTest do
   end
 
   test "max_depths error" do
-    assert {:error, "Fetch failed 'within_fetch_depth?', with opts: " <> _} =
+    assert {:warn, "Fetch failed check 'within_fetch_depth?', with opts: " <> _} =
              Policer.police(%{
                depth: 2,
                max_depths: 2,
@@ -58,14 +58,14 @@ defmodule Crawler.Fetcher.PolicerTest do
   end
 
   test "uri_scheme error" do
-    assert {:error, "Fetch failed 'acceptable_uri_scheme?', with opts: " <> _} =
+    assert {:warn, "Fetch failed check 'acceptable_uri_scheme?', with opts: " <> _} =
              Policer.police(%{url: "ftp://hello.world"})
   end
 
   test "fetched error" do
     Crawler.Store.add("http://policer/exist/")
 
-    assert {:error, "Fetch failed 'not_fetched_yet?', with opts: " <> _} =
+    assert {:warn, "Fetch failed check 'not_fetched_yet?', with opts: " <> _} =
              Policer.police(%{url: "http://policer/exist/"})
   end
 end

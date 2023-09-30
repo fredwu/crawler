@@ -2,6 +2,8 @@
 
 ## master
 
+- [Improved] Logger will now log entries as `debug` or `warn`
+
 ## v1.3.0 [2023-09-30]
 
 - [Added] `:store` option, defaults to `nil` to save memory usage
