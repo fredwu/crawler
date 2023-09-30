@@ -153,6 +153,20 @@ Please note that when pausing Crawler, you would need to set a large enough `:ti
 Crawler.Store.all_urls() # => ["https://elixir-lang.org", "https://google.com", ...]
 ```
 
+## Examples
+
+### Google Search + Github
+
+This example performs a Google search, then scrapes the results to find Github projects and output their name and description.
+
+See the [source code](examples/google_search.ex).
+
+You can run the example by cloning the repo and run the command:
+
+```shell
+mix run -e "Crawler.Example.GoogleSearch.run()"
+```
+
 ## API Reference
 
 Please see https://hexdocs.pm/crawler.
