@@ -29,7 +29,7 @@ defmodule Crawler.Example.GoogleSearch do
   alias Crawler.Example.GoogleSearch.Scraper
   alias Crawler.Example.GoogleSearch.UrlFilter
 
-  @url "https://www.google.com/search"
+  @site_url "https://www.google.com/search?"
   @search_term "github web scrapers in Elixir"
 
   def run do
@@ -39,7 +39,7 @@ defmodule Crawler.Example.GoogleSearch do
 
     {:ok, opts} =
       Crawler.crawl(
-        url(),
+        search_url(),
         workers: 2,
         max_depths: 2,
         max_pages: 10,
@@ -59,8 +59,8 @@ defmodule Crawler.Example.GoogleSearch do
     end)
   end
 
-  defp url do
-    @url <> "?" <> URI.encode_query(%{"q" => @search_term})
+  defp search_url do
+    @site_url <> URI.encode_query(%{"q" => @search_term})
   end
 
   defp wait(fun), do: wait(5_000, fun)
