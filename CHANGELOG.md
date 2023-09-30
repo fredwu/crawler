@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## master
 
+## v1.3.0 [2023-09-30]
+
 - [Added] `:store` option, defaults to `nil` to save memory usage
 - [Added] `:max_pages` option
 - [Added] `Crawler.running?/1` to check whether Crawler is running
