@@ -70,7 +70,7 @@ defmodule Crawler do
 
     cond do
       opts[:queue] |> OPQ.info() |> elem(0) == :paused -> false
-      Store.ops_count() == 0 -> true
+      Store.ops_count() <= 1 -> true
       OPQ.queue(opts[:queue]) |> Enum.any?() -> true
       true -> false
     end
