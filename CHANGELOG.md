@@ -2,6 +2,8 @@
 
 ## master
 
+## v1.4.0 [2023-10-07]
+
 - [Added] Allow multiple instances of Crawler sharing the same queue
 - [Improved] Logger will now log entries as `debug` or `warn`
 
