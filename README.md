@@ -66,6 +66,7 @@ There are several ways to access the crawled page data:
 | `:scraper`    | module  | `Crawler.Scraper`           | Custom scraper, useful for scraping content as soon as the parser parses it.                                                                                                                           |
 | `:parser`     | module  | `Crawler.Parser`            | Custom parser, useful for handling parsing differently or to add extra functionalities.                                                                                                                |
 | `:encode_uri` | boolean | `false`                     | When set to `true` apply the `URI.encode` to the URL to be crawled.                                                                                                                                    |
+| `:queue`      | pid     | `nil`                       | You can pass in an `OPQ` pid so that multiple crawlers can share the same queue.                                                                                                                       |
 
 ## Custom Modules
 
@@ -146,6 +147,17 @@ Crawler.running?(opts) # => false
 ```
 
 Please note that when pausing Crawler, you would need to set a large enough `:timeout` (or even set it to `:infinity`) otherwise parser would timeout due to unprocessed links.
+
+## Multiple Crawlers
+
+It is possible to start multiple crawlers sharing the same queue.
+
+```elixir
+{:ok, queue} = OPQ.init(worker: Crawler.Dispatcher.Worker, workers: 2)
+
+Crawler.crawl("https://elixir-lang.org", queue: queue)
+Crawler.crawl("https://github.com", queue: queue)
+```
 
 ## Find All Scraped URLs
 

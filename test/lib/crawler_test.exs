@@ -147,6 +147,62 @@ defmodule CrawlerTest do
     end)
   end
 
+  test ".crawl with an existing queue", %{bypass: bypass, url: url} do
+    Store.ops_reset()
+
+    url = "#{url}/crawler_with_queue"
+    linked_url1 = "#{url}/link1"
+    linked_url2 = "#{url}/link2"
+    linked_url3 = "#{url}/link3"
+    linked_url4 = "#{url}/link4"
+
+    Bypass.expect_once(bypass, "GET", "/crawler_with_queue/link1", fn conn ->
+      Plug.Conn.resp(conn, 200, """
+        <html><a id="link3" href="#{linked_url3}" target="_blank">3</a></html>
+      """)
+    end)
+
+    Bypass.expect_once(bypass, "GET", "/crawler_with_queue/link2", fn conn ->
+      Plug.Conn.resp(conn, 200, """
+        <html><a href="#{linked_url3}">3</a></html>
+      """)
+    end)
+
+    Bypass.expect_once(bypass, "GET", "/crawler_with_queue/link3", fn conn ->
+      Plug.Conn.resp(conn, 200, """
+        <html>ok</html>
+      """)
+    end)
+
+    {:ok, queue} = OPQ.init(worker: Crawler.Dispatcher.Worker, workers: 2, interval: 100)
+
+    {:ok, opts1} = Crawler.crawl(linked_url1, store: Store, queue: queue)
+    {:ok, opts2} = Crawler.crawl(linked_url2, store: Store, queue: queue)
+
+    wait(fn ->
+      assert Store.ops_count() == 3
+    end)
+
+    wait(fn ->
+      assert Store.find_processed(linked_url1)
+      assert Store.find_processed(linked_url2)
+      assert Store.find_processed(linked_url3)
+      refute Store.find_processed(linked_url4)
+
+      urls = Crawler.Store.all_urls()
+
+      assert Enum.member?(urls, linked_url1)
+      assert Enum.member?(urls, linked_url2)
+      assert Enum.member?(urls, linked_url3)
+      refute Enum.member?(urls, linked_url4)
+    end)
+
+    wait(fn ->
+      assert OPQ.info(opts1[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 2}
+      assert OPQ.info(opts2[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 2}
+    end)
+  end
+
   test ".crawl stopped", %{bypass: bypass, url: url} do
     url = "#{url}/stop"
     linked_url = "#{url}/stop1"

@@ -20,6 +20,7 @@ defmodule Crawler.Options do
   @scraper Crawler.Scraper
   @parser Crawler.Parser
   @encode_uri false
+  @queue nil
 
   @doc """
   Assigns default option values.
@@ -54,7 +55,8 @@ defmodule Crawler.Options do
         modifier: modifier(),
         scraper: scraper(),
         parser: parser(),
-        encode_uri: encode_uri()
+        encode_uri: encode_uri(),
+        queue: queue()
       },
       opts
     )
@@ -97,4 +99,5 @@ defmodule Crawler.Options do
   defp scraper, do: Application.get_env(:crawler, :scraper, @scraper)
   defp parser, do: Application.get_env(:crawler, :parser, @parser)
   defp encode_uri, do: Application.get_env(:crawler, :encode_uri, @encode_uri)
+  defp queue, do: Application.get_env(:crawler, :queue, @queue)
 end
