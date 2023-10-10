@@ -57,8 +57,8 @@ defmodule Crawler.Fetcher.Policer do
 
   defp acceptable_uri_scheme?(_opts), do: {:acceptable_uri_scheme?, true}
 
-  defp not_fetched_yet?(%{url: url} = _opts) do
-    {:not_fetched_yet?, !Store.find(url)}
+  defp not_fetched_yet?(%{url: url, scope: scope} = _opts) do
+    {:not_fetched_yet?, !Store.find({url, scope})}
   end
 
   defp not_fetched_yet?(_opts), do: {:not_fetched_yet?, true}

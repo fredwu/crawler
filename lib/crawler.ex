@@ -37,6 +37,7 @@ defmodule Crawler do
       opts
       |> Enum.into(%{})
       |> Options.assign_defaults()
+      |> Options.assign_scope()
       |> Options.assign_url(url)
 
     if Store.ops_count() < opts[:max_pages] do

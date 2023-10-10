@@ -60,20 +60,20 @@ defmodule CrawlerTest do
     end)
 
     wait(fn ->
-      assert %Store.Page{url: ^url, opts: %{workers: 3}} = Store.find_processed(url)
+      assert %Store.Page{url: ^url, opts: %{workers: 3}} = Store.find_processed({url, nil})
 
-      assert Store.find_processed(linked_url1)
-      assert Store.find_processed(linked_url2)
-      assert Store.find_processed(linked_url3)
-      refute Store.find(linked_url4)
+      assert Store.find_processed({linked_url1, nil})
+      assert Store.find_processed({linked_url2, nil})
+      assert Store.find_processed({linked_url3, nil})
+      refute Store.find({linked_url4, nil})
 
       urls = Crawler.Store.all_urls()
 
-      assert Enum.member?(urls, url)
-      assert Enum.member?(urls, linked_url1)
-      assert Enum.member?(urls, linked_url2)
-      assert Enum.member?(urls, linked_url3)
-      refute Enum.member?(urls, linked_url4)
+      assert Enum.member?(urls, {url, nil})
+      assert Enum.member?(urls, {linked_url1, nil})
+      assert Enum.member?(urls, {linked_url2, nil})
+      assert Enum.member?(urls, {linked_url3, nil})
+      refute Enum.member?(urls, {linked_url4, nil})
     end)
 
     wait(fn ->
@@ -92,7 +92,7 @@ defmodule CrawlerTest do
     {:ok, opts} = Crawler.crawl(url, max_depths: 1, workers: 1, interval: 100)
 
     wait(fn ->
-      assert %Store.Page{url: ^url, body: nil, opts: nil} = Store.find_processed(url)
+      assert %Store.Page{url: ^url, body: nil, opts: nil} = Store.find_processed({url, nil})
     end)
 
     wait(fn ->
@@ -135,11 +135,11 @@ defmodule CrawlerTest do
     end)
 
     wait(fn ->
-      assert Store.find_processed(url)
-      assert Store.find_processed(linked_url1)
-      assert Store.find_processed(linked_url2)
-      refute Store.find(linked_url3)
-      refute Store.find(linked_url4)
+      assert Store.find_processed({url, nil})
+      assert Store.find_processed({linked_url1, nil})
+      assert Store.find_processed({linked_url2, nil})
+      refute Store.find({linked_url3, nil})
+      refute Store.find({linked_url4, nil})
     end)
 
     wait(fn ->
@@ -184,21 +184,68 @@ defmodule CrawlerTest do
     end)
 
     wait(fn ->
-      assert Store.find_processed(linked_url1)
-      assert Store.find_processed(linked_url2)
-      assert Store.find_processed(linked_url3)
-      refute Store.find_processed(linked_url4)
+      assert Store.find_processed({linked_url1, nil})
+      assert Store.find_processed({linked_url2, nil})
+      assert Store.find_processed({linked_url3, nil})
+      refute Store.find_processed({linked_url4, nil})
 
       urls = Crawler.Store.all_urls()
 
-      assert Enum.member?(urls, linked_url1)
-      assert Enum.member?(urls, linked_url2)
-      assert Enum.member?(urls, linked_url3)
-      refute Enum.member?(urls, linked_url4)
+      assert Enum.member?(urls, {linked_url1, nil})
+      assert Enum.member?(urls, {linked_url2, nil})
+      assert Enum.member?(urls, {linked_url3, nil})
+      refute Enum.member?(urls, {linked_url4, nil})
     end)
 
     wait(fn ->
       assert OPQ.info(opts1[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 2}
+      assert OPQ.info(opts2[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 2}
+    end)
+  end
+
+  test ".crawl forced", %{bypass: bypass, url: url} do
+    Store.ops_reset()
+
+    url = "#{url}/crawler_forced"
+    linked_url1 = "#{url}/link1"
+    linked_url2 = "#{url}/link2"
+
+    Bypass.expect(bypass, "GET", "/crawler_forced", fn conn ->
+      Plug.Conn.resp(conn, 200, """
+        <html><a href="#{linked_url1}">1</a></html>
+        <html><a href="#{linked_url1}">1</a></html>
+      """)
+    end)
+
+    Bypass.expect(bypass, "GET", "/crawler_forced/link1", fn conn ->
+      Plug.Conn.resp(conn, 200, """
+        <html><a id="link2" href="#{linked_url2}" target="_blank">2</a></html>
+      """)
+    end)
+
+    Bypass.expect(bypass, "GET", "/crawler_forced/link2", fn conn ->
+      Plug.Conn.resp(conn, 200, """
+        <html>ok</html>
+      """)
+    end)
+
+    {:ok, opts1} = Crawler.crawl(url, force: true, workers: 1, interval: 100)
+    {:ok, opts2} = Crawler.crawl(url, force: true, workers: 2, interval: 100)
+
+    refute opts1[:scope] == opts2[:scope]
+
+    wait(fn ->
+      assert Store.find_processed({url, opts1[:scope]})
+      assert Store.find_processed({url, opts2[:scope]})
+      assert Store.find_processed({linked_url1, opts1[:scope]})
+      assert Store.find_processed({linked_url1, opts2[:scope]})
+      assert Store.find_processed({linked_url2, opts1[:scope]})
+      assert Store.find_processed({linked_url2, opts2[:scope]})
+
+      assert Store.ops_count() >= 6
+      assert Store.ops_count() <= 10
+
+      assert OPQ.info(opts1[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 1}
       assert OPQ.info(opts2[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 2}
     end)
   end
@@ -219,6 +266,6 @@ defmodule CrawlerTest do
 
     Crawler.stop(opts)
 
-    refute Store.find(linked_url)
+    refute Store.find({linked_url, nil})
   end
 end

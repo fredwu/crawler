@@ -63,9 +63,9 @@ defmodule Crawler.Fetcher.PolicerTest do
   end
 
   test "fetched error" do
-    Crawler.Store.add("http://policer/exist/")
+    Crawler.Store.add({"http://policer/exist/", nil})
 
     assert {:warn, "Fetch failed check 'not_fetched_yet?', with opts: " <> _} =
-             Policer.police(%{url: "http://policer/exist/"})
+             Policer.police(%{url: "http://policer/exist/", scope: nil})
   end
 end

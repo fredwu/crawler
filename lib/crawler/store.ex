@@ -31,8 +31,8 @@ defmodule Crawler.Store do
   @doc """
   Finds a stored URL and returns its page data.
   """
-  def find(url) do
-    case Registry.lookup(DB, url) do
+  def find({url, scope}) do
+    case Registry.lookup(DB, {url, scope}) do
       [{_, page}] -> page
       _ -> nil
     end
@@ -41,8 +41,8 @@ defmodule Crawler.Store do
   @doc """
   Finds a stored URL and returns its page data only if it's processed.
   """
-  def find_processed(url) do
-    case Registry.match(DB, url, %{processed: true}) do
+  def find_processed({url, scope}) do
+    case Registry.match(DB, {url, scope}, %{processed: true}) do
       [{_, page}] -> page
       _ -> nil
     end
@@ -51,22 +51,22 @@ defmodule Crawler.Store do
   @doc """
   Adds a URL to the registry.
   """
-  def add(url) do
-    Registry.register(DB, url, %Page{url: url})
+  def add({url, scope}) do
+    Registry.register(DB, {url, scope}, %Page{url: url})
   end
 
   @doc """
   Adds the page data for a URL to the registry.
   """
-  def add_page_data(url, body, opts) do
-    {_new, _old} = Registry.update_value(DB, url, &%{&1 | body: body, opts: opts})
+  def add_page_data({url, scope}, body, opts) do
+    {_new, _old} = Registry.update_value(DB, {url, scope}, &%{&1 | body: body, opts: opts})
   end
 
   @doc """
   Marks a URL as processed in the registry.
   """
-  def processed(url) do
-    {_new, _old} = Registry.update_value(DB, url, &%{&1 | processed: true})
+  def processed({url, scope}) do
+    {_new, _old} = Registry.update_value(DB, {url, scope}, &%{&1 | processed: true})
   end
 
   def all_urls do

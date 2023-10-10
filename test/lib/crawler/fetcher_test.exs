@@ -37,7 +37,7 @@ defmodule Crawler.FetcherTest do
     |> Map.merge(%{url: url})
     |> Fetcher.fetch()
 
-    page = Store.find(url)
+    page = Store.find({url, nil})
 
     assert page.url == url
     assert page.body == "<html>200</html>"
@@ -56,7 +56,7 @@ defmodule Crawler.FetcherTest do
       |> Fetcher.fetch()
 
     assert fetcher == {:warn, "Failed to fetch #{url}, status code: 500"}
-    refute Store.find(url).body
+    refute Store.find({url, nil}).body
   end
 
   test "failure: timeout", %{bypass: bypass, url: url} do
@@ -74,7 +74,7 @@ defmodule Crawler.FetcherTest do
       |> Fetcher.fetch()
 
     assert fetcher == {:warn, "Failed to fetch #{url}, reason: :timeout"}
-    refute Store.find(url).body
+    refute Store.find({url, nil}).body
   end
 
   test "failure: retries", %{bypass: bypass, url: url} do
@@ -91,7 +91,7 @@ defmodule Crawler.FetcherTest do
         |> Fetcher.fetch()
 
       assert fetcher == {:warn, "Failed to fetch #{url}, status code: 500"}
-      refute Store.find(url).body
+      refute Store.find({url, nil}).body
     end)
   end
 

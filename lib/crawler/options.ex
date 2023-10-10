@@ -13,6 +13,8 @@ defmodule Crawler.Options do
   @max_pages :infinity
   @timeout 5_000
   @store nil
+  @force false
+  @scope nil
   @user_agent "Crawler/#{Mixfile.project()[:version]} (https://github.com/fredwu/crawler)"
   @url_filter Crawler.Fetcher.UrlFilter
   @retrier Crawler.Fetcher.Retrier
@@ -49,6 +51,8 @@ defmodule Crawler.Options do
         max_pages: max_pages(),
         timeout: timeout(),
         store: store(),
+        force: force(),
+        scope: scope(),
         user_agent: user_agent(),
         url_filter: url_filter(),
         retrier: retrier(),
@@ -84,6 +88,12 @@ defmodule Crawler.Options do
     Map.merge(opts, %{url: url})
   end
 
+  def assign_scope(%{force: true, scope: nil} = opts) do
+    Map.merge(opts, %{scope: System.unique_integer()})
+  end
+
+  def assign_scope(opts), do: opts
+
   defp assets, do: Application.get_env(:crawler, :assets, @assets)
   defp save_to, do: Application.get_env(:crawler, :save_to, @save_to)
   defp workers, do: Application.get_env(:crawler, :workers, @workers)
@@ -92,6 +102,8 @@ defmodule Crawler.Options do
   defp max_pages, do: Application.get_env(:crawler, :max_pages, @max_pages)
   defp timeout, do: Application.get_env(:crawler, :timeout, @timeout)
   defp store, do: Application.get_env(:crawler, :store, @store)
+  defp force, do: Application.get_env(:crawler, :force, @force)
+  defp scope, do: Application.get_env(:crawler, :scope, @scope)
   defp user_agent, do: Application.get_env(:crawler, :user_agent, @user_agent)
   defp url_filter, do: Application.get_env(:crawler, :url_filter, @url_filter)
   defp retrier, do: Application.get_env(:crawler, :retrier, @retrier)
