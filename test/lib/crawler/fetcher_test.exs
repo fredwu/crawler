@@ -44,6 +44,29 @@ defmodule Crawler.FetcherTest do
     assert page.body == "<html>200</html>"
   end
 
+  test "success: 301", %{bypass: bypass, url: url} do
+    Bypass.expect_once(bypass, "GET", "/fetcher/301", fn conn ->
+      conn
+      |> Plug.Conn.merge_resp_headers([{"location", "#{url}/fetcher/301_200"}])
+      |> Plug.Conn.resp(301, "")
+    end)
+
+    Bypass.expect_once(bypass, "GET", "/fetcher/301_200", fn conn ->
+      Plug.Conn.resp(conn, 200, "<html>301_200</html>")
+    end)
+
+    url = "#{url}/fetcher/301"
+
+    @defaults
+    |> Map.merge(%{url: url})
+    |> Fetcher.fetch()
+
+    page = Store.find({url, nil})
+
+    assert page.url == url
+    assert page.body == "<html>301_200</html>"
+  end
+
   test "failure: 500", %{bypass: bypass, url: url} do
     url = "#{url}/fetcher/500"
 
