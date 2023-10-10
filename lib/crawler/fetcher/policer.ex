@@ -29,7 +29,7 @@ defmodule Crawler.Fetcher.Policer do
   defp within_max_pages?(%{max_pages: :infinity} = _opts), do: {:within_max_pages?, true}
 
   defp within_max_pages?(%{max_pages: max_pages} = _opts) when is_integer(max_pages) do
-    {:within_max_pages?, Store.ops_count() <= max_pages}
+    {:within_max_pages?, Store.ops_count() < max_pages}
   end
 
   defp within_max_pages?(_opts), do: {:within_max_pages?, true}

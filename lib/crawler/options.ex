@@ -4,6 +4,7 @@ defmodule Crawler.Options do
   """
 
   alias Crawler.Mixfile
+  alias Crawler.Store
 
   @assets []
   @save_to nil
@@ -93,6 +94,14 @@ defmodule Crawler.Options do
   end
 
   def assign_scope(opts), do: opts
+
+  def perform_default_actions(%{depth: 0} = opts) do
+    Store.ops_reset()
+
+    opts
+  end
+
+  def perform_default_actions(opts), do: opts
 
   defp assets, do: Application.get_env(:crawler, :assets, @assets)
   defp save_to, do: Application.get_env(:crawler, :save_to, @save_to)

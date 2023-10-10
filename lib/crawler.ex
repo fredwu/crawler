@@ -39,6 +39,7 @@ defmodule Crawler do
       |> Options.assign_defaults()
       |> Options.assign_scope()
       |> Options.assign_url(url)
+      |> Options.perform_default_actions()
 
     if Store.ops_count() < opts[:max_pages] do
       QueueHandler.enqueue(opts)

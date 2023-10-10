@@ -54,6 +54,7 @@ defmodule Crawler.Worker do
   end
 
   defp mark_processed({:ok, %Page{url: url, opts: opts}}) do
+    Store.ops_inc()
     Store.processed({url, opts[:scope]})
   end
 
