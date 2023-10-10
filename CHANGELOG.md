@@ -2,6 +2,8 @@
 
 ## master
 
+- [Added] Add `:retries` option
+
 ## v1.5.0 [2023-10-10]
 
 - [Added] Add `:force` option

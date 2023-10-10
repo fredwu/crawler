@@ -13,6 +13,7 @@ defmodule Crawler.Options do
   @max_depths 3
   @max_pages :infinity
   @timeout 5_000
+  @retries 2
   @store nil
   @force false
   @scope nil
@@ -51,6 +52,7 @@ defmodule Crawler.Options do
         max_depths: max_depths(),
         max_pages: max_pages(),
         timeout: timeout(),
+        retries: retries(),
         store: store(),
         force: force(),
         scope: scope(),
@@ -110,6 +112,7 @@ defmodule Crawler.Options do
   defp max_depths, do: Application.get_env(:crawler, :max_depths, @max_depths)
   defp max_pages, do: Application.get_env(:crawler, :max_pages, @max_pages)
   defp timeout, do: Application.get_env(:crawler, :timeout, @timeout)
+  defp retries, do: Application.get_env(:crawler, :retries, @retries)
   defp store, do: Application.get_env(:crawler, :store, @store)
   defp force, do: Application.get_env(:crawler, :force, @force)
   defp scope, do: Application.get_env(:crawler, :scope, @scope)

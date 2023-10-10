@@ -22,7 +22,10 @@ defmodule Crawler.Fetcher.Retrier do
   More information: [https://github.com/safwank/ElixirRetry](https://github.com/safwank/ElixirRetry)
   """
   def perform(fetch_url, opts) do
-    retry with: expiry(exponential_backoff(), timeout_value(opts[:timeout])) do
+    retry with:
+            exponential_backoff()
+            |> expiry(timeout_value(opts[:timeout]))
+            |> Stream.take(opts[:retries]) do
       fetch_url.()
     after
       result -> result

@@ -19,6 +19,7 @@ defmodule Crawler.FetcherTest do
 
   @defaults %{
     depth: 0,
+    retries: 2,
     url_filter: UrlFilter,
     modifier: Modifier,
     retrier: DummyRetrier,
