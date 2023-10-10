@@ -2,6 +2,8 @@
 
 ## master
 
+## v1.4.0 [2023-10-10]
+
 - [Added] Add `:force` option
 - [Added] Add `:scope` option
 
