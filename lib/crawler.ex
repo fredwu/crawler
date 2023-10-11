@@ -84,6 +84,8 @@ defmodule Crawler do
   For general purpose use cases, always use `Crawler.crawl/2` instead.
   """
   def crawl_now(opts) do
-    Worker.run(opts)
+    if Store.ops_count() < opts[:max_pages] do
+      Worker.run(opts)
+    end
   end
 end
