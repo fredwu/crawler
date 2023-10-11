@@ -3,6 +3,7 @@
 ## master
 
 - [Added] Add `:retries` option
+- [Changed] Revert `:store` option default back to `Store`
 
 ## v1.5.0 [2023-10-10]
 

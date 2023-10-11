@@ -25,7 +25,7 @@ defmodule CrawlerTest do
 
     Bypass.expect_once(bypass, "GET", "/crawler/link1", fn conn ->
       Plug.Conn.resp(conn, 200, """
-        <html><a id="link2" href="#{linked_url2}" target="_blank">2</a></html>
+        <html><a href="#{linked_url2}">2</a></html>
       """)
     end)
 
@@ -89,7 +89,7 @@ defmodule CrawlerTest do
       Plug.Conn.resp(conn, 200, "200")
     end)
 
-    {:ok, opts} = Crawler.crawl(url, max_depths: 1, workers: 1, interval: 100)
+    {:ok, opts} = Crawler.crawl(url, max_depths: 1, workers: 1, interval: 100, store: nil)
 
     wait(fn ->
       assert %Store.Page{url: ^url, body: nil, opts: nil} = Store.find_processed({url, nil})
@@ -108,42 +108,66 @@ defmodule CrawlerTest do
     linked_url2 = "#{url}/link2"
     linked_url3 = "#{url}/link3"
     linked_url4 = "#{url}/link4"
+    linked_url5 = "#{url}/link5"
 
     Bypass.expect_once(bypass, "GET", "/crawler_with_max_pages", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html><a href="#{linked_url1}">1</a></html>
         <html><a href="#{linked_url2}">2</a></html>
+        <html><a href="#{linked_url3}">3</a></html>
+        <html><a href="#{linked_url4}">4</a></html>
+        <html><a href="#{linked_url5}">5</a></html>
       """)
     end)
 
     Bypass.expect_once(bypass, "GET", "/crawler_with_max_pages/link1", fn conn ->
       Plug.Conn.resp(conn, 200, """
-        <html><a id="link2" href="#{linked_url2}" target="_blank">2</a></html>
+        <html><a href="#{linked_url2}">2</a></html>
+        <html><a href="#{linked_url3}">3</a></html>
       """)
     end)
 
     Bypass.expect_once(bypass, "GET", "/crawler_with_max_pages/link2", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html><a href="#{linked_url3}">3</a></html>
+        <html><a href="#{linked_url4}">4</a></html>
+        <html><a href="#{linked_url5}">5</a></html>
       """)
     end)
 
-    {:ok, opts} = Crawler.crawl(url, max_depths: 3, workers: 10, max_pages: 2, interval: 100)
+    Bypass.stub(bypass, "GET", "/crawler_with_max_pages/link3", fn conn ->
+      Plug.Conn.resp(conn, 200, """
+        <html><a href="#{linked_url3}">3</a></html>
+        <html><a href="#{linked_url4}">4</a></html>
+        <html><a href="#{linked_url5}">5</a></html>
+      """)
+    end)
+
+    Bypass.stub(bypass, "GET", "/crawler_with_max_pages/link4", fn conn ->
+      Plug.Conn.resp(conn, 200, """
+        <html><a href="#{linked_url3}">3</a></html>
+        <html><a href="#{linked_url4}">4</a></html>
+        <html><a href="#{linked_url5}">5</a></html>
+      """)
+    end)
+
+    {:ok, opts} = Crawler.crawl(url, max_depths: 3, force: true, workers: 4, max_pages: 3, interval: 100)
 
     wait(fn ->
-      assert Store.ops_count() == 3
+      assert Store.ops_count() == 4
     end)
 
     wait(fn ->
-      assert Store.find_processed({url, nil})
-      assert Store.find_processed({linked_url1, nil})
-      assert Store.find_processed({linked_url2, nil})
-      refute Store.find({linked_url3, nil})
-      refute Store.find({linked_url4, nil})
+      assert Store.find_processed({url, opts[:scope]})
+      assert Store.find_processed({linked_url1, opts[:scope]})
+      assert Store.find_processed({linked_url2, opts[:scope]})
+      assert Store.find_processed({linked_url3, opts[:scope]})
+      refute Store.find({linked_url4, opts[:scope]})
+      refute Store.find({linked_url5, opts[:scope]})
     end)
 
     wait(fn ->
-      assert OPQ.info(opts[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 10}
+      assert OPQ.info(opts[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 4}
     end)
   end
 
@@ -158,7 +182,7 @@ defmodule CrawlerTest do
 
     Bypass.expect_once(bypass, "GET", "/crawler_with_queue/link1", fn conn ->
       Plug.Conn.resp(conn, 200, """
-        <html><a id="link3" href="#{linked_url3}" target="_blank">3</a></html>
+        <html><a href="#{linked_url2}">2</a></html>
       """)
     end)
 
@@ -219,7 +243,7 @@ defmodule CrawlerTest do
 
     Bypass.expect(bypass, "GET", "/crawler_forced/link1", fn conn ->
       Plug.Conn.resp(conn, 200, """
-        <html><a id="link2" href="#{linked_url2}" target="_blank">2</a></html>
+        <html><a href="#{linked_url2}">2</a></html>
       """)
     end)
 
