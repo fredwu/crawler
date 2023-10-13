@@ -14,7 +14,7 @@ defmodule Crawler.Options do
   @max_pages :infinity
   @timeout 5_000
   @retries 2
-  @store Store
+  @store nil
   @force false
   @scope nil
   @user_agent "Crawler/#{Mixfile.project()[:version]} (https://github.com/fredwu/crawler)"
