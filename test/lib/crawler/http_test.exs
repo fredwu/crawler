@@ -3,21 +3,19 @@ defmodule Crawler.HTTPTest do
 
   alias Crawler.HTTP
 
-  @moduletag capture_log: true
-
   doctest HTTP
 
-  test "default user agent", %{bypass: bypass, url: url} do
+  test "default user agent", %{site: site, url: url, req_options: req_options} do
     Agent.start_link(fn -> "" end, name: HTTP.DefaultUA)
 
-    Bypass.expect_once(bypass, "GET", "/http/default_ua", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/http/default_ua", fn conn ->
       {_, ua} = Enum.find(conn.req_headers, fn {header, _} -> header == "user-agent" end)
       Agent.update(HTTP.DefaultUA, fn _ -> ua end)
 
       Plug.Conn.resp(conn, 200, "")
     end)
 
-    Crawler.crawl("#{url}/http/default_ua")
+    Crawler.crawl("#{url}/http/default_ua", req_options: req_options)
 
     wait(fn ->
       assert String.match?(
@@ -27,10 +25,10 @@ defmodule Crawler.HTTPTest do
     end)
   end
 
-  test "custom user agent", %{bypass: bypass, url: url} do
+  test "custom user agent", %{site: site, url: url, req_options: req_options} do
     Agent.start_link(fn -> "" end, name: HTTP.CustomUA)
 
-    Bypass.expect_once(bypass, "GET", "/http/custom_ua", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/http/custom_ua", fn conn ->
       {_, ua} = Enum.find(conn.req_headers, fn {header, _} -> header == "user-agent" end)
 
       Agent.update(HTTP.CustomUA, fn _ -> ua end)
@@ -38,7 +36,7 @@ defmodule Crawler.HTTPTest do
       Plug.Conn.resp(conn, 200, "")
     end)
 
-    Crawler.crawl("#{url}/http/custom_ua", user_agent: "Hello World")
+    Crawler.crawl("#{url}/http/custom_ua", user_agent: "Hello World", req_options: req_options)
 
     wait(fn ->
       assert Agent.get(HTTP.CustomUA, & &1) == "Hello World"

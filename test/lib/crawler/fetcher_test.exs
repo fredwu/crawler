@@ -7,8 +7,6 @@ defmodule Crawler.FetcherTest do
   alias Crawler.Fetcher.UrlFilter
   alias Crawler.Store
 
-  @moduletag capture_log: true
-
   doctest Fetcher
 
   defmodule DummyRetrier do
@@ -27,15 +25,15 @@ defmodule Crawler.FetcherTest do
     html_tag: "a"
   }
 
-  test "success", %{bypass: bypass, url: url} do
+  test "success", %{site: site, url: url, req_options: req_options} do
     url = "#{url}/fetcher/200"
 
-    Bypass.expect_once(bypass, "GET", "/fetcher/200", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/fetcher/200", fn conn ->
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end)
 
     @defaults
-    |> Map.merge(%{url: url})
+    |> Map.merge(%{url: url, req_options: req_options})
     |> Fetcher.fetch()
 
     page = Store.find({url, nil})
@@ -44,21 +42,21 @@ defmodule Crawler.FetcherTest do
     assert page.body == "<html>200</html>"
   end
 
-  test "success: 301", %{bypass: bypass, url: url} do
-    Bypass.expect_once(bypass, "GET", "/fetcher/301", fn conn ->
+  test "success: 301", %{site: site, url: url, req_options: req_options} do
+    ReqTestSite.expect_once(site, "GET", "/fetcher/301", fn conn ->
       conn
       |> Plug.Conn.merge_resp_headers([{"location", "#{url}/fetcher/301_200"}])
       |> Plug.Conn.resp(301, "")
     end)
 
-    Bypass.expect_once(bypass, "GET", "/fetcher/301_200", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/fetcher/301_200", fn conn ->
       Plug.Conn.resp(conn, 200, "<html>301_200</html>")
     end)
 
     url = "#{url}/fetcher/301"
 
     @defaults
-    |> Map.merge(%{url: url})
+    |> Map.merge(%{url: url, req_options: req_options})
     |> Fetcher.fetch()
 
     page = Store.find({url, nil})
@@ -67,51 +65,65 @@ defmodule Crawler.FetcherTest do
     assert page.body == "<html>301_200</html>"
   end
 
-  test "failure: 500", %{bypass: bypass, url: url} do
+  test "failure: 500", %{site: site, url: url, req_options: req_options} do
     url = "#{url}/fetcher/500"
 
-    Bypass.expect_once(bypass, "GET", "/fetcher/500", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/fetcher/500", fn conn ->
       Plug.Conn.resp(conn, 500, "<html>500</html>")
     end)
 
     fetcher =
       @defaults
-      |> Map.merge(%{url: url})
+      |> Map.merge(%{url: url, req_options: req_options})
       |> Fetcher.fetch()
 
     assert fetcher == {:warn, "Failed to fetch #{url}, status code: 500"}
     refute Store.find({url, nil}).body
   end
 
-  test "failure: timeout", %{bypass: bypass, url: url} do
+  test "failure: timeout", %{site: site, url: url, req_options: req_options} do
     url = "#{url}/fetcher/timeout"
 
-    Bypass.expect_once(bypass, "GET", "/fetcher/timeout", fn conn ->
-      Process.flag(:trap_exit, true)
-      :timer.sleep(100)
-      Plug.Conn.resp(conn, 200, "<html>200</html>")
+    ReqTestSite.expect_once(site, "GET", "/fetcher/timeout", fn conn ->
+      Req.Test.transport_error(conn, :timeout)
     end)
 
     fetcher =
       @defaults
-      |> Map.merge(%{url: url, timeout: 50})
+      |> Map.merge(%{url: url, timeout: 50, req_options: req_options})
       |> Fetcher.fetch()
 
     assert fetcher == {:warn, "Failed to fetch #{url}, reason: :timeout"}
     refute Store.find({url, nil}).body
   end
 
-  test "failure: retries", %{bypass: bypass, url: url} do
+  test "failure: too many redirects", %{site: site, url: url, req_options: req_options} do
+    url = "#{url}/fetcher/too_many_redirects"
+
+    ReqTestSite.expect_once(site, "GET", "/fetcher/too_many_redirects", fn conn ->
+      Req.Test.redirect(conn, to: "/fetcher/too_many_redirects")
+    end)
+
+    fetcher =
+      @defaults
+      |> Map.merge(%{url: url, req_options: Keyword.merge(req_options, max_redirects: 0)})
+      |> Fetcher.fetch()
+
+    assert fetcher == {:warn, "Failed to fetch #{url}, reason: too many redirects (0)"}
+    refute Store.find({url, nil}).body
+  end
+
+  test "failure: retries", %{site: site, url: url, req_options: req_options} do
     url = "#{url}/fetcher/retries"
 
-    Bypass.expect(bypass, "GET", "/fetcher/retries", fn conn ->
+    ReqTestSite.expect(site, "GET", "/fetcher/retries", fn conn ->
       Plug.Conn.resp(conn, 500, "<html>500</html>")
     end)
 
     wait(fn ->
       fetcher =
         @defaults
-        |> Map.merge(%{url: url, timeout: 100, retrier: Retrier})
+        |> Map.merge(%{url: url, timeout: 100, retrier: Retrier, req_options: req_options})
         |> Fetcher.fetch()
 
       assert fetcher == {:warn, "Failed to fetch #{url}, status code: 500"}
@@ -119,31 +131,36 @@ defmodule Crawler.FetcherTest do
     end)
   end
 
-  test "failure: unable to write", %{bypass: bypass, url: url, path: path} do
+  test "failure: unable to write", %{site: site, url: url, path: path, req_options: req_options} do
     url = "#{url}/fetcher/fail.html"
 
-    Bypass.expect_once(bypass, "GET", "/fetcher/fail.html", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/fetcher/fail.html", fn conn ->
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end)
 
     fetcher =
       @defaults
-      |> Map.merge(%{url: url, save_to: "nope"})
+      |> Map.merge(%{url: url, save_to: "nope", req_options: req_options})
       |> Fetcher.fetch()
 
     assert {:error, "Cannot write to file nope/#{path}/fetcher/fail.html, reason: enoent"} ==
              fetcher
   end
 
-  test "snap /fetcher/page.html", %{bypass: bypass, url: url, path: path} do
+  test "snap /fetcher/page.html", %{
+    site: site,
+    url: url,
+    path: path,
+    req_options: req_options
+  } do
     url = "#{url}/fetcher/page.html"
 
-    Bypass.expect_once(bypass, "GET", "/fetcher/page.html", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/fetcher/page.html", fn conn ->
       Plug.Conn.resp(conn, 200, "<html>200</html>")
     end)
 
     @defaults
-    |> Map.merge(%{url: url, save_to: tmp("fetcher")})
+    |> Map.merge(%{url: url, save_to: tmp("fetcher"), req_options: req_options})
     |> Fetcher.fetch()
 
     wait(fn ->

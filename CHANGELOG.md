@@ -3,6 +3,7 @@
 ## master
 
 - [Added] Add `:retries` option
+- [Improved] Replace HTTPoison/Bypass HTTP handling and tests with Req/Req.Test.
 
 ## v1.5.0 [2023-10-10]
 

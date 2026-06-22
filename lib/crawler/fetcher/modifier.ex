@@ -22,23 +22,24 @@ defmodule Crawler.Fetcher.Modifier do
       def headers(opts) do
         if opts[:url] == "http://modifier" do
           [{"Referer", "http://fetcher"}]
+        else
+          []
         end
-        []
       end
   """
   def headers(_opts), do: []
 
   @doc """
-  Allows passing opts to httpPoison prior to making the crawl request
+  Allows passing Req options prior to making the crawl request.
 
   ## Example implementation
 
       def opts(opts) do
         if opts[:url] == "http://modifier" do
-          # add a new pool to hackney
-          [hackney: [pool: :modifier]]
+          [connect_options: [timeout: 1_000]]
+        else
+          []
         end
-        []
       end
   """
   def opts(_opts), do: []

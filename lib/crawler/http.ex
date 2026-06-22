@@ -1,7 +1,12 @@
 defmodule Crawler.HTTP do
   @moduledoc """
-  Custom HTTPoison base module for potential customisation.
+  Project-owned HTTP boundary.
   """
 
-  use HTTPoison.Base
+  def get(url, headers, opts) do
+    opts
+    |> Keyword.put(:url, url)
+    |> Keyword.put(:headers, headers)
+    |> Req.get()
+  end
 end

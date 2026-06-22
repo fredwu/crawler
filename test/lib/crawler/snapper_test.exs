@@ -3,7 +3,5 @@ defmodule Crawler.SnapperTest do
 
   alias Crawler.Snapper
 
-  @moduletag capture_log: true
-
   doctest Snapper
 end

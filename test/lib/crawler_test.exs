@@ -3,11 +3,9 @@ defmodule CrawlerTest do
 
   alias Crawler.Store
 
-  @moduletag capture_log: true
-
   doctest Crawler
 
-  test ".crawl", %{bypass: bypass, url: url} do
+  test ".crawl", %{site: site, url: url, req_options: req_options} do
     Store.ops_reset()
 
     url = "#{url}/crawler"
@@ -16,32 +14,39 @@ defmodule CrawlerTest do
     linked_url3 = "#{url}/link3"
     linked_url4 = "#{url}/link4"
 
-    Bypass.expect_once(bypass, "GET", "/crawler", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/crawler", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html><a href="#{linked_url1}">1</a></html>
         <html><a href="#{linked_url2}">2</a></html>
       """)
     end)
 
-    Bypass.expect_once(bypass, "GET", "/crawler/link1", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/crawler/link1", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html><a href="#{linked_url2}">2</a></html>
       """)
     end)
 
-    Bypass.expect_once(bypass, "GET", "/crawler/link2", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/crawler/link2", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html><a href="#{linked_url3}">3</a></html>
       """)
     end)
 
-    Bypass.expect_once(bypass, "GET", "/crawler/link3", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/crawler/link3", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html><a href="#{linked_url4}">4</a></html>
       """)
     end)
 
-    {:ok, opts} = Crawler.crawl(url, max_depths: 3, workers: 3, interval: 100, store: Store)
+    {:ok, opts} =
+      Crawler.crawl(url,
+        max_depths: 3,
+        workers: 3,
+        interval: 100,
+        store: Store,
+        req_options: req_options
+      )
 
     assert Crawler.running?(opts)
 
@@ -82,14 +87,21 @@ defmodule CrawlerTest do
     end)
   end
 
-  test ".crawl without a store", %{bypass: bypass, url: url} do
+  test ".crawl without a store", %{site: site, url: url, req_options: req_options} do
     url = "#{url}/crawler_without_store"
 
-    Bypass.expect_once(bypass, "GET", "/crawler_without_store", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/crawler_without_store", fn conn ->
       Plug.Conn.resp(conn, 200, "200")
     end)
 
-    {:ok, opts} = Crawler.crawl(url, max_depths: 1, workers: 1, interval: 100, store: nil)
+    {:ok, opts} =
+      Crawler.crawl(url,
+        max_depths: 1,
+        workers: 1,
+        interval: 100,
+        store: nil,
+        req_options: req_options
+      )
 
     wait(fn ->
       assert %Store.Page{url: ^url, body: nil, opts: nil} = Store.find_processed({url, nil})
@@ -100,7 +112,7 @@ defmodule CrawlerTest do
     end)
   end
 
-  test ".crawl with max_pages", %{bypass: bypass, url: url} do
+  test ".crawl with max_pages", %{site: site, url: url, req_options: req_options} do
     Store.ops_reset()
 
     url = "#{url}/crawler_with_max_pages"
@@ -110,49 +122,40 @@ defmodule CrawlerTest do
     linked_url4 = "#{url}/link4"
     linked_url5 = "#{url}/link5"
 
-    Bypass.expect_once(bypass, "GET", "/crawler_with_max_pages", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/crawler_with_max_pages", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html><a href="#{linked_url1}">1</a></html>
-        <html><a href="#{linked_url2}">2</a></html>
-        <html><a href="#{linked_url3}">3</a></html>
-        <html><a href="#{linked_url4}">4</a></html>
-        <html><a href="#{linked_url5}">5</a></html>
       """)
     end)
 
-    Bypass.expect_once(bypass, "GET", "/crawler_with_max_pages/link1", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/crawler_with_max_pages/link1", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html><a href="#{linked_url2}">2</a></html>
+      """)
+    end)
+
+    ReqTestSite.expect_once(site, "GET", "/crawler_with_max_pages/link2", fn conn ->
+      Plug.Conn.resp(conn, 200, """
         <html><a href="#{linked_url3}">3</a></html>
       """)
     end)
 
-    Bypass.expect_once(bypass, "GET", "/crawler_with_max_pages/link2", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/crawler_with_max_pages/link3", fn conn ->
       Plug.Conn.resp(conn, 200, """
-        <html><a href="#{linked_url3}">3</a></html>
-        <html><a href="#{linked_url4}">4</a></html>
-        <html><a href="#{linked_url5}">5</a></html>
-      """)
-    end)
-
-    Bypass.stub(bypass, "GET", "/crawler_with_max_pages/link3", fn conn ->
-      Plug.Conn.resp(conn, 200, """
-        <html><a href="#{linked_url3}">3</a></html>
-        <html><a href="#{linked_url4}">4</a></html>
-        <html><a href="#{linked_url5}">5</a></html>
-      """)
-    end)
-
-    Bypass.stub(bypass, "GET", "/crawler_with_max_pages/link4", fn conn ->
-      Plug.Conn.resp(conn, 200, """
-        <html><a href="#{linked_url3}">3</a></html>
         <html><a href="#{linked_url4}">4</a></html>
         <html><a href="#{linked_url5}">5</a></html>
       """)
     end)
 
     {:ok, opts} =
-      Crawler.crawl(url, max_depths: 3, force: true, workers: 4, max_pages: 3, interval: 100)
+      Crawler.crawl(url,
+        max_depths: 4,
+        force: true,
+        workers: 1,
+        max_pages: 4,
+        interval: 20,
+        req_options: req_options
+      )
 
     wait(fn ->
       assert Store.ops_count() == 4
@@ -168,11 +171,11 @@ defmodule CrawlerTest do
     end)
 
     wait(fn ->
-      assert OPQ.info(opts[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 4}
+      assert OPQ.info(opts[:queue]) == {:normal, %OPQ.Queue{data: {[], []}}, 1}
     end)
   end
 
-  test ".crawl with an existing queue", %{bypass: bypass, url: url} do
+  test ".crawl with an existing queue", %{site: site, url: url, req_options: req_options} do
     Store.ops_reset()
 
     url = "#{url}/crawler_with_queue"
@@ -181,19 +184,19 @@ defmodule CrawlerTest do
     linked_url3 = "#{url}/link3"
     linked_url4 = "#{url}/link4"
 
-    Bypass.expect_once(bypass, "GET", "/crawler_with_queue/link1", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/crawler_with_queue/link1", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html><a href="#{linked_url2}">2</a></html>
       """)
     end)
 
-    Bypass.expect_once(bypass, "GET", "/crawler_with_queue/link2", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/crawler_with_queue/link2", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html><a href="#{linked_url3}">3</a></html>
       """)
     end)
 
-    Bypass.expect_once(bypass, "GET", "/crawler_with_queue/link3", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/crawler_with_queue/link3", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html>ok</html>
       """)
@@ -201,8 +204,11 @@ defmodule CrawlerTest do
 
     {:ok, queue} = OPQ.init(worker: Crawler.Dispatcher.Worker, workers: 2, interval: 100)
 
-    {:ok, opts1} = Crawler.crawl(linked_url1, store: Store, queue: queue)
-    {:ok, opts2} = Crawler.crawl(linked_url2, store: Store, queue: queue)
+    {:ok, opts1} =
+      Crawler.crawl(linked_url1, store: Store, queue: queue, req_options: req_options)
+
+    {:ok, opts2} =
+      Crawler.crawl(linked_url2, store: Store, queue: queue, req_options: req_options)
 
     wait(fn ->
       assert Store.ops_count() == 3
@@ -228,34 +234,37 @@ defmodule CrawlerTest do
     end)
   end
 
-  test ".crawl forced", %{bypass: bypass, url: url} do
+  test ".crawl forced", %{site: site, url: url, req_options: req_options} do
     Store.ops_reset()
 
     url = "#{url}/crawler_forced"
     linked_url1 = "#{url}/link1"
     linked_url2 = "#{url}/link2"
 
-    Bypass.expect(bypass, "GET", "/crawler_forced", fn conn ->
+    ReqTestSite.expect(site, "GET", "/crawler_forced", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html><a href="#{linked_url1}">1</a></html>
         <html><a href="#{linked_url1}">1</a></html>
       """)
     end)
 
-    Bypass.expect(bypass, "GET", "/crawler_forced/link1", fn conn ->
+    ReqTestSite.expect(site, "GET", "/crawler_forced/link1", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html><a href="#{linked_url2}">2</a></html>
       """)
     end)
 
-    Bypass.expect(bypass, "GET", "/crawler_forced/link2", fn conn ->
+    ReqTestSite.expect(site, "GET", "/crawler_forced/link2", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html>ok</html>
       """)
     end)
 
-    {:ok, opts1} = Crawler.crawl(url, force: true, workers: 1, interval: 100)
-    {:ok, opts2} = Crawler.crawl(url, force: true, workers: 2, interval: 100)
+    {:ok, opts1} =
+      Crawler.crawl(url, force: true, workers: 1, interval: 100, req_options: req_options)
+
+    {:ok, opts2} =
+      Crawler.crawl(url, force: true, workers: 2, interval: 100, req_options: req_options)
 
     refute opts1[:scope] == opts2[:scope]
 
@@ -275,21 +284,31 @@ defmodule CrawlerTest do
     end)
   end
 
-  test ".crawl stopped", %{bypass: bypass, url: url} do
+  test ".crawl stopped", %{site: site, url: url, req_options: req_options} do
     url = "#{url}/stop"
     linked_url = "#{url}/stop1"
 
-    Bypass.expect_once(bypass, "GET", "/stop", fn conn ->
+    ReqTestSite.expect_once(site, "GET", "/stop", fn conn ->
       Plug.Conn.resp(conn, 200, """
         <html><a href="#{linked_url}">1</a></html>
       """)
     end)
 
-    {:ok, opts} = Crawler.crawl(url, workers: 1, interval: 500)
+    {:ok, opts} = Crawler.crawl(url, workers: 1, interval: 500, req_options: req_options)
 
     Process.sleep(200)
 
-    Crawler.stop(opts)
+    queue = opts[:queue]
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      Crawler.stop(opts)
+
+      wait(fn ->
+        refute Process.alive?(queue)
+      end)
+
+      refute_receive {:opq_shutdown, _}, 50
+    end)
 
     refute Store.find({linked_url, nil})
   end

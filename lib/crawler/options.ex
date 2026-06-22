@@ -21,6 +21,7 @@ defmodule Crawler.Options do
   @url_filter Crawler.Fetcher.UrlFilter
   @retrier Crawler.Fetcher.Retrier
   @modifier Crawler.Fetcher.Modifier
+  @req_options []
   @scraper Crawler.Scraper
   @parser Crawler.Parser
   @encode_uri false
@@ -60,6 +61,7 @@ defmodule Crawler.Options do
         url_filter: url_filter(),
         retrier: retrier(),
         modifier: modifier(),
+        req_options: req_options(),
         scraper: scraper(),
         parser: parser(),
         encode_uri: encode_uri(),
@@ -120,6 +122,7 @@ defmodule Crawler.Options do
   defp url_filter, do: Application.get_env(:crawler, :url_filter, @url_filter)
   defp retrier, do: Application.get_env(:crawler, :retrier, @retrier)
   defp modifier, do: Application.get_env(:crawler, :modifier, @modifier)
+  defp req_options, do: Application.get_env(:crawler, :req_options, @req_options)
   defp scraper, do: Application.get_env(:crawler, :scraper, @scraper)
   defp parser, do: Application.get_env(:crawler, :parser, @parser)
   defp encode_uri, do: Application.get_env(:crawler, :encode_uri, @encode_uri)

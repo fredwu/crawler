@@ -39,15 +39,14 @@ defmodule Crawler.Mixfile do
 
   defp deps do
     [
-      {:httpoison, "~> 2.2"},
+      {:req, "~> 0.6.2"},
       {:floki, "~> 0.38"},
       {:opq, "~> 4.0"},
       {:retry, "~> 0.19"},
       {:recode, "~> 0.8", only: :dev},
       {:ex_doc, ">= 0.0.0", only: :dev},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:plug_cowboy, "~> 2.7", only: :test},
-      {:bypass, "~> 2.1", only: :test},
+      {:plug, "~> 1.19", only: :test},
       {:excoveralls, "~> 0.18", only: :test}
     ]
   end

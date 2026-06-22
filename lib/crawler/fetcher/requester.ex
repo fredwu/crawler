@@ -6,8 +6,10 @@ defmodule Crawler.Fetcher.Requester do
   alias Crawler.HTTP
 
   @fetch_opts [
-    follow_redirect: true,
-    max_redirect: 5
+    redirect: true,
+    max_redirects: 5,
+    retry: false,
+    decode_body: false
   ]
 
   @doc """
@@ -15,8 +17,18 @@ defmodule Crawler.Fetcher.Requester do
 
   ## Examples
 
-      iex> Requester.make(url: "fake.url", modifier: Crawler.Fetcher.Modifier)
-      {:error, %HTTPoison.Error{id: nil, reason: :nxdomain}}
+      iex> adapter = fn request ->
+      iex>   {request, Req.Response.new(status: 200, body: "ok")}
+      iex> end
+      iex> {:ok, response} = Requester.make(
+      iex>   url: "http://example.com",
+      iex>   user_agent: "Crawler",
+      iex>   timeout: 100,
+      iex>   modifier: Crawler.Fetcher.Modifier,
+      iex>   req_options: [adapter: adapter]
+      iex> )
+      iex> response.status
+      200
   """
   def make(opts) do
     HTTP.get(opts[:url], fetch_headers(opts), fetch_opts(opts))
@@ -27,6 +39,15 @@ defmodule Crawler.Fetcher.Requester do
   end
 
   defp fetch_opts(opts) do
-    @fetch_opts ++ [recv_timeout: opts[:timeout]] ++ opts[:modifier].opts(opts)
+    @fetch_opts
+    |> Keyword.merge(timeout_opts(opts[:timeout]))
+    |> Keyword.merge(opts[:modifier].opts(opts))
+    |> Keyword.merge(opts[:req_options] || [])
   end
+
+  defp timeout_opts(timeout) when is_integer(timeout) or timeout == :infinity do
+    [receive_timeout: timeout]
+  end
+
+  defp timeout_opts(_timeout), do: []
 end

@@ -3,15 +3,14 @@ defmodule IntegrationTest do
 
   import Plug.Conn
 
-  @moduletag capture_log: true
-
   test "integration", %{
-    bypass: bypass,
+    site: site,
     url: url,
     path: path,
-    bypass2: bypass2,
+    site2: site2,
     url2: url2,
-    path2: path2
+    path2: path2,
+    req_options: req_options
   } do
     linked_url1 = "#{url}/page1.html"
     linked_url2 = "#{url}/dir/page2.html"
@@ -27,71 +26,71 @@ defmodule IntegrationTest do
     page5_raw = "<html><a href='/page6'>6</a> <img src='/image2.png' /></html>"
     css_raw = "img { url(image3.png); }"
 
-    Bypass.expect_once(
-      bypass,
+    ReqTestSite.expect_once(
+      site,
       "GET",
       "/page1.html",
       &(&1 |> put_resp_header("content-type", "text/html") |> resp(200, page1_raw))
     )
 
-    Bypass.expect_once(
-      bypass,
+    ReqTestSite.expect_once(
+      site,
       "GET",
       "/dir/page2.html",
       &(&1 |> put_resp_header("content-type", "text/html") |> resp(200, page2_raw))
     )
 
-    Bypass.expect_once(
-      bypass2,
+    ReqTestSite.expect_once(
+      site2,
       "GET",
       "/page3.html",
       &(&1 |> put_resp_header("content-type", "text/html") |> resp(200, page3_raw))
     )
 
-    Bypass.expect_once(
-      bypass2,
+    ReqTestSite.expect_once(
+      site2,
       "GET",
       "/dir/page4",
       &(&1 |> put_resp_header("content-type", "text/html") |> resp(200, page4_raw))
     )
 
-    Bypass.expect_once(
-      bypass2,
+    ReqTestSite.expect_once(
+      site2,
       "GET",
       "/page5.html",
       &(&1 |> put_resp_header("content-type", "text/html") |> resp(200, page5_raw))
     )
 
-    Bypass.expect_once(
-      bypass2,
+    ReqTestSite.expect_once(
+      site2,
       "GET",
       "/image1.png",
       &(&1 |> put_resp_header("content-type", "image/png") |> resp(200, "png"))
     )
 
-    Bypass.expect_once(
-      bypass2,
+    ReqTestSite.expect_once(
+      site2,
       "GET",
       "/image2.png",
       &(&1 |> put_resp_header("content-type", "image/png") |> resp(200, "png"))
     )
 
-    Bypass.expect_once(
-      bypass2,
+    ReqTestSite.expect_once(
+      site2,
       "GET",
       "/image3.png",
       &(&1 |> put_resp_header("content-type", "image/png") |> resp(200, "png"))
     )
 
-    Bypass.expect_once(
-      bypass2,
+    ReqTestSite.expect_once(
+      site2,
       "GET",
       "/styles.css",
       &(&1 |> put_resp_header("content-type", "text/css") |> resp(200, css_raw))
     )
 
-    Bypass.expect_once(
-      bypass2,
+    ReqTestSite.expect_once(
+      site2,
       "GET",
       "/javascript.js",
       &(&1 |> put_resp_header("content-type", "application/javascript") |> resp(200, "js"))
@@ -100,7 +99,8 @@ defmodule IntegrationTest do
     Crawler.crawl(linked_url1,
       save_to: tmp("integration"),
       max_depths: 4,
-      assets: ["js", "css", "images"]
+      assets: ["js", "css", "images"],
+      req_options: req_options
     )
 
     page1 =

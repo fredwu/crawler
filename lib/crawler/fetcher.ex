@@ -29,13 +29,19 @@ defmodule Crawler.Fetcher do
 
   defp fetch_url(opts) do
     case Requester.make(opts) do
-      {:ok, %HTTPoison.Response{status_code: 200, body: body, headers: headers}} ->
-        fetch_url_200(body, headers, opts)
+      {:ok, %Req.Response{status: 200, body: body} = response} ->
+        fetch_url_200(body, Req.get_headers_list(response), opts)
 
-      {:ok, %HTTPoison.Response{status_code: status_code}} ->
+      {:ok, %Req.Response{status: status_code}} ->
         fetch_url_non_200(status_code, opts)
 
-      {:error, %HTTPoison.Error{reason: reason}} ->
+      {:error, %Req.TransportError{reason: reason}} ->
+        fetch_url_failed(reason, opts)
+
+      {:error, %{__exception__: true} = exception} ->
+        fetch_url_failed(Exception.message(exception), opts)
+
+      {:error, reason} ->
         fetch_url_failed(reason, opts)
     end
   end
@@ -60,12 +66,15 @@ defmodule Crawler.Fetcher do
   end
 
   defp fetch_url_failed(reason, opts) do
-    msg = "Failed to fetch #{opts[:url]}, reason: #{inspect(reason)}"
+    msg = "Failed to fetch #{opts[:url]}, reason: #{format_reason(reason)}"
 
     Logger.debug(msg)
 
     {:warn, msg}
   end
+
+  defp format_reason(reason) when is_binary(reason), do: reason
+  defp format_reason(reason), do: inspect(reason)
 
   defp record_referrer_url(opts) do
     {:ok, Map.put(opts, :referrer_url, opts[:url])}

@@ -5,8 +5,6 @@ defmodule Crawler.Fetcher.PolicerTest do
   alias Crawler.Fetcher.UrlFilter
   alias Crawler.Store
 
-  @moduletag capture_log: true
-
   doctest Policer
 
   setup do
