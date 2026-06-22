@@ -151,7 +151,8 @@ defmodule CrawlerTest do
       """)
     end)
 
-    {:ok, opts} = Crawler.crawl(url, max_depths: 3, force: true, workers: 4, max_pages: 3, interval: 100)
+    {:ok, opts} =
+      Crawler.crawl(url, max_depths: 3, force: true, workers: 4, max_pages: 3, interval: 100)
 
     wait(fn ->
       assert Store.ops_count() == 4

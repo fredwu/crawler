@@ -8,7 +8,7 @@ defmodule Crawler.Mixfile do
     [
       app: :crawler,
       version: @version,
-      elixir: "~> 1.13",
+      elixir: "~> 1.14",
       elixirc_paths: elixirc_paths(Mix.env()),
       package: package(),
       name: "Crawler",
@@ -21,7 +21,7 @@ defmodule Crawler.Mixfile do
       aliases: [publish: ["hex.publish", &git_tag/1]],
       dialyzer: [
         plt_add_apps: [:crawler],
-        flags: [:error_handling, :race_conditions, :underspecs]
+        flags: [:error_handling, :underspecs]
       ]
     ]
   end
@@ -39,16 +39,16 @@ defmodule Crawler.Mixfile do
 
   defp deps do
     [
-      {:httpoison, "~> 2.1"},
-      {:floki, "~> 0.30"},
+      {:httpoison, "~> 2.2"},
+      {:floki, "~> 0.38"},
       {:opq, "~> 4.0"},
-      {:retry, "~> 0.10"},
-      {:recode, "~> 0.6", only: :dev},
+      {:retry, "~> 0.19"},
+      {:recode, "~> 0.8", only: :dev},
       {:ex_doc, ">= 0.0.0", only: :dev},
-      {:dialyxir, "~> 1.1", only: [:dev, :test], runtime: false},
-      {:plug_cowboy, "~> 2.0", only: :test},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:plug_cowboy, "~> 2.7", only: :test},
       {:bypass, "~> 2.1", only: :test},
-      {:excoveralls, "~> 0.7", only: :test}
+      {:excoveralls, "~> 0.18", only: :test}
     ]
   end
 
