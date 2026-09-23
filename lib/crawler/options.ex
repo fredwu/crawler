@@ -4,7 +4,7 @@ defmodule Crawler.Options do
   """
 
   alias Crawler.Mixfile
-  alias Crawler.Store
+  alias Crawler.URL
 
   @assets []
   @save_to nil
@@ -86,26 +86,24 @@ defmodule Crawler.Options do
       %{url: "http://options/"}
   """
   def assign_url(%{encode_uri: true} = opts, url) do
-    Map.merge(opts, %{url: URI.encode(url)})
+    Map.put(opts, :url, URL.normalize(URI.encode(url)))
   end
 
   def assign_url(opts, url) do
-    Map.merge(opts, %{url: url})
+    Map.put(opts, :url, URL.normalize(url))
   end
 
-  def assign_scope(%{force: true, scope: nil} = opts) do
-    Map.merge(opts, %{scope: System.unique_integer()})
+  @doc """
+  Gives each crawl its own scope unless the caller already set one.
+
+  A shared scope shares the seen-URL set and the `:max_pages` budget.
+  `:force` with no scope still receives a fresh scope through this function.
+  """
+  def assign_scope(%{scope: nil} = opts) do
+    Map.put(opts, :scope, System.unique_integer([:positive]))
   end
 
   def assign_scope(opts), do: opts
-
-  def perform_default_actions(%{depth: 0} = opts) do
-    Store.ops_reset()
-
-    opts
-  end
-
-  def perform_default_actions(opts), do: opts
 
   defp assets, do: Application.get_env(:crawler, :assets, @assets)
   defp save_to, do: Application.get_env(:crawler, :save_to, @save_to)

@@ -10,7 +10,9 @@ defmodule Crawler.Fetcher do
   alias Crawler.Fetcher.Recorder
   alias Crawler.Fetcher.Requester
   alias Crawler.Snapper
+  alias Crawler.Store
   alias Crawler.Store.Page
+  alias Crawler.URL
 
   @doc """
   Fetches a URL by:
@@ -30,7 +32,11 @@ defmodule Crawler.Fetcher do
   defp fetch_url(opts) do
     case Requester.make(opts) do
       {:ok, %Req.Response{status: 200, body: body} = response} ->
-        fetch_url_200(body, Req.get_headers_list(response), opts)
+        fetch_url_200(body, response, opts)
+
+      {:ok, %Req.Response{status: status_code}}
+      when status_code in [408, 429] or status_code >= 500 ->
+        fetch_url_retryable(status_code, opts)
 
       {:ok, %Req.Response{status: status_code}} ->
         fetch_url_non_200(status_code, opts)
@@ -46,15 +52,23 @@ defmodule Crawler.Fetcher do
     end
   end
 
-  defp fetch_url_200(body, headers, opts) do
-    with opts <- HeaderPreparer.prepare(headers, opts),
+  defp fetch_url_200(body, response, opts) do
+    with opts <- HeaderPreparer.prepare(Req.get_headers_list(response), opts),
          {:ok, _} <- Recorder.maybe_store_page(body, opts),
-         {:ok, opts} <- record_referrer_url(opts),
+         {:ok, opts} <- record_referrer_url(response, body, opts),
          {:ok, _} <- snap_page(body, opts) do
       Logger.debug("Fetched #{opts[:url]}")
 
       %Page{url: opts[:url], body: body, opts: opts}
     end
+  end
+
+  defp fetch_url_retryable(status_code, opts) do
+    msg = "Failed to fetch #{opts[:url]}, status code: #{status_code}"
+
+    Logger.debug(msg)
+
+    {:error, msg}
   end
 
   defp fetch_url_non_200(status_code, opts) do
@@ -70,14 +84,43 @@ defmodule Crawler.Fetcher do
 
     Logger.debug(msg)
 
-    {:warn, msg}
+    {:error, msg}
   end
 
   defp format_reason(reason) when is_binary(reason), do: reason
   defp format_reason(reason), do: inspect(reason)
 
-  defp record_referrer_url(opts) do
-    {:ok, Map.put(opts, :referrer_url, opts[:url])}
+  defp record_referrer_url(response, body, opts) do
+    final = final_url(response, opts[:url])
+    opts = Map.put(opts, :referrer_url, final)
+
+    {:ok, remember_alias(final, body, opts)}
+  end
+
+  defp remember_alias(final, body, %{url: url} = opts) when final != url do
+    case Store.find({final, opts[:scope]}) do
+      nil ->
+        case Store.add({final, opts[:scope]}) do
+          {:ok, _} ->
+            Store.add_page_data({final, opts[:scope]}, body, %{opts | url: final})
+            Map.put(opts, :alias_url, final)
+
+          {:error, {:already_registered, _}} ->
+            opts
+        end
+
+      _page ->
+        opts
+    end
+  end
+
+  defp remember_alias(_final, _body, opts), do: opts
+
+  defp final_url(response, fallback) do
+    case Req.Response.get_private(response, :crawler_url) do
+      url when is_binary(url) and url != "" -> URL.normalize(url)
+      _ -> fallback
+    end
   end
 
   defp snap_page(body, opts) do

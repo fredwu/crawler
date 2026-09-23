@@ -71,18 +71,20 @@ defmodule Crawler.Snapper.LinkReplacer do
     {:ok, new_body}
   end
 
-  defp get_link({_, url}, _opts), do: url
-  defp get_link({_, link, _, url}, _opts), do: [link, url]
+  defp get_link({_, url}, _opts), do: {url, url}
+  defp get_link({_, link, _, url}, _opts), do: {link, url}
 
-  defp modify_body(content_type, body, current_url, link) do
+  defp modify_body(content_type, body, current_url, {raw, resolved}) do
     String.replace(
       body,
-      regexes(content_type, link),
-      modify_link(current_url, link)
+      regexes(content_type, raw),
+      modify_link(current_url, resolved)
     )
   end
 
   defp regexes(content_type, link) do
+    link = Regex.escape(link)
+
     case content_type do
       "text/css" -> ~r{((?!url)\(['"]?)#{link}(['"]?\))}
       _ -> ~r{((?!src|href)=['"])#{link}(['"])}

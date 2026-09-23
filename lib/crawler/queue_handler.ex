@@ -20,7 +20,7 @@ defmodule Crawler.QueueHandler do
   end
 
   defp init_queue(nil, opts) do
-    {:ok, _} =
+    {:ok, pid} =
       DynamicSupervisor.start_child(
         Crawler.QueueSupervisor,
         {OPQ,
@@ -32,13 +32,7 @@ defmodule Crawler.QueueHandler do
          ]}
       )
 
-    pid =
-      Crawler.QueueSupervisor
-      |> Supervisor.which_children()
-      |> List.last()
-      |> elem(1)
-
-    Map.merge(opts, %{queue: pid})
+    Map.put(opts, :queue, pid)
   end
 
   defp init_queue(_queue, opts), do: opts

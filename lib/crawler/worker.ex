@@ -9,54 +9,39 @@ defmodule Crawler.Worker do
   alias Crawler.Store
   alias Crawler.Store.Page
 
-  use GenServer
-
-  def init(args) do
-    :timer.send_after(args[:timeout], :stop)
-
-    {:ok, args}
-  end
-
   @doc """
-  Runs the worker that casts data to itself to kick off the crawl workflow.
+  Runs one crawl task and returns when the fetch and parse have finished.
   """
   def run(opts) do
     Logger.debug("Running worker with opts: #{inspect(opts)}")
 
-    {:ok, pid} = GenServer.start_link(__MODULE__, opts, hibernate_after: 0)
+    case Store.try_claim(opts[:scope], opts[:max_pages]) do
+      :ok ->
+        try do
+          opts
+          |> Fetcher.fetch()
+          |> opts[:parser].parse()
+          |> mark_processed()
+        after
+          Store.inflight_dec(opts[:scope])
+        end
 
-    GenServer.cast(pid, opts)
-  end
-
-  @doc """
-  A crawl workflow that delegates responsibilities to:
-
-  - `Crawler.Fetcher.fetch/1`
-  - `Crawler.Parser.parse/1` (or a custom parser)
-  """
-  def handle_cast(_req, state) do
-    Logger.debug("Running worker with opts: #{inspect(state)}")
-
-    state
-    |> Fetcher.fetch()
-    |> state[:parser].parse()
-    |> mark_processed()
-
-    {:noreply, state, :hibernate}
-  end
-
-  def handle_info(:stop, state) do
-    {:stop, :normal, state}
-  end
-
-  def handle_info(_msg, state) do
-    {:noreply, state}
+      :full ->
+        :full
+    end
   end
 
   defp mark_processed({:ok, %Page{url: url, opts: opts}}) do
-    Store.ops_inc()
+    Store.ops_inc(opts[:scope])
     Store.processed({url, opts[:scope]})
+    mark_alias(opts[:alias_url], opts[:scope])
   end
 
   defp mark_processed(_), do: nil
+
+  defp mark_alias(alias_url, scope) when is_binary(alias_url) do
+    Store.processed({alias_url, scope})
+  end
+
+  defp mark_alias(_alias_url, _scope), do: :ok
 end

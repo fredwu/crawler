@@ -5,7 +5,7 @@ defmodule Crawler.Parser.HtmlParser do
 
   @tag_selectors %{
     "pages" => "a",
-    "js" => "script[type='text/javascript'][src]",
+    "js" => "script[src]",
     "css" => "link[rel='stylesheet']",
     "images" => "img"
   }

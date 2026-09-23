@@ -77,7 +77,7 @@ defmodule Crawler.FetcherTest do
       |> Map.merge(%{url: url, req_options: req_options})
       |> Fetcher.fetch()
 
-    assert fetcher == {:warn, "Failed to fetch #{url}, status code: 500"}
+    assert fetcher == {:error, "Failed to fetch #{url}, status code: 500"}
     refute Store.find({url, nil}).body
   end
 
@@ -93,7 +93,7 @@ defmodule Crawler.FetcherTest do
       |> Map.merge(%{url: url, timeout: 50, req_options: req_options})
       |> Fetcher.fetch()
 
-    assert fetcher == {:warn, "Failed to fetch #{url}, reason: :timeout"}
+    assert fetcher == {:error, "Failed to fetch #{url}, reason: :timeout"}
     refute Store.find({url, nil}).body
   end
 
@@ -109,7 +109,7 @@ defmodule Crawler.FetcherTest do
       |> Map.merge(%{url: url, req_options: Keyword.merge(req_options, max_redirects: 0)})
       |> Fetcher.fetch()
 
-    assert fetcher == {:warn, "Failed to fetch #{url}, reason: too many redirects (0)"}
+    assert fetcher == {:error, "Failed to fetch #{url}, reason: too many redirects (0)"}
     refute Store.find({url, nil}).body
   end
 
@@ -126,7 +126,7 @@ defmodule Crawler.FetcherTest do
         |> Map.merge(%{url: url, timeout: 100, retrier: Retrier, req_options: req_options})
         |> Fetcher.fetch()
 
-      assert fetcher == {:warn, "Failed to fetch #{url}, status code: 500"}
+      assert fetcher == {:error, "Failed to fetch #{url}, status code: 500"}
       refute Store.find({url, nil}).body
     end)
   end

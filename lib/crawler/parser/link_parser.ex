@@ -35,10 +35,12 @@ defmodule Crawler.Parser.LinkParser do
     src = @tag_attr[tag]
 
     with {_tag, link} <- detect_link(src, attrs),
-         element <- LinkExpander.expand({src, link}, opts) do
+         element when not is_nil(element) <- LinkExpander.expand({src, link}, opts) do
       opts = Map.merge(opts, %{html_tag: tag})
 
       link_handler.(element, opts)
+    else
+      _ -> nil
     end
   end
 

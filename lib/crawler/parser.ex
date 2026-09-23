@@ -8,6 +8,7 @@ defmodule Crawler.Parser do
   alias Crawler.Parser.Guarder
   alias Crawler.Parser.HtmlParser
   alias Crawler.Parser.LinkParser
+  alias Crawler.URL
 
   require Logger
 
@@ -103,9 +104,50 @@ defmodule Crawler.Parser do
   end
 
   def parse_links(body, opts, link_handler) do
+    opts = put_base_href(body, opts)
+
     opts
     |> Guarder.pass?()
     |> do_parse_links(body, opts, link_handler)
+  end
+
+  defp put_base_href(body, opts) when is_binary(body) do
+    if html?(opts) do
+      case base_href(body) do
+        nil -> opts
+        href -> Map.put(opts, :referrer_url, merge_base(href, opts))
+      end
+    else
+      opts
+    end
+  end
+
+  defp put_base_href(_body, opts), do: opts
+
+  defp html?(opts) do
+    case opts[:content_type] do
+      "text/html" <> _ -> true
+      nil -> true
+      _ -> false
+    end
+  end
+
+  defp base_href(body) do
+    with {:ok, document} <- Floki.parse_document(body),
+         [href | _] <- Floki.attribute(document, "base", "href") do
+      href
+    else
+      _ -> nil
+    end
+  end
+
+  defp merge_base(href, opts) do
+    base = opts[:referrer_url] || opts[:url] || ""
+
+    case URL.resolve(href, base) do
+      {:ok, url} -> url
+      :skip -> base
+    end
   end
 
   defp do_parse_links(false, _body, _opts, _link_handler), do: []

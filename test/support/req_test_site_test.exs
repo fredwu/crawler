@@ -35,8 +35,6 @@ defmodule Crawler.ReqTestSiteTest do
     test_pid = self()
 
     Task.start(fn ->
-      Process.sleep(20)
-
       result = Req.get(site.url <> "/late", ReqTestSite.req_options(site))
       send(test_pid, {:late_request, result})
     end)

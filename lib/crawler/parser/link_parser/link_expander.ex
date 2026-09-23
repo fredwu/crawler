@@ -3,7 +3,7 @@ defmodule Crawler.Parser.LinkParser.LinkExpander do
   Expands a link into a full URL.
   """
 
-  alias Crawler.Linker
+  alias Crawler.URL
 
   @doc """
   Expands a link into a full URL.
@@ -16,17 +16,19 @@ defmodule Crawler.Parser.LinkParser.LinkExpander do
       iex> LinkExpander.expand({"href", "page"}, %{referrer_url: "http://hello.world"})
       {"link", "page", "href", "http://hello.world/page"}
   """
-  def expand({_src, link} = element, opts) do
-    link
-    |> is_url?()
-    |> transform_link(element, opts)
-  end
+  def expand({src, link}, opts) do
+    base = opts[:referrer_url] || opts[:url]
 
-  defp is_url?(link), do: String.contains?(link, "://")
+    case URL.resolve(link, base) do
+      {:ok, url} ->
+        if url == link do
+          {src, url}
+        else
+          {"link", link, src, url}
+        end
 
-  defp transform_link(true, element, _opts), do: element
-
-  defp transform_link(false, {src, link}, opts) do
-    {"link", link, src, Linker.url(opts[:referrer_url], link)}
+      :skip ->
+        nil
+    end
   end
 end

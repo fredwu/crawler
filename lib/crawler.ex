@@ -39,10 +39,11 @@ defmodule Crawler do
       |> Options.assign_defaults()
       |> Options.assign_scope()
       |> Options.assign_url(url)
-      |> Options.perform_default_actions()
 
-    if Store.ops_count() < opts[:max_pages] do
+    if page_allowed?(opts) do
       QueueHandler.enqueue(opts)
+    else
+      {:ok, opts}
     end
   end
 
@@ -71,9 +72,9 @@ defmodule Crawler do
     Process.sleep(10)
 
     cond do
-      opts[:queue] |> OPQ.info() |> elem(0) == :paused -> false
-      Store.ops_count() <= 1 -> true
-      OPQ.queue(opts[:queue]) |> Enum.any?() -> true
+      paused?(opts[:queue]) -> false
+      Store.inflight_count(opts[:scope]) > 0 -> true
+      queued?(opts[:queue]) -> true
       true -> false
     end
   end
@@ -84,8 +85,35 @@ defmodule Crawler do
   For general purpose use cases, always use `Crawler.crawl/2` instead.
   """
   def crawl_now(opts) do
-    if Store.ops_count() < opts[:max_pages] do
+    if page_allowed?(opts) do
       Worker.run(opts)
     end
+  end
+
+  defp page_allowed?(%{max_pages: :infinity}), do: true
+
+  defp page_allowed?(%{max_pages: max_pages, scope: scope}) when is_integer(max_pages) do
+    Store.ops_count(scope) + Store.inflight_count(scope) < max_pages
+  end
+
+  defp page_allowed?(_opts), do: true
+
+  defp paused?(nil), do: false
+
+  defp paused?(queue) do
+    queue |> OPQ.info() |> elem(0) == :paused
+  catch
+    :exit, _ -> false
+  end
+
+  defp queued?(nil), do: false
+
+  defp queued?(queue) do
+    case OPQ.info(queue) do
+      {_status, %{data: data}, _workers} -> not :queue.is_empty(data)
+      _ -> false
+    end
+  catch
+    :exit, _ -> false
   end
 end
