@@ -53,10 +53,24 @@ defmodule Crawler.Linker.PathBuilder do
   defp base_path(url, _link, safe), do: PathFinder.find_base_path(url, safe)
 
   defp build(path, link, safe) do
-    link
-    |> normalise(path)
-    |> PathFinder.find_path(safe)
-    |> PathExpander.expand_dot()
+    {path_part, query} =
+      link
+      |> normalise(path)
+      |> split_query()
+
+    expanded =
+      path_part
+      |> PathFinder.find_path(safe)
+      |> PathExpander.expand_dot()
+
+    if query, do: expanded <> "?" <> query, else: expanded
+  end
+
+  defp split_query(link) do
+    case String.split(link, "?", parts: 2) do
+      [path_part, query] when query != "" -> {path_part, query}
+      [path_part | _] -> {path_part, nil}
+    end
   end
 
   defp normalise(link, path) do

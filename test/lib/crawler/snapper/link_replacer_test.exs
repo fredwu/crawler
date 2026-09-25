@@ -40,11 +40,70 @@ defmodule Crawler.Snapper.LinkReplacerTest do
                opts
              )
 
-    assert body =~ "href='../../host/dir/next/index.html'"
+    assert body =~ "href='../../host/dir/next/__index.html'"
     assert body =~ "href='../../cdn.example/lib.js'"
-    assert body =~ "href='../../host/dir/page/index.html'"
+    assert body =~ "href='../../host/dir/page/__index.html'"
     refute body =~ "href='next'"
     refute body =~ "//cdn.example/lib.js"
     refute body =~ "#a"
+  end
+
+  test "rewrites srcset, style urls, and html-escaped queries" do
+    opts = %{
+      url: "http://host/dir/page",
+      referrer_url: "http://host/dir/page",
+      depth: 1,
+      max_depths: 3,
+      html_tag: "a",
+      content_type: "text/html",
+      assets: ["images", "css"]
+    }
+
+    html = """
+    <img src="a.jpg" srcset="a.jpg 1x, b.jpg 2x">
+    <div style="background: url('bg2.png')"></div>
+    <a href="/search?q=1&amp;x=2"></a>
+    """
+
+    assert {:ok, body} = LinkReplacer.replace_links(html, opts)
+
+    refute body =~ ~s|srcset="a.jpg 1x, b.jpg 2x"|
+    refute body =~ "url('bg2.png')"
+    refute body =~ ~s|href="/search?q=1&amp;x=2"|
+    assert body =~ "b.jpg"
+    assert body =~ "bg2.png"
+    assert body =~ "q=1"
+    assert body =~ "x=2"
+  end
+
+  test "does not rewrite prose and keeps every spelling of one url" do
+    opts = %{
+      url: "http://host/dir/page",
+      referrer_url: "http://host/dir/page",
+      depth: 1,
+      max_depths: 3,
+      html_tag: "a",
+      content_type: "text/html",
+      assets: ["images", "css"]
+    }
+
+    html = """
+    <p>See a.jpg today. See "a.jpg" today.</p>
+    <img src="./a.jpg" srcset="a.jpg 1x, b.jpg 2x">
+    <div style="background: url(&quot;q.png&quot;)"></div>
+    <style>body { background: url(&quot;q.png&quot;); } @import &#39;other.css&#39;;</style>
+    """
+
+    assert {:ok, body} = LinkReplacer.replace_links(html, opts)
+
+    assert body =~ "See a.jpg today"
+    assert body =~ "See \"a.jpg\" today"
+    refute body =~ "srcset=\"a.jpg 1x"
+    refute body =~ "url(&quot;q.png&quot;)"
+    refute body =~ "&quot;q.png&quot;"
+    refute body =~ "&#39;other.css&#39;"
+    assert body =~ "a.jpg"
+    assert body =~ "b.jpg"
+    assert body =~ "q.png"
   end
 end

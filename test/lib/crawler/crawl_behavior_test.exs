@@ -405,7 +405,7 @@ defmodule Crawler.CrawlBehaviorTest do
     wait(fn ->
       refute Crawler.running?(opts)
       assert Store.ops_count("links") == 6
-      assert File.read!(tmp("behavior-links/#{site.path}/behavior/old", "index.html")) =~ "q=1"
+      assert File.read!(tmp("behavior-links/#{site.path}/behavior/old", "__index.html")) =~ "q=1"
     end)
   end
 
@@ -443,6 +443,132 @@ defmodule Crawler.CrawlBehaviorTest do
       assert Store.ops_count("frag") == 1
       refute Store.find({"#{page}#a", "frag"})
       refute Store.find({"#{page}#b", "frag"})
+    end)
+  end
+
+  test "fetches media and style links and stores distinct offline files", %{
+    site: site,
+    url: url,
+    req_options: req_options
+  } do
+    sheet = """
+    @import "other.css";
+    @import url("nested.css");
+    body { background: url( "spaced.png" ); }
+    @font-face { src: url( 'font.woff2' ); }
+    """
+
+    entry = """
+    <html>
+      <img src="a.jpg" srcset="a.jpg 1x, b.jpg 2x">
+      <picture><source srcset="c.webp" type="image/webp"><img src="c.jpg"></picture>
+      <video src="d.mp4" poster="d.jpg"></video>
+      <audio src="e.mp3"></audio>
+      <link rel="preload" as="style" href="pre.css">
+      <link rel="stylesheet alternate" href="alt.css">
+      <link rel="stylesheet" href="sheet.css">
+      <style>body { background: url(bg.png); }</style>
+      <div style="background: url('bg2.png')"></div>
+      <a href="/archive/search?q=1&amp;x=2">one</a>
+      <a href="/archive/search?q=2">two</a>
+      <a href="/archive/bare">bare</a>
+      <a href="/archive/bare/index.html">index</a>
+    </html>
+    """
+
+    ReqTestSite.expect_once(site, "GET", "/archive/entry", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, entry)
+    end)
+
+    ReqTestSite.expect_once(site, "GET", "/archive/sheet.css", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/css")
+      |> Plug.Conn.resp(200, sheet)
+    end)
+
+    for {path, type, body} <- [
+          {"/archive/a.jpg", "image/jpeg", "a"},
+          {"/archive/b.jpg", "image/jpeg", "b"},
+          {"/archive/c.webp", "image/webp", "c"},
+          {"/archive/c.jpg", "image/jpeg", "c-jpg"},
+          {"/archive/d.mp4", "video/mp4", "d"},
+          {"/archive/d.jpg", "image/jpeg", "poster"},
+          {"/archive/e.mp3", "audio/mpeg", "e"},
+          {"/archive/pre.css", "text/css", "/* pre */"},
+          {"/archive/alt.css", "text/css", "/* alt */"},
+          {"/archive/bg.png", "image/png", "bg"},
+          {"/archive/bg2.png", "image/png", "bg2"},
+          {"/archive/other.css", "text/css", "/* other */"},
+          {"/archive/nested.css", "text/css", "/* nested */"},
+          {"/archive/spaced.png", "image/png", "spaced"},
+          {"/archive/font.woff2", "font/woff2", "font"},
+          {"/archive/bare", "text/html", "PAGE"},
+          {"/archive/bare/index.html", "text/html", "INDEX"}
+        ] do
+      ReqTestSite.expect_once(site, "GET", path, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("content-type", type)
+        |> Plug.Conn.resp(200, body)
+      end)
+    end
+
+    ReqTestSite.stub(site, "GET", "/archive/search", fn conn ->
+      label = if conn.query_string == "q=1&x=2", do: "1", else: "2"
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "results for " <> label)
+    end)
+
+    {:ok, opts} =
+      Crawler.crawl("#{url}/archive/entry",
+        scope: "archive",
+        assets: ["images", "css"],
+        max_depths: 3,
+        workers: 4,
+        save_to: tmp("behavior-archive"),
+        req_options: req_options
+      )
+
+    wait(fn ->
+      refute Crawler.running?(opts)
+
+      root = tmp("behavior-archive/#{site.path}/archive")
+      page = File.read!(Path.join(root, "entry/__index.html"))
+      css = File.read!(Path.join(root, "sheet.css"))
+      paths = Path.wildcard(Path.join(tmp("behavior-archive"), "**/*"))
+
+      assert "PAGE" == File.read!(Path.join(root, "bare/__index.html"))
+      assert "INDEX" == File.read!(Path.join(root, "bare/index.html"))
+
+      assert Enum.any?(paths, &(File.regular?(&1) and File.read!(&1) == "results for 1"))
+      assert Enum.any?(paths, &(File.regular?(&1) and File.read!(&1) == "results for 2"))
+
+      Enum.each(paths, fn path ->
+        refute path =~ "?"
+        refute path =~ "&"
+      end)
+
+      refute page =~ ~s|srcset="a.jpg 1x, b.jpg 2x"|
+      refute page =~ ~s|src="d.mp4"|
+      refute page =~ ~s|href="pre.css"|
+      refute page =~ "url('bg2.png')"
+      refute page =~ ~s|href="/archive/search?q=1&amp;x=2"|
+      assert page =~ "b.jpg"
+      assert page =~ "c.webp"
+      assert page =~ "e.mp3"
+      assert page =~ "q=1"
+      assert page =~ "x=2"
+
+      refute css =~ ~s|@import "other.css"|
+      refute css =~ ~s|url( "spaced.png" )|
+      refute css =~ "url( 'font.woff2' )"
+      assert css =~ "other.css"
+      assert css =~ "nested.css"
+      assert css =~ "spaced.png"
+      assert css =~ "font.woff2"
     end)
   end
 end

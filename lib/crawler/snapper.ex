@@ -17,7 +17,7 @@ defmodule Crawler.Snapper do
   ## Examples
 
       iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://hello-world.local"})
-      iex> File.read(tmp("snapper/hello-world.local", "index.html"))
+      iex> File.read(tmp("snapper/hello-world.local", "__index.html"))
       {:ok, "hello"}
 
       iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://snapper.local/index.html"})
@@ -28,11 +28,11 @@ defmodule Crawler.Snapper do
       {:error, "Cannot write to file nope/snapper.local/index.html, reason: enoent"}
 
       iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://snapper.local/hello"})
-      iex> File.read(tmp("snapper/snapper.local/hello", "index.html"))
+      iex> File.read(tmp("snapper/snapper.local/hello", "__index.html"))
       {:ok, "hello"}
 
       iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://snapper.local/hello1/"})
-      iex> File.read(tmp("snapper/snapper.local/hello1", "index.html"))
+      iex> File.read(tmp("snapper/snapper.local/hello1", "__index.html"))
       {:ok, "hello"}
 
       iex> Snapper.snap(
@@ -46,8 +46,8 @@ defmodule Crawler.Snapper do
       iex>     content_type: "text/html",
       iex>   }
       iex> )
-      iex> File.read(tmp("snapper/snapper.local/depth0", "index.html"))
-      {:ok, "<a href='../../another.domain/page/index.html'></a>"}
+      iex> File.read(tmp("snapper/snapper.local/depth0", "__index.html"))
+      {:ok, "<a href='../../another.domain/page/__index.html'></a>"}
 
       iex> Snapper.snap(
       iex>   "<a href='https://another.domain:8888/page'></a>",
@@ -60,8 +60,8 @@ defmodule Crawler.Snapper do
       iex>     content_type: "text/html",
       iex>   }
       iex> )
-      iex> File.read(tmp("snapper/snapper.local-7777/dir/depth1", "index.html"))
-      {:ok, "<a href='../../../another.domain-8888/page/index.html'></a>"}
+      iex> File.read(tmp("snapper/snapper.local-7777/dir/depth1", "__index.html"))
+      {:ok, "<a href='../../../another.domain-8888/page/__index.html'></a>"}
   """
   def snap(body, opts) do
     {:ok, body} = LinkReplacer.replace_links(body, opts)

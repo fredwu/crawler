@@ -18,7 +18,7 @@ defmodule Crawler.Linker do
       iex>   "http://hello.world/dir/page",
       iex>   "page1"
       iex> )
-      "http://hello.world/dir/page1/index.html"
+      "http://hello.world/dir/page1/__index.html"
 
       iex> Linker.offline_url(
       iex>   "http://hello.world/dir/page",
@@ -30,7 +30,7 @@ defmodule Crawler.Linker do
       iex>   "http://hello.world/dir/page",
       iex>   "../page1"
       iex> )
-      "http://hello.world/page1/index.html"
+      "http://hello.world/page1/__index.html"
 
       iex> Linker.offline_url(
       iex>   "http://hello.world/dir/page",
@@ -42,7 +42,7 @@ defmodule Crawler.Linker do
       iex>   "http://hello.world/dir/page",
       iex>   "http://thank.you/page1"
       iex> )
-      "http://thank.you/page1/index.html"
+      "http://thank.you/page1/__index.html"
 
       iex> Linker.offline_url(
       iex>   "http://hello.world/dir/page",
@@ -54,7 +54,13 @@ defmodule Crawler.Linker do
       iex>   "http://hello.world/dir/page",
       iex>   "http://thank.you/"
       iex> )
-      "http://thank.you/index.html"
+      "http://thank.you/__index.html"
+
+      iex> Linker.offline_url(
+      iex>   "http://host/dir/page",
+      iex>   "http://host/search?q=foo/../bar"
+      iex> )
+      "http://host/search/__index__q_q=foo%2f..%2fbar.html"
   """
   def offline_url(current_url, link) do
     current_url
@@ -72,7 +78,7 @@ defmodule Crawler.Linker do
       iex>   "http://hello.world/dir/page",
       iex>   "page1"
       iex> )
-      "../../../hello.world/dir/page1/index.html"
+      "../../../hello.world/dir/page1/__index.html"
 
       iex> Linker.offline_link(
       iex>   "http://hello.world/dir/page",
@@ -84,7 +90,7 @@ defmodule Crawler.Linker do
       iex>   "http://hello.world/dir/page",
       iex>   "../page1"
       iex> )
-      "../../../hello.world/page1/index.html"
+      "../../../hello.world/page1/__index.html"
 
       iex> Linker.offline_link(
       iex>   "http://hello.world/dir/page",
@@ -96,7 +102,7 @@ defmodule Crawler.Linker do
       iex>   "http://hello.world/dir/page",
       iex>   "http://thank.you/page1"
       iex> )
-      "../../../thank.you/page1/index.html"
+      "../../../thank.you/page1/__index.html"
 
       iex> Linker.offline_link(
       iex>   "http://hello.world/dir/page",

@@ -109,13 +109,13 @@ defmodule IntegrationTest do
     page2 = "<html><a href='../../#{path2}/page3.html'>3</a></html>"
 
     page3 =
-      "<html><a href='../#{path2}/dir/page4/index.html'>4</a> <a href='../#{path2}/dir/page4/index.html'>4</a></html>"
+      "<html><a href='../#{path2}/dir/page4/__index.html'>4</a> <a href='../#{path2}/dir/page4/__index.html'>4</a></html>"
 
     page4 =
       "<html><head><script type='text/javascript' src='../../../#{path2}/javascript.js' /><link rel='stylesheet' href='../../../#{path2}/styles.css' /></head><a href='../../../#{path2}/page5.html'>5</a> <img src='../../../#{path2}/image1.png' /></html>"
 
     page5 =
-      "<html><a href='../#{path2}/page6/index.html'>6</a> <img src='../#{path2}/image2.png' /></html>"
+      "<html><a href='../#{path2}/page6/__index.html'>6</a> <img src='../#{path2}/image2.png' /></html>"
 
     css = "img { url(../#{path2}/image3.png); }"
 
@@ -123,7 +123,7 @@ defmodule IntegrationTest do
       assert {:ok, page1} == File.read(tmp("integration/#{path}", "page1.html"))
       assert {:ok, page2} == File.read(tmp("integration/#{path}/dir", "page2.html"))
       assert {:ok, page3} == File.read(tmp("integration/#{path2}", "page3.html"))
-      assert {:ok, page4} == File.read(tmp("integration/#{path2}/dir/page4", "index.html"))
+      assert {:ok, page4} == File.read(tmp("integration/#{path2}/dir/page4", "__index.html"))
       assert {:ok, page5} == File.read(tmp("integration/#{path2}", "page5.html"))
       assert {:ok, "png"} == File.read(tmp("integration/#{path2}", "image1.png"))
       assert {:ok, "png"} == File.read(tmp("integration/#{path2}", "image2.png"))

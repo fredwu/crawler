@@ -16,7 +16,7 @@ defmodule Crawler.Snapper.DirMaker do
       iex>   url: "http://hello-world.local"
       iex> )
       iex> |> Path.relative_to_cwd
-      "test/tmp/snapper/dir_creator/hello-world.local/index.html"
+      "test/tmp/snapper/dir_creator/hello-world.local/__index.html"
   """
   def make_dir(opts) do
     opts[:url]
