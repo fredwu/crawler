@@ -30,20 +30,51 @@ defmodule Crawler.ReqTestSiteTest do
     ReqTestSite.close(site)
   end
 
-  test "verify! waits for delayed unexpected requests" do
+  test "verify! reports an unexpected request that arrives while another is in flight" do
     site = ReqTestSite.open(hosts: 1, verify_on_exit: false)
     test_pid = self()
 
-    Task.start(fn ->
-      result = Req.get(site.url <> "/late", ReqTestSite.req_options(site))
-      send(test_pid, {:late_request, result})
+    ReqTestSite.expect_once(site.site, "GET", "/hold", fn conn ->
+      send(test_pid, {:holding, self()})
+
+      receive do
+        :release -> Plug.Conn.send_resp(conn, 200, "ok")
+      end
     end)
 
-    assert_raise ExUnit.AssertionError, ~r/Unexpected request/, fn ->
-      ReqTestSite.verify!(site)
-    end
+    hold =
+      Task.async(fn ->
+        Req.get(site.url <> "/hold", ReqTestSite.req_options(site))
+      end)
 
-    assert_receive {:late_request, {:ok, %Req.Response{status: 500}}}
+    assert_receive {:holding, holder}
+
+    late =
+      Task.async(fn ->
+        receive do
+          :go -> Req.get(site.url <> "/late", ReqTestSite.req_options(site))
+        end
+      end)
+
+    verifier =
+      Task.async(fn ->
+        try do
+          ReqTestSite.verify!(site)
+          :no_error
+        rescue
+          error in ExUnit.AssertionError -> error
+        end
+      end)
+
+    assert is_nil(Task.yield(verifier, 50))
+
+    send(late.pid, :go)
+    assert {:ok, %Req.Response{status: 500}} = Task.await(late)
+    send(holder, :release)
+
+    assert %ExUnit.AssertionError{message: message} = Task.await(verifier)
+    assert message =~ "Unexpected request"
+    assert {:ok, %Req.Response{status: 200}} = Task.await(hold)
 
     ReqTestSite.close(site)
   end

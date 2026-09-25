@@ -6,7 +6,6 @@ defmodule Crawler.ReqTestSite do
   @type t :: %__MODULE__{}
 
   @settle_timeout 5_000
-  @quiet_window 50
 
   def open(opts \\ []) do
     host_count = Keyword.get(opts, :hosts, 1)
@@ -117,8 +116,6 @@ defmodule Crawler.ReqTestSite do
 
   defp route(agent, key) do
     Agent.get_and_update(agent, fn state ->
-      state = update_in(state, [:requests], &(&1 + 1))
-
       case get_in(state, [:routes, key]) do
         nil ->
           state = update_in(state, [:unexpected], &[key | &1])
@@ -189,7 +186,7 @@ defmodule Crawler.ReqTestSite do
   end
 
   defp initial_state do
-    %{routes: %{}, unexpected: [], failures: [], active: 0, requests: 0, waiters: []}
+    %{routes: %{}, unexpected: [], failures: [], active: 0, waiters: []}
   end
 
   defp record_failure(agent, message) do
@@ -223,15 +220,7 @@ defmodule Crawler.ReqTestSite do
     wait_for_crawler_queues(deadline)
     wait_until_idle(agent, deadline)
 
-    requests = request_count(agent)
-
-    wait_for_quiet_window(deadline)
-    wait_for_crawler_queues(deadline)
-    wait_until_idle(agent, deadline)
-
-    if request_count(agent) == requests do
-      :ok
-    else
+    unless crawler_queues_idle?() do
       wait_until_settled(agent, deadline)
     end
   end
@@ -265,14 +254,6 @@ defmodule Crawler.ReqTestSite do
         {:waiting, update_in(state, [:waiters], &[{caller, ref} | &1])}
       end
     end)
-  end
-
-  defp request_count(agent) do
-    Agent.get(agent, & &1.requests)
-  end
-
-  defp wait_for_quiet_window(deadline) do
-    wait_for_timeout(@quiet_window, deadline)
   end
 
   defp wait_for_crawler_queues(deadline) do
