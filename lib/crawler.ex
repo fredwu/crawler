@@ -40,11 +40,23 @@ defmodule Crawler do
       |> Options.assign_scope()
       |> Options.assign_url(url)
 
+    opts = stamp_generation(opts)
+
     if page_allowed?(opts) do
       QueueHandler.enqueue(opts)
     else
       {:ok, opts}
     end
+  end
+
+  defp stamp_generation(%{force: true, depth: 0, scope: scope} = opts) do
+    Map.put(opts, :generation, Store.drop_scope(scope))
+  end
+
+  defp stamp_generation(%{generation: generation} = opts) when is_integer(generation), do: opts
+
+  defp stamp_generation(%{scope: scope} = opts) do
+    Map.put(opts, :generation, Store.generation(scope))
   end
 
   @doc """

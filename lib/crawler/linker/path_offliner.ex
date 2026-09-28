@@ -7,6 +7,12 @@ defmodule Crawler.Linker.PathOffliner do
 
   @query_marker "__q_"
 
+  @extensions ~w(
+    html htm xhtml css js mjs cjs jpg jpeg png gif webp avif svg ico bmp
+    mp4 webm mp3 wav ogg m4a woff woff2 ttf otf eot json xml txt pdf map
+    vtt wasm webmanifest appcache gz zip csv rss atom php asp aspx
+  )
+
   @doc """
   Transforms a given link so that it can be stored and linked to by other pages.
 
@@ -36,6 +42,12 @@ defmodule Crawler.Linker.PathOffliner do
       iex> PathOffliner.transform("http://host/foo/index.html")
       "http://host/foo/index.html"
 
+      iex> PathOffliner.transform("http://host/app.js/")
+      "http://host/app.js"
+
+      iex> PathOffliner.transform("http://host/foo/")
+      "http://host/foo/__index.html"
+
       iex> PathOffliner.transform("http://host/search?q=1&x=2")
       "http://host/search/__index__q_q=1%26x=2.html"
 
@@ -55,12 +67,24 @@ defmodule Crawler.Linker.PathOffliner do
       false
   """
   def transform(link) do
-    {bare, query} = split_query(link)
+    {bare, query} = link |> collapse_file_slash() |> split_query()
 
     bare
     |> directory_index()
     |> escape_reserved(bare)
     |> attach_query(query)
+  end
+
+  defp collapse_file_slash(link) do
+    {bare, query} = split_query(link)
+    segment = bare |> String.trim_trailing("/") |> String.split("/") |> List.last()
+
+    if String.ends_with?(bare, "/") and has_extension(segment) do
+      bare = String.trim_trailing(bare, "/")
+      if query, do: bare <> "?" <> query, else: bare
+    else
+      link
+    end
   end
 
   defp split_query(link) do
@@ -91,7 +115,15 @@ defmodule Crawler.Linker.PathOffliner do
     |> append_index(link)
   end
 
-  defp has_extension(segment), do: String.contains?(segment, ".")
+  defp has_extension(segment) do
+    ext =
+      segment
+      |> Path.extname()
+      |> String.trim_leading(".")
+      |> String.downcase()
+
+    ext in @extensions
+  end
 
   defp append_index(true, link), do: link
   defp append_index(false, link), do: Path.join(link, "__index.html")

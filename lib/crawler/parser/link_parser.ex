@@ -44,7 +44,7 @@ defmodule Crawler.Parser.LinkParser do
     |> Enum.reject(&match?({_attr, nil}, &1))
     |> Enum.uniq_by(fn {_attr, element} -> raw_link(element) end)
     |> Enum.map(fn {attr, element} ->
-      link_handler.(element, handler_opts(opts, tag, attr))
+      link_handler.(element, handler_opts(opts, tag, attr, attrs))
     end)
   end
 
@@ -54,7 +54,7 @@ defmodule Crawler.Parser.LinkParser do
 
   defp links(tag, attrs, _children, opts) do
     tag
-    |> attributes(opts)
+    |> attributes(attrs, opts)
     |> Enum.flat_map(fn name ->
       case attribute(attrs, name) do
         nil -> []
@@ -64,18 +64,54 @@ defmodule Crawler.Parser.LinkParser do
     |> Kernel.++(style_attribute_links(attrs, opts))
   end
 
-  defp attributes("a", _opts), do: ["href"]
+  defp attributes("a", _attrs, _opts), do: ["href"]
+  defp attributes("area", _attrs, _opts), do: ["href"]
+  defp attributes("iframe", _attrs, _opts), do: ["src"]
 
-  defp attributes("link", opts) do
-    if enabled?(opts, "css") or css_document?(opts), do: ["href"], else: []
+  defp attributes("link", attrs, opts) do
+    cond do
+      css_document?(opts) -> ["href"]
+      follow_link?(attrs, opts) -> ["href"]
+      true -> []
+    end
   end
 
-  defp attributes("script", opts), do: if(enabled?(opts, "js"), do: ["src"], else: [])
-  defp attributes("img", opts), do: media_attributes(opts, ["src", "srcset"])
-  defp attributes("source", opts), do: media_attributes(opts, ["src", "srcset"])
-  defp attributes("video", opts), do: media_attributes(opts, ["src", "poster"])
-  defp attributes("audio", opts), do: media_attributes(opts, ["src"])
-  defp attributes(_tag, _opts), do: []
+  defp attributes("script", _attrs, opts), do: if(enabled?(opts, "js"), do: ["src"], else: [])
+  defp attributes("img", _attrs, opts), do: media_attributes(opts, ["src", "srcset"])
+  defp attributes("source", _attrs, opts), do: media_attributes(opts, ["src", "srcset"])
+  defp attributes("video", _attrs, opts), do: media_attributes(opts, ["src", "poster"])
+  defp attributes("audio", _attrs, opts), do: media_attributes(opts, ["src"])
+  defp attributes("track", _attrs, opts), do: media_attributes(opts, ["src"])
+  defp attributes("image", _attrs, opts), do: media_attributes(opts, ["href", "xlink:href"])
+  defp attributes("use", _attrs, opts), do: media_attributes(opts, ["href", "xlink:href"])
+  defp attributes(_tag, _attrs, _opts), do: []
+
+  defp follow_link?(attrs, opts) do
+    rel = rel_tokens(attrs)
+    as = attrs |> attribute("as") |> to_string() |> String.downcase()
+
+    cond do
+      "stylesheet" in rel -> enabled?(opts, "css")
+      "preload" in rel and as == "style" -> enabled?(opts, "css")
+      "preload" in rel and as == "font" -> enabled?(opts, "css")
+      "preload" in rel and as == "script" -> enabled?(opts, "js")
+      "preload" in rel and as == "image" -> enabled?(opts, "images")
+      icon_rel?(rel) -> enabled?(opts, "images")
+      true -> false
+    end
+  end
+
+  defp icon_rel?(rel) do
+    "icon" in rel or "apple-touch-icon" in rel or "mask-icon" in rel
+  end
+
+  defp rel_tokens(attrs) do
+    attrs
+    |> attribute("rel")
+    |> to_string()
+    |> String.downcase()
+    |> String.split(~r/\s+/, trim: true)
+  end
 
   defp media_attributes(opts, names) do
     if enabled?(opts, "images"), do: names, else: []
@@ -140,14 +176,36 @@ defmodule Crawler.Parser.LinkParser do
   defp attr_name("style"), do: "href"
   defp attr_name(name), do: name
 
-  defp handler_opts(opts, "a", "href"), do: Map.put(opts, :html_tag, "a")
+  defp handler_opts(opts, tag, "href", _attrs) when tag in ["a", "area"],
+    do: Map.put(opts, :html_tag, "a")
 
-  defp handler_opts(opts, tag, attr)
+  defp handler_opts(opts, "iframe", "src", _attrs), do: Map.put(opts, :html_tag, "a")
+  defp handler_opts(opts, "track", _attr, _attrs), do: Map.put(opts, :html_tag, "track")
+
+  defp handler_opts(opts, tag, _attr, _attrs) when tag in ["image", "use"],
+    do: Map.put(opts, :html_tag, "img")
+
+  defp handler_opts(opts, "link", "href", attrs), do: Map.put(opts, :html_tag, link_tag(attrs))
+
+  defp handler_opts(opts, tag, attr, _attrs)
        when attr in ["src", "srcset", "poster"] and tag in @media_tags do
     Map.put(opts, :html_tag, tag)
   end
 
-  defp handler_opts(opts, _tag, _attr), do: Map.put(opts, :html_tag, "link")
+  defp handler_opts(opts, _tag, _attr, _attrs), do: Map.put(opts, :html_tag, "link")
+
+  defp link_tag(attrs) do
+    rel = rel_tokens(attrs)
+    as = attrs |> attribute("as") |> to_string() |> String.downcase()
+
+    cond do
+      "preload" in rel and as == "script" -> "script"
+      "preload" in rel and as == "font" -> "font"
+      "preload" in rel and as == "image" -> "img"
+      icon_rel?(rel) -> "img"
+      true -> "link"
+    end
+  end
 
   defp raw_link({_src, link}), do: link
   defp raw_link({_tag, link, _src, _url}), do: link

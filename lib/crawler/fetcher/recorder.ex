@@ -42,11 +42,14 @@ defmodule Crawler.Fetcher.Recorder do
   end
 
   def maybe_store_page(body, opts) do
-    {:ok, opts[:store].add_page_data({opts[:url], opts[:scope]}, body, opts)}
+    case opts[:store].add_page_data({opts[:url], opts[:scope]}, body, opts) do
+      {:error, :stale} = error -> error
+      result -> {:ok, result}
+    end
   end
 
   defp store_url(opts) do
-    Store.add({opts[:url], opts[:scope]})
+    Store.add({opts[:url], opts[:scope]}, opts[:generation])
   end
 
   defp store_url_depth(opts) do

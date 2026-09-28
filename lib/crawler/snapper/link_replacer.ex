@@ -71,8 +71,22 @@ defmodule Crawler.Snapper.LinkReplacer do
         :desc
       )
       |> Enum.reduce(body, &modify_body(&2, opts[:url], &1))
+      |> drop_base(opts)
 
     {:ok, new_body}
+  end
+
+  defp drop_base(body, opts) do
+    if html_document?(opts), do: String.replace(body, ~r/<\s*\/?\s*base\b[^>]*>/i, ""), else: body
+  end
+
+  defp html_document?(opts) do
+    case opts[:content_type] do
+      nil -> true
+      "text/html" <> _ -> true
+      "application/xhtml" <> _ -> true
+      _ -> false
+    end
   end
 
   defp get_link({_, url}, _opts), do: {url, url}

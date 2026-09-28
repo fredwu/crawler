@@ -9,6 +9,23 @@ defmodule Crawler.URL do
     |> stringify()
   end
 
+  @doc false
+  def canonical(url) when is_binary(url) do
+    {base, fragment} =
+      case :binary.split(url, "#") do
+        [base, fragment] -> {base, "#" <> fragment}
+        [base] -> {base, ""}
+      end
+
+    {path, query} =
+      case :binary.split(base, "?") do
+        [path, query] -> {path, "?" <> query}
+        [path] -> {path, ""}
+      end
+
+    String.trim_trailing(path, "/") <> query <> fragment
+  end
+
   def resolve(link, base) when is_binary(link) do
     link = String.trim(link)
 

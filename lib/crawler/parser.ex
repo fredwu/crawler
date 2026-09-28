@@ -127,6 +127,7 @@ defmodule Crawler.Parser do
   defp html?(opts) do
     case opts[:content_type] do
       "text/html" <> _ -> true
+      "application/xhtml" <> _ -> true
       nil -> true
       _ -> false
     end
@@ -145,9 +146,31 @@ defmodule Crawler.Parser do
     base = opts[:referrer_url] || opts[:url] || ""
 
     case URL.resolve(href, base) do
-      {:ok, url} -> url
+      {:ok, url} -> restore_directory(href, url)
       :skip -> base
     end
+  end
+
+  defp restore_directory(href, url) do
+    if directory_ref?(href), do: slash_directory(url), else: url
+  end
+
+  defp directory_ref?(href) do
+    case href |> String.trim() |> URI.parse() do
+      %URI{path: path} when is_binary(path) -> String.ends_with?(path, "/")
+      _ -> false
+    end
+  end
+
+  defp slash_directory(url) do
+    case String.split(url, "?", parts: 2) do
+      [bare, query] -> bare_slash(bare) <> "?" <> query
+      [bare] -> bare_slash(bare)
+    end
+  end
+
+  defp bare_slash(bare) do
+    if String.ends_with?(bare, "/"), do: bare, else: bare <> "/"
   end
 
   defp do_parse_links(false, _body, _opts, _link_handler), do: []

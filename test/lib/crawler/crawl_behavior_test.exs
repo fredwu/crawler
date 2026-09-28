@@ -571,4 +571,525 @@ defmodule Crawler.CrawlBehaviorTest do
       assert css =~ "font.woff2"
     end)
   end
+
+  test "force refreshes a scope", %{site: site, url: url, req_options: req_options} do
+    {:ok, hits} = Agent.start_link(fn -> 0 end)
+    page = "#{url}/behavior/refresh"
+
+    ReqTestSite.stub(site, "GET", "/behavior/refresh", fn conn ->
+      Agent.update(hits, &(&1 + 1))
+      Plug.Conn.resp(conn, 200, "fresh")
+    end)
+
+    {:ok, first} =
+      Crawler.crawl(page, scope: "refresh", workers: 1, store: Store, req_options: req_options)
+
+    wait(fn ->
+      refute Crawler.running?(first)
+      assert Agent.get(hits, & &1) == 1
+    end)
+
+    {:ok, second} =
+      Crawler.crawl(page,
+        scope: "refresh",
+        force: true,
+        workers: 1,
+        store: Store,
+        req_options: req_options
+      )
+
+    wait(fn ->
+      refute Crawler.running?(second)
+      assert Agent.get(hits, & &1) == 2
+      assert %Store.Page{body: "fresh"} = Store.find_processed({page, "refresh"})
+    end)
+  end
+
+  defp released_body(gate, pid) do
+    deadline = System.monotonic_time(:millisecond) + 5_000
+
+    Stream.repeatedly(fn ->
+      Process.sleep(10)
+      Agent.get(gate, &Map.get(&1, pid))
+    end)
+    |> Enum.find(fn
+      body when is_binary(body) -> true
+      _ -> System.monotonic_time(:millisecond) > deadline
+    end)
+    |> case do
+      body when is_binary(body) -> body
+      _ -> "late"
+    end
+  end
+
+  test "a forced recrawl keeps the new page when the old fetch finishes later", %{
+    site: site,
+    url: url,
+    req_options: req_options
+  } do
+    parent = self()
+    page = "#{url}/behavior/refresh-race"
+    {:ok, gate} = Agent.start_link(fn -> %{} end)
+
+    ReqTestSite.stub(site, "GET", "/behavior/refresh-race", fn conn ->
+      pid = self()
+      send(parent, {:started, pid})
+      body = released_body(gate, pid)
+      send(parent, {:finished, body})
+      Plug.Conn.resp(conn, 200, body)
+    end)
+
+    {:ok, first} =
+      Crawler.crawl(page,
+        scope: "refresh-race",
+        workers: 1,
+        store: Store,
+        save_to: tmp("behavior-refresh-race"),
+        retries: 1,
+        req_options: req_options
+      )
+
+    assert_receive {:started, old}, 1_000
+
+    {:ok, second} =
+      Crawler.crawl(page,
+        scope: "refresh-race",
+        force: true,
+        workers: 1,
+        store: Store,
+        save_to: tmp("behavior-refresh-race"),
+        retries: 1,
+        req_options: req_options
+      )
+
+    assert_receive {:started, new}, 1_000
+    Agent.update(gate, &Map.put(&1, new, "NEW"))
+
+    wait(fn ->
+      refute Crawler.running?(second)
+      assert %Store.Page{body: "NEW"} = Store.find_processed({page, "refresh-race"})
+    end)
+
+    Agent.update(gate, &Map.put(&1, old, "OLD"))
+    assert_receive {:finished, "OLD"}, 1_000
+
+    wait(fn ->
+      assert {:normal, %{data: {[], []}}, 1} = OPQ.info(first[:queue])
+      assert %Store.Page{body: "NEW"} = Store.find_processed({page, "refresh-race"})
+
+      assert File.read!(
+               tmp("behavior-refresh-race/#{site.path}/behavior/refresh-race", "__index.html")
+             ) == "NEW"
+    end)
+  end
+
+  test "a trailing slash is the same url and offline file", %{
+    site: site,
+    url: url,
+    req_options: req_options
+  } do
+    ReqTestSite.expect_once(site, "GET", "/slash/entry", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
+      <html>
+        <a href="#{url}/slash/foo">a</a>
+        <a href="#{url}/slash/foo/">b</a>
+      </html>
+      """)
+    end)
+
+    ReqTestSite.expect_once(site, "GET", "/slash/foo", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "FOO")
+    end)
+
+    {:ok, opts} =
+      Crawler.crawl("#{url}/slash/entry",
+        scope: "slash",
+        workers: 2,
+        save_to: tmp("behavior-slash"),
+        req_options: req_options
+      )
+
+    wait(fn ->
+      refute Crawler.running?(opts)
+
+      assert File.read!(tmp("behavior-slash/#{site.path}/slash/foo", "__index.html")) == "FOO"
+      assert Store.find_processed({"#{url}/slash/foo", "slash"})
+      assert Store.find_processed({"#{url}/slash/foo/", "slash"})
+    end)
+  end
+
+  test "a directory url keeps relative links inside that directory", %{
+    site: site,
+    url: url,
+    req_options: req_options
+  } do
+    ReqTestSite.expect_once(site, "GET", "/dir/docs/", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, ~s(<a href="intro">intro</a>))
+    end)
+
+    ReqTestSite.expect_once(site, "GET", "/dir/docs/intro", fn conn ->
+      Plug.Conn.resp(conn, 200, "INTRO")
+    end)
+
+    {:ok, opts} =
+      Crawler.crawl("#{url}/dir/docs/",
+        scope: "directory",
+        workers: 2,
+        req_options: req_options
+      )
+
+    wait(fn ->
+      refute Crawler.running?(opts)
+      assert Store.find_processed({"#{url}/dir/docs/intro", "directory"})
+      refute Store.find({"#{url}/intro", "directory"})
+      refute Store.find({"#{url}/dir/intro", "directory"})
+    end)
+  end
+
+  test "a failed redirect does not leave the target url blocked", %{
+    site: site,
+    url: url,
+    req_options: req_options
+  } do
+    landing = "#{url}/alias/landing/"
+    blocked = tmp("behavior-alias-block", "not-a-directory")
+    File.write!(blocked, "not-a-directory")
+
+    ReqTestSite.expect(site, "GET", "/alias/from", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("location", landing)
+      |> Plug.Conn.resp(302, "")
+    end)
+
+    ReqTestSite.expect(site, "GET", "/alias/landing/", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "LANDED")
+    end)
+
+    {:ok, failed} =
+      Crawler.crawl("#{url}/alias/from",
+        scope: "alias-fail",
+        workers: 1,
+        save_to: blocked,
+        req_options: req_options
+      )
+
+    wait(fn ->
+      refute Crawler.running?(failed)
+      refute Store.find({"#{url}/alias/from", "alias-fail"})
+      refute Store.find({landing, "alias-fail"})
+    end)
+
+    {:ok, again} =
+      Crawler.crawl(landing,
+        scope: "alias-fail",
+        workers: 1,
+        store: Store,
+        req_options: req_options
+      )
+
+    wait(fn ->
+      refute Crawler.running?(again)
+      assert %Store.Page{body: "LANDED"} = Store.find_processed({landing, "alias-fail"})
+    end)
+  end
+
+  test "a dotted directory does not block a child path", %{
+    site: site,
+    url: url,
+    req_options: req_options
+  } do
+    ReqTestSite.expect_once(site, "GET", "/dot/about.me", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "PARENT")
+    end)
+
+    ReqTestSite.expect_once(site, "GET", "/dot/about.me/team", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "CHILD")
+    end)
+
+    {:ok, parent} =
+      Crawler.crawl("#{url}/dot/about.me",
+        scope: "dotted",
+        workers: 1,
+        save_to: tmp("behavior-dotted"),
+        req_options: req_options
+      )
+
+    {:ok, child} =
+      Crawler.crawl("#{url}/dot/about.me/team",
+        scope: "dotted",
+        queue: parent[:queue],
+        save_to: tmp("behavior-dotted"),
+        req_options: req_options
+      )
+
+    wait(fn ->
+      refute Crawler.running?(child)
+
+      root = tmp("behavior-dotted/#{site.path}/dot")
+      assert File.read!(Path.join(root, "about.me/__index.html")) == "PARENT"
+      assert File.read!(Path.join(root, "about.me/team/__index.html")) == "CHILD"
+    end)
+  end
+
+  test "saved xhtml resolves a directory base and drops the live tag", %{
+    site: site,
+    url: url,
+    req_options: req_options
+  } do
+    page = "#{url}/xhtml/page"
+
+    ReqTestSite.expect_once(site, "GET", "/xhtml/page", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "application/xhtml+xml")
+      |> Plug.Conn.resp(200, """
+      <html><head><base href="#{url}/xhtml/dir/" /></head>
+      <a href="intro">intro</a></html>
+      """)
+    end)
+
+    ReqTestSite.expect_once(site, "GET", "/xhtml/dir/intro", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "application/xhtml+xml")
+      |> Plug.Conn.resp(200, "INTRO")
+    end)
+
+    {:ok, opts} =
+      Crawler.crawl(page,
+        scope: "xhtml",
+        workers: 2,
+        save_to: tmp("behavior-xhtml"),
+        req_options: req_options
+      )
+
+    wait(fn ->
+      refute Crawler.running?(opts)
+      assert Store.find_processed({"#{url}/xhtml/dir/intro", "xhtml"})
+
+      html = File.read!(tmp("behavior-xhtml/#{site.path}/xhtml/page", "__index.html"))
+      refute html =~ ~r/<base[^>]+href=['"]https?:\/\//i
+      assert html =~ "intro"
+      refute html =~ ~s|href="intro"|
+    end)
+  end
+
+  test "saved html drops a live base href", %{site: site, url: url, req_options: req_options} do
+    page = "#{url}/base/page"
+
+    ReqTestSite.expect_once(site, "GET", "/base/page", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
+      <html><head><base href="#{url}/base/dir/"></head>
+      <a href="next">next</a></html>
+      """)
+    end)
+
+    ReqTestSite.expect_once(site, "GET", "/base/dir/next", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "NEXT")
+    end)
+
+    {:ok, opts} =
+      Crawler.crawl(page,
+        scope: "base",
+        workers: 2,
+        save_to: tmp("behavior-base"),
+        req_options: req_options
+      )
+
+    wait(fn ->
+      refute Crawler.running?(opts)
+      assert Store.find_processed({"#{url}/base/dir/next", "base"})
+
+      html = File.read!(tmp("behavior-base/#{site.path}/base/page", "__index.html"))
+      refute html =~ ~r/<base[^>]+href=['"]https?:\/\//i
+      refute html =~ ~s|href="next"|
+      refute html =~ "#{url}/base/dir/next"
+      assert html =~ "next/__index.html"
+    end)
+  end
+
+  test "crawls embedded resources and skips them when assets are empty", %{
+    site: site,
+    url: url,
+    req_options: req_options
+  } do
+    page = "#{url}/embed/page"
+
+    html = """
+    <html>
+      <area href="area.html">
+      <iframe src="frame.html"></iframe>
+      <link rel="icon" href="icon.png">
+      <link rel="shortcut icon" href="shortcut.png">
+      <link rel="preload" as="image" href="pre.png">
+      <link rel="preload" as="script" href="pre.js">
+      <link rel="preload" as="font" href="pre.woff2">
+      <track src="cap.vtt">
+      <svg><image href="svg.png"></image><use href="icons.svg#a"></use></svg>
+    </html>
+    """
+
+    ReqTestSite.expect_once(site, "GET", "/embed/page", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, html)
+    end)
+
+    for path <- ~w(
+      /embed/area.html
+      /embed/frame.html
+      /embed/icon.png
+      /embed/shortcut.png
+      /embed/pre.png
+      /embed/pre.js
+      /embed/pre.woff2
+      /embed/cap.vtt
+      /embed/svg.png
+      /embed/icons.svg
+    ) do
+      ReqTestSite.expect_once(site, "GET", path, fn conn ->
+        type =
+          if String.ends_with?(path, ".html"), do: "text/html", else: "application/octet-stream"
+
+        conn
+        |> Plug.Conn.put_resp_header("content-type", type)
+        |> Plug.Conn.resp(200, path)
+      end)
+    end
+
+    {:ok, opts} =
+      Crawler.crawl(page,
+        scope: "embed",
+        assets: ["images", "css", "js"],
+        max_depths: 2,
+        workers: 4,
+        save_to: tmp("behavior-embed"),
+        req_options: req_options
+      )
+
+    wait(fn ->
+      refute Crawler.running?(opts)
+
+      for path <- ~w(
+        /embed/area.html
+        /embed/frame.html
+        /embed/icon.png
+        /embed/shortcut.png
+        /embed/pre.png
+        /embed/pre.js
+        /embed/pre.woff2
+        /embed/cap.vtt
+        /embed/svg.png
+        /embed/icons.svg
+      ) do
+        assert Store.find_processed({"#{url}#{path}", "embed"})
+      end
+
+      saved = File.read!(tmp("behavior-embed/#{site.path}/embed/page", "__index.html"))
+
+      for raw <- ~w(
+        area.html
+        frame.html
+        icon.png
+        shortcut.png
+        pre.png
+        pre.js
+        pre.woff2
+        cap.vtt
+        svg.png
+      ) do
+        refute saved =~ ~s|="#{raw}"|
+      end
+
+      refute saved =~ "icons.svg#a"
+    end)
+
+    bare = "#{url}/embed/bare"
+
+    ReqTestSite.expect_once(site, "GET", "/embed/bare", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
+      <link rel="icon" href="icon.png"><link rel="preload" as="script" href="pre.js">
+      """)
+    end)
+
+    {:ok, skipped} =
+      Crawler.crawl(bare,
+        scope: "embed-empty",
+        assets: [],
+        workers: 1,
+        req_options: req_options
+      )
+
+    wait(fn ->
+      refute Crawler.running?(skipped)
+      assert Store.find_processed({bare, "embed-empty"})
+      refute Store.find({"#{url}/embed/icon.png", "embed-empty"})
+      refute Store.find({"#{url}/embed/pre.js", "embed-empty"})
+    end)
+  end
+
+  test "a failed fetch can succeed on a later crawl", %{
+    site: site,
+    url: url,
+    req_options: req_options
+  } do
+    {:ok, hits} = Agent.start_link(fn -> 0 end)
+    page = "#{url}/behavior/retry-later"
+
+    ReqTestSite.stub(site, "GET", "/behavior/retry-later", fn conn ->
+      count = Agent.get_and_update(hits, fn count -> {count, count + 1} end)
+
+      if count == 0 do
+        Plug.Conn.resp(conn, 404, "missing")
+      else
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "text/html")
+        |> Plug.Conn.resp(200, "found")
+      end
+    end)
+
+    {:ok, first} =
+      Crawler.crawl(page,
+        scope: "retry-later",
+        workers: 1,
+        store: Store,
+        req_options: req_options
+      )
+
+    wait(fn ->
+      refute Crawler.running?(first)
+      refute Store.find_processed({page, "retry-later"})
+      refute Store.find({page, "retry-later"})
+    end)
+
+    {:ok, second} =
+      Crawler.crawl(page,
+        scope: "retry-later",
+        force: true,
+        workers: 1,
+        store: Store,
+        req_options: req_options
+      )
+
+    wait(fn ->
+      refute Crawler.running?(second)
+      assert %Store.Page{body: "found"} = Store.find_processed({page, "retry-later"})
+    end)
+  end
 end

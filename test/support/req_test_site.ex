@@ -196,21 +196,22 @@ defmodule Crawler.ReqTestSite do
   end
 
   defp finish_route(agent) do
-    Agent.update(agent, fn state ->
-      active = max(state.active - 1, 0)
-      state = %{state | active: active}
-
-      if active == 0 do
-        Enum.each(state.waiters, fn {pid, ref} ->
-          send(pid, {:req_test_site_idle, ref})
-        end)
-
-        %{state | waiters: []}
-      else
-        state
-      end
-    end)
+    Agent.update(agent, &release_waiters/1)
   end
+
+  defp release_waiters(state) do
+    active = max(state.active - 1, 0)
+    notify_waiters(%{state | active: active})
+  end
+
+  defp notify_waiters(%{active: 0} = state) do
+    Enum.each(state.waiters, &notify_waiter/1)
+    %{state | waiters: []}
+  end
+
+  defp notify_waiters(state), do: state
+
+  defp notify_waiter({pid, ref}), do: send(pid, {:req_test_site_idle, ref})
 
   defp wait_until_settled(agent) do
     wait_until_settled(agent, deadline())

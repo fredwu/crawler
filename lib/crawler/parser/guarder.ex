@@ -34,5 +34,8 @@ defmodule Crawler.Parser.Guarder do
 
   defp is_text_link?(html_tag), do: Enum.member?(["a", "link"], html_tag)
 
-  defp is_text_file?(content_type), do: String.starts_with?(content_type, "text")
+  defp is_text_file?(content_type) do
+    String.starts_with?(content_type, "text") or
+      String.starts_with?(content_type, "application/xhtml")
+  end
 end
