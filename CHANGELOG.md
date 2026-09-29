@@ -4,6 +4,12 @@
 
 - [Added] Add `:retries` option
 - [Improved] Replace HTTPoison/Bypass HTTP handling and tests with Req/Req.Test.
+- [Fixed] Stopping a crawl shuts down the queue processes it started, without changing the caller's exit trapping, and releases that scope's URLs, counters, and in-flight slots
+- [Fixed] A failed or crashed URL is fetched once per crawl and can be retried after the crawl is idle
+- [Fixed] Saving a page no longer blocks other crawls, and an unfinished older save cannot replace a newer crawl of the same page
+- [Fixed] Linked pages no longer inherit the parent page's redirect alias or response headers
+- [Fixed] Passing a stopped queue no longer pins that scope's counters
+- [Fixed] Stopping a crawl removes a page file that was still being written
 
 ## v1.5.0 [2023-10-10]
 

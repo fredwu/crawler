@@ -10,8 +10,16 @@ defmodule Crawler.Dispatcher do
   - `{_, url}` when it's a URL already
 
   And issues `Crawler.crawl/2` to initiate the crawl.
+
+  Response data from the parent page is removed first. A linked page must not
+  keep the parent's redirect target or response headers.
   """
   def dispatch(request, opts) do
+    opts =
+      opts
+      |> Enum.into(%{})
+      |> Map.drop([:alias_url, :headers, :content_type, :referrer_url, :before_publish])
+
     case request do
       {_, _link, _, url} -> Crawler.crawl(url, opts)
       {_, url} -> Crawler.crawl(url, opts)

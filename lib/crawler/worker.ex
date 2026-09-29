@@ -17,26 +17,25 @@ defmodule Crawler.Worker do
 
     case Store.try_claim(opts[:scope], opts[:max_pages], opts[:generation]) do
       :ok ->
-        fetch =
-          try do
-            fetch = Fetcher.fetch(opts)
+        try do
+          fetch = Fetcher.fetch(opts)
 
-            fetch
-            |> opts[:parser].parse()
-            |> mark_processed()
+          fetch
+          |> opts[:parser].parse()
+          |> mark_processed()
 
-            fetch
-          after
-            Store.inflight_dec(opts[:scope], opts[:generation])
-          end
+          fetch
+        catch
+          kind, reason ->
+            Logger.error(Exception.format(kind, reason, __STACKTRACE__))
+            {:error, {kind, reason}}
+        after
+          Store.finish_work(opts[:scope], opts[:generation], true)
+        end
 
-        forget_unprocessed(opts, fetch)
-
-      :full ->
-        :full
-
-      :stale ->
-        :stale
+      other ->
+        Store.finish_work(opts[:scope], opts[:generation], false)
+        other
     end
   end
 
@@ -53,17 +52,4 @@ defmodule Crawler.Worker do
   end
 
   defp mark_alias(_alias_url, _opts), do: :ok
-
-  defp forget_unprocessed(_opts, {:warn, "Fetch failed check " <> _}), do: :ok
-  defp forget_unprocessed(_opts, {:error, {:already_registered, _}}), do: :ok
-
-  defp forget_unprocessed(opts, _fetch) do
-    key = {opts[:url], opts[:scope]}
-
-    case Store.find(key) do
-      %Page{processed: true} -> :ok
-      nil -> :ok
-      _page -> Store.delete(key, opts[:generation])
-    end
-  end
 end

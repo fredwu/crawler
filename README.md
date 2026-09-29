@@ -70,7 +70,7 @@ There are several ways to access the crawled page data:
 | `:scraper`    | module  | `Crawler.Scraper`           | Custom scraper, useful for scraping content as soon as the parser parses it.                                                                                                              |
 | `:parser`     | module  | `Crawler.Parser`            | Custom parser, useful for handling parsing differently or to add extra functionalities.                                                                                                   |
 | `:encode_uri` | boolean | `false`                     | When set to `true` apply the `URI.encode` to the URL to be crawled.                                                                                                                       |
-| `:queue`      | pid     | `nil`                       | You can pass in an `OPQ` pid so that multiple crawlers can share the same queue.                                                                                                          |
+| `:queue`      | pid     | `nil`                       | Pass an `OPQ` pid so that multiple crawlers share one queue. `Crawler.stop/1` leaves a queue you created running.                                                                        |
 
 ## Custom Modules
 
@@ -155,6 +155,14 @@ Crawler.running?(opts) # => false
 
 Please note that when pausing Crawler, you would need to set a large enough `:timeout` (or even set it to `:infinity`) otherwise parser would timeout due to unprocessed links.
 
+When a crawl started its own queue, `Crawler.stop/1` shuts that queue down, including its workers and its rate limiter. A queue created with `OPQ.init/1` keeps running. Stopping the scope that started a queue also shuts that queue down, even if you pass only `queue:`. Stopping does not change the caller's process flags. Pass the options returned by `Crawler.crawl/2`.
+
+Stopping a crawl drops that scope's URLs, counters, and in-flight page slots. Another scope's stored pages stay in place. A crawl that finishes on its own keeps the pages recorded with `:store`.
+
+A failed URL, or a URL whose handler crashes, is fetched once during that crawl. After the crawl is idle, a later crawl of the same scope can fetch that URL again without `:force`.
+
+Saving a page does not block other crawls. A newer crawl of that page keeps the file when an older save is still unfinished. Saves that finish at the same time leave one complete file.
+
 ## Multiple Crawlers
 
 It is possible to start multiple crawlers sharing the same queue.
@@ -165,6 +173,10 @@ It is possible to start multiple crawlers sharing the same queue.
 Crawler.crawl("https://elixir-lang.org", queue: queue)
 Crawler.crawl("https://github.com", queue: queue)
 ```
+
+`Crawler.stop/1` does not stop this queue, because the caller created it. If that process has already stopped, the crawl is not run and the scope's counters stay unchanged.
+
+Crawls can also share a queue that Crawler started: pass `queue: opts[:queue]` from the crawl that created it. Stopping a different scope leaves the queue running. Stopping the scope that started it shuts the queue down. The other crawls stop making progress. Pages they have already stored remain readable.
 
 ## Find All Scraped URLs
 

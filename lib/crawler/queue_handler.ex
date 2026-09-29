@@ -3,7 +3,8 @@ defmodule Crawler.QueueHandler do
   Handles the queueing of crawl requests.
   """
 
-  alias Crawler.Dispatcher.Worker
+  alias Crawler.Queue
+  alias Crawler.Store
 
   @doc """
   Enqueues a crawl request.
@@ -12,28 +13,57 @@ defmodule Crawler.QueueHandler do
   so that consumer apps don't have to manually handle the queue initialisation.
   """
   def enqueue(opts) do
-    opts = init_queue(opts[:queue], opts)
+    {opts, started?} = init_queue(opts[:queue], opts)
 
-    OPQ.enqueue(opts[:queue], opts)
-
-    {:ok, opts}
+    if queue_alive?(opts[:queue]) do
+      note_and_enqueue(opts, started?)
+    else
+      if started?, do: Queue.stop(opts[:queue_owner])
+      {:ok, opts}
+    end
   end
+
+  defp note_and_enqueue(opts, started?) do
+    case Store.note_enqueued(opts[:scope], opts[:generation], opts[:queue]) do
+      :stale ->
+        if started?, do: Queue.stop(opts[:queue_owner])
+        {:ok, opts}
+
+      :ok ->
+        try do
+          OPQ.enqueue(opts[:queue], opts)
+          {:ok, opts}
+        catch
+          kind, reason ->
+            Store.finish_work(opts[:scope], opts[:generation], false)
+            if started?, do: Queue.stop(opts[:queue_owner])
+            :erlang.raise(kind, reason, __STACKTRACE__)
+        end
+    end
+  end
+
+  defp queue_alive?(queue) when is_pid(queue), do: Process.alive?(queue)
+
+  defp queue_alive?(queue) when is_atom(queue) and queue != nil do
+    is_pid(Process.whereis(queue))
+  end
+
+  defp queue_alive?(_queue), do: false
 
   defp init_queue(nil, opts) do
-    {:ok, pid} =
-      DynamicSupervisor.start_child(
-        Crawler.QueueSupervisor,
-        {OPQ,
-         [
-           worker: Worker,
-           workers: opts[:workers],
-           interval: opts[:interval],
-           timeout: opts[:timeout]
-         ]}
-      )
+    spec =
+      Supervisor.child_spec({Queue, opts}, shutdown: 10_000, restart: :temporary)
 
-    Map.put(opts, :queue, pid)
+    {:ok, owner} = DynamicSupervisor.start_child(Crawler.QueueSupervisor, spec)
+    feeder = Queue.feeder(owner)
+
+    opts =
+      opts
+      |> Map.put(:queue, feeder)
+      |> Map.put(:queue_owner, owner)
+
+    {opts, true}
   end
 
-  defp init_queue(_queue, opts), do: opts
+  defp init_queue(_queue, opts), do: {opts, false}
 end

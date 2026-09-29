@@ -4,6 +4,7 @@ defmodule Crawler do
   """
 
   alias Crawler.Options
+  alias Crawler.Queue
   alias Crawler.QueueHandler
   alias Crawler.Store
   alias Crawler.Worker
@@ -60,11 +61,41 @@ defmodule Crawler do
   end
 
   @doc """
-  Stops the crawler.
+  Stops a crawl.
+
+  Pass the options returned by `Crawler.crawl/2`. This drops that scope's
+  URLs, counters, and in-flight page slots. When the crawl started the queue,
+  the queue and the processes it started are shut down. A queue created
+  outside Crawler keeps running. Stopping the scope that started a queue
+  shuts that queue down, even when these options only contain `queue:`.
+  This does not change the caller's exit trapping.
+
+  Stopping the crawl that created a shared queue shuts that queue down. Other
+  scopes using it stop making progress. Pages they have already stored stay
+  readable.
   """
   def stop(opts) do
-    Process.flag(:trap_exit, true)
-    OPQ.stop(opts[:queue])
+    opts = Enum.into(opts, %{})
+    queue = opts[:queue]
+    scope = opts[:scope]
+    owner = owning_queue(opts)
+
+    siblings =
+      if is_pid(owner) and is_pid(queue) do
+        queue
+        |> Store.queue_scopes()
+        |> List.delete(scope)
+      else
+        []
+      end
+
+    if not is_nil(scope), do: Store.drop_scope(scope)
+
+    Enum.each(siblings, &Store.abandon_inflight/1)
+
+    if is_pid(owner), do: Queue.stop(owner)
+
+    :ok
   end
 
   @doc """
@@ -79,13 +110,21 @@ defmodule Crawler do
 
   @doc """
   Checks whether the crawler is still crawling.
+
+  A stopped scope reports `false` even when its queue still holds another
+  crawl's work. Pages this scope has queued still count until their workers
+  finish.
   """
   def running?(opts) do
     Process.sleep(10)
 
+    opts = Enum.into(opts, %{})
+
     cond do
       paused?(opts[:queue]) -> false
+      closed?(opts[:scope], opts[:generation]) -> false
       Store.inflight_count(opts[:scope]) > 0 -> true
+      Store.pending_count(opts[:scope]) > 0 -> true
       queued?(opts[:queue]) -> true
       true -> false
     end
@@ -99,6 +138,8 @@ defmodule Crawler do
   def crawl_now(opts) do
     if page_allowed?(opts) do
       Worker.run(opts)
+    else
+      Store.finish_work(opts[:scope], opts[:generation], false)
     end
   end
 
@@ -109,6 +150,23 @@ defmodule Crawler do
   end
 
   defp page_allowed?(_opts), do: true
+
+  defp owning_queue(%{queue_owner: owner}) when is_pid(owner), do: owner
+
+  defp owning_queue(%{queue: queue, scope: scope}) when is_pid(queue) do
+    case Store.queue_record(queue) do
+      %{owner: owner, scope: ^scope} when is_pid(owner) -> owner
+      _ -> nil
+    end
+  end
+
+  defp owning_queue(_opts), do: nil
+
+  defp closed?(_scope, generation) when not is_integer(generation), do: false
+
+  defp closed?(scope, generation) do
+    Store.generation(scope) != generation
+  end
 
   defp paused?(nil), do: false
 

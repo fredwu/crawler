@@ -139,6 +139,11 @@ defmodule Crawler.ReqTestSite do
   end
 
   defp call_route(agent, key, fun, conn) do
+    token = make_ref()
+    # An exit signal does not run `after`. The watcher counts this route
+    # finished when the request process dies first.
+    watch_request(agent, token)
+
     task =
       Task.async(fn ->
         try do
@@ -163,8 +168,25 @@ defmodule Crawler.ReqTestSite do
         record_failure(agent, "Handler for #{format_key(key)} exited: #{inspect(reason)}")
         Plug.Conn.send_resp(conn, 500, "ReqTestSite handler failed for #{format_key(key)}")
     after
-      finish_route(agent)
+      finish_route(agent, token)
     end
+  end
+
+  defp watch_request(agent, token) do
+    request = self()
+
+    spawn(fn ->
+      ref = Process.monitor(request)
+
+      receive do
+        {:DOWN, ^ref, _, _, _} ->
+          try do
+            finish_route(agent, token)
+          catch
+            :exit, _ -> :ok
+          end
+      end
+    end)
   end
 
   defp route_failures(_key, %{type: :once, count: 1}), do: []
@@ -186,7 +208,7 @@ defmodule Crawler.ReqTestSite do
   end
 
   defp initial_state do
-    %{routes: %{}, unexpected: [], failures: [], active: 0, waiters: []}
+    %{routes: %{}, unexpected: [], failures: [], active: 0, waiters: [], finished: MapSet.new()}
   end
 
   defp record_failure(agent, message) do
@@ -195,8 +217,14 @@ defmodule Crawler.ReqTestSite do
     end)
   end
 
-  defp finish_route(agent) do
-    Agent.update(agent, &release_waiters/1)
+  defp finish_route(agent, token) do
+    Agent.update(agent, fn state ->
+      if MapSet.member?(state.finished, token) do
+        %{state | finished: MapSet.delete(state.finished, token)}
+      else
+        release_waiters(%{state | finished: MapSet.put(state.finished, token)})
+      end
+    end)
   end
 
   defp release_waiters(state) do
@@ -284,7 +312,8 @@ defmodule Crawler.ReqTestSite do
   end
 
   defp queue_idle?(pid) do
-    !Process.alive?(pid) || queue_empty?(OPQ.info(pid))
+    feeder = Crawler.Queue.feeder(pid)
+    not Process.alive?(feeder) or queue_empty?(OPQ.info(feeder))
   catch
     :exit, _ -> true
   end

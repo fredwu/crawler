@@ -162,7 +162,7 @@ defmodule Crawler.Fetcher do
 
   defp snap_page(body, opts) do
     if opts[:save_to] do
-      Store.commit(opts[:scope], opts[:generation], fn -> Snapper.snap(body, opts) end)
+      Snapper.snap(body, opts)
     else
       {:ok, ""}
     end
