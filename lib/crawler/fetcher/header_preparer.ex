@@ -3,6 +3,8 @@ defmodule Crawler.Fetcher.HeaderPreparer do
   Captures and prepares HTTP response headers.
   """
 
+  alias Crawler.MediaType
+
   @default_content_type "text/html"
 
   @doc """
@@ -27,6 +29,18 @@ defmodule Crawler.Fetcher.HeaderPreparer do
       iex>   %{}
       iex> )
       %{headers: [{"Content-Type", "image/png; blah"}], content_type: "image/png"}
+
+      iex> HeaderPreparer.prepare(
+      iex>   [{"Content-Type", "Text/HTML; charset=UTF-8"}],
+      iex>   %{}
+      iex> )
+      %{headers: [{"Content-Type", "Text/HTML; charset=UTF-8"}], content_type: "text/html"}
+
+      iex> HeaderPreparer.prepare(
+      iex>   [{"Content-Type", "text/css ; charset=utf-8"}],
+      iex>   %{}
+      iex> )
+      %{headers: [{"Content-Type", "text/css ; charset=utf-8"}], content_type: "text/css"}
   """
   def prepare(headers, opts) do
     content_type =
@@ -52,9 +66,5 @@ defmodule Crawler.Fetcher.HeaderPreparer do
     String.downcase(header) == "content-type"
   end
 
-  defp simplify_content_type(content_type) do
-    content_type
-    |> String.split(";", parts: 2)
-    |> Kernel.hd()
-  end
+  defp simplify_content_type(content_type), do: MediaType.normalize(content_type)
 end

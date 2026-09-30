@@ -5,8 +5,9 @@ defmodule Crawler.Linker do
 
   alias Crawler.Linker.PathBuilder
   alias Crawler.Linker.PathFinder
-  alias Crawler.Linker.PathOffliner
   alias Crawler.Linker.PathPrefixer
+  alias Crawler.Linker.Snapshot
+  alias Crawler.URL
 
   @doc """
   Given the `current_link`, it works out what the offline URL should be for
@@ -62,11 +63,18 @@ defmodule Crawler.Linker do
       iex> )
       "http://host/search/__index__q_q=foo%2f..%2fbar.html"
   """
-  def offline_url(current_url, link) do
-    current_url
-    |> url(link)
-    |> PathOffliner.transform()
+  def offline_url(current_url, link) when is_binary(link) do
+    case URL.resolve(link, current_url) do
+      {:ok, target} ->
+        %URI{scheme: scheme} = URI.parse(target)
+        scheme <> "://" <> Snapshot.path(target)
+
+      :skip ->
+        link
+    end
   end
+
+  def offline_url(_current_url, link), do: link
 
   @doc """
   Given the `current_link`, it works out what the relative
@@ -110,10 +118,20 @@ defmodule Crawler.Linker do
       iex> )
       "../../../thank.you/page1.html"
   """
-  def offline_link(current_url, link) do
-    current_url
-    |> link(link)
-    |> PathOffliner.transform()
+  def offline_link(current_url, link) when is_binary(link) do
+    case URL.resolve(link, current_url) do
+      {:ok, target} -> Snapshot.relative(current_url, target) <> fragment_suffix(link)
+      :skip -> link
+    end
+  end
+
+  def offline_link(_current_url, link), do: link
+
+  defp fragment_suffix(link) do
+    case String.split(link, "#", parts: 2) do
+      [_base, fragment] -> "#" <> fragment
+      _ -> ""
+    end
   end
 
   @doc """

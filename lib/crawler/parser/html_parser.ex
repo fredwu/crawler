@@ -18,18 +18,22 @@ defmodule Crawler.Parser.HtmlParser do
       iex>   "<script type='text/javascript'>js</script>",
       iex>   %{assets: ["js"]}
       iex> )
-      []
+      [{"script", [{"type", "text/javascript"}], ["js"]}]
   """
   def parse(body, opts) do
     {:ok, document} = Floki.parse_document(body)
     assets = opts[:assets] || []
 
     document
-    |> Floki.find("a, area, iframe")
+    |> base_nodes()
     |> include(assets, "js", fn -> js_nodes(document) end)
     |> include(assets, "images", fn -> image_nodes(document) end)
     |> include(assets, "css", fn -> css_nodes(document) end)
     |> Enum.uniq()
+  end
+
+  defp base_nodes(document) do
+    Floki.find(document, "a, area, iframe, object, embed") ++ refresh_nodes(document)
   end
 
   defp include(nodes, assets, asset, fun) do
@@ -37,13 +41,26 @@ defmodule Crawler.Parser.HtmlParser do
   end
 
   defp js_nodes(document) do
-    Floki.find(document, "script[src]") ++ preload_links(document, "script")
+    Floki.find(document, "script") ++ preload_links(document, "script")
   end
 
   defp image_nodes(document) do
-    Floki.find(document, "img, source, video, audio, track, image, use") ++
+    Floki.find(document, "img, source, video, audio, track, image, use, link[imagesrcset]") ++
       icon_links(document) ++
       preload_links(document, "image")
+  end
+
+  defp refresh_nodes(document) do
+    document
+    |> Floki.find("meta")
+    |> Enum.filter(&refresh?/1)
+  end
+
+  defp refresh?({_tag, attrs, _children}) do
+    attrs
+    |> attribute_ci("http-equiv")
+    |> String.trim()
+    |> String.downcase() == "refresh"
   end
 
   defp css_nodes(document) do
@@ -95,6 +112,16 @@ defmodule Crawler.Parser.HtmlParser do
     Enum.find_value(attrs, "", fn
       {^name, value} -> value
       _ -> nil
+    end)
+  end
+
+  defp attribute_ci(attrs, name) do
+    Enum.find_value(attrs, "", fn
+      {key, value} ->
+        if String.downcase(to_string(key)) == name, do: to_string(value)
+
+      _ ->
+        nil
     end)
   end
 end

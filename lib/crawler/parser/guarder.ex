@@ -3,6 +3,8 @@ defmodule Crawler.Parser.Guarder do
   Detects whether a page is parsable.
   """
 
+  alias Crawler.MediaType
+
   @doc """
   Detects whether a page is parsable.
 
@@ -29,13 +31,13 @@ defmodule Crawler.Parser.Guarder do
       false
   """
   def pass?(opts) do
-    is_text_link?(opts[:html_tag]) && is_text_file?(opts[:content_type])
+    parsable_tag?(opts[:html_tag]) and parsable_type?(opts[:content_type])
   end
 
-  defp is_text_link?(html_tag), do: Enum.member?(["a", "link"], html_tag)
+  defp parsable_tag?(html_tag), do: html_tag in ["a", "link", "script"]
 
-  defp is_text_file?(content_type) do
-    String.starts_with?(content_type, "text") or
-      String.starts_with?(content_type, "application/xhtml")
+  defp parsable_type?(content_type) do
+    MediaType.text?(content_type) or MediaType.xhtml?(content_type) or
+      MediaType.javascript?(content_type)
   end
 end

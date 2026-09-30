@@ -4,9 +4,11 @@ defmodule Crawler.Parser do
   """
 
   alias Crawler.Dispatcher
+  alias Crawler.MediaType
   alias Crawler.Parser.CssParser
   alias Crawler.Parser.Guarder
   alias Crawler.Parser.HtmlParser
+  alias Crawler.Parser.JsParser
   alias Crawler.Parser.LinkParser
   alias Crawler.URL
 
@@ -124,14 +126,7 @@ defmodule Crawler.Parser do
 
   defp put_base_href(_body, opts), do: opts
 
-  defp html?(opts) do
-    case opts[:content_type] do
-      "text/html" <> _ -> true
-      "application/xhtml" <> _ -> true
-      nil -> true
-      _ -> false
-    end
-  end
+  defp html?(opts), do: MediaType.html?(opts[:content_type])
 
   defp base_href(body) do
     with {:ok, document} <- Floki.parse_document(body),
@@ -182,6 +177,13 @@ defmodule Crawler.Parser do
     )
   end
 
-  defp parse_file(body, %{content_type: "text/css"}), do: CssParser.parse(body)
-  defp parse_file(body, opts), do: HtmlParser.parse(body, opts)
+  defp parse_file(body, opts) do
+    type = opts[:content_type]
+
+    cond do
+      MediaType.css?(type) -> CssParser.parse(body)
+      MediaType.javascript?(type) -> JsParser.elements(body)
+      true -> HtmlParser.parse(body, opts)
+    end
+  end
 end

@@ -42,10 +42,10 @@ defmodule Crawler.Snapper.LinkReplacerTest do
 
     assert body =~ "href='../../host/dir/next/__index.html'"
     assert body =~ "href='../../cdn.example/lib.js'"
-    assert body =~ "href='../../host/dir/page/__index.html'"
+    assert body =~ "href='../../host/dir/page/__index.html#a'"
     refute body =~ "href='next'"
     refute body =~ "//cdn.example/lib.js"
-    refute body =~ "#a"
+    refute body =~ "href='http://host/dir/page#a'"
   end
 
   test "rewrites srcset, style urls, and html-escaped queries" do

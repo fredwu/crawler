@@ -61,8 +61,8 @@ defmodule Crawler.Snapper do
       iex>     content_type: "text/html",
       iex>   }
       iex> )
-      iex> File.read(tmp("snapper/snapper.local-7777/dir/depth1", "__index.html"))
-      {:ok, "<a href='../../../another.domain-8888/page/__index.html'></a>"}
+      iex> File.read(tmp("snapper/snapper.local__port_7777/dir/depth1", "__index.html"))
+      {:ok, "<a href='../../../another.domain__port_8888/page/__index.html'></a>"}
   """
   def snap(body, opts) do
     {:ok, body} = LinkReplacer.replace_links(body, opts)

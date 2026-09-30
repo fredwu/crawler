@@ -3,8 +3,7 @@ defmodule Crawler.Snapper.DirMaker do
   Makes a new (nested) folder according to the options provided.
   """
 
-  alias Crawler.Linker
-  alias Crawler.Linker.PathFinder
+  alias Crawler.Linker.Snapshot
 
   @doc """
   Makes a new (nested) folder according to the options provided.
@@ -25,11 +24,7 @@ defmodule Crawler.Snapper.DirMaker do
     |> make_save_path(opts[:save_to])
   end
 
-  defp prep_filepath(url) do
-    url
-    |> Linker.offline_url(url)
-    |> PathFinder.find_path()
-  end
+  defp prep_filepath(url), do: Snapshot.path(url)
 
   defp build_save_path(path, save_to) do
     Path.join(save_to, path)

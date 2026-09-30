@@ -5,7 +5,7 @@ defmodule Crawler.Parser.HtmlParserTest do
 
   doctest HtmlParser
 
-  test "finds script tags that omit type='text/javascript'" do
+  test "finds external and inline script tags" do
     html = """
     <script src="/app.js"></script>
     <script type="module" src="/mod.js"></script>
@@ -14,7 +14,8 @@ defmodule Crawler.Parser.HtmlParserTest do
 
     assert [
              {"script", [{"src", "/app.js"}], _app},
-             {"script", [{"type", "module"}, {"src", "/mod.js"}], _mod}
+             {"script", [{"type", "module"}, {"src", "/mod.js"}], _mod},
+             {"script", [{"type", "text/javascript"}], ["inline"]}
            ] = HtmlParser.parse(html, %{assets: ["js"]})
   end
 

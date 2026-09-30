@@ -47,7 +47,7 @@ defmodule Crawler.ReqTestSiteTest do
         Req.get(site.url <> "/hold", ReqTestSite.req_options(site))
       end)
 
-    assert_receive {:holding, holder}
+    assert_receive {:holding, holder}, 2_000
 
     late =
       Task.async(fn ->
@@ -137,7 +137,7 @@ defmodule Crawler.ReqTestSiteTest do
         Req.get(site.url <> "/slow", ReqTestSite.req_options(site))
       end)
 
-    assert_receive {:handler_started, handler_pid}
+    assert_receive {:handler_started, handler_pid}, 2_000
 
     verifier =
       Task.async(fn ->

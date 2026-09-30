@@ -1015,7 +1015,8 @@ defmodule Crawler.CrawlBehaviorTest do
         refute saved =~ ~s|="#{raw}"|
       end
 
-      refute saved =~ "icons.svg#a"
+      refute saved =~ ~s|href="icons.svg#a"|
+      assert saved =~ "icons.svg#a"
     end)
 
     bare = "#{url}/embed/bare"

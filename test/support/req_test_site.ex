@@ -21,7 +21,7 @@ defmodule Crawler.ReqTestSite do
           host: "localhost",
           port: port,
           url: url,
-          path: "localhost-#{port}",
+          path: "localhost__port_#{port}",
           req_options: [plug: {__MODULE__, agent: agent}, retry: false]
         }
       end
