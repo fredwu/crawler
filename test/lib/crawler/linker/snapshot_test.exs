@@ -47,8 +47,8 @@ defmodule Crawler.Linker.SnapshotTest do
     assert Snapshot.path("http://ex.com:80/a") == Snapshot.path("http://ex.com/a")
     assert Snapshot.path("https://ex.com:443/a") == Snapshot.path("https://ex.com/a")
     refute Snapshot.path("http://ex.com:80/a") =~ "__port_"
-    assert Snapshot.path("http://ex.com/foo__c_bar") =~ "foo__c%5Fbar"
-    assert Snapshot.path("http://ex.com__port_8080/a") =~ "ex.com__port%5F8080"
+    assert Snapshot.path("http://ex.com/foo__c_bar") =~ "foo__c%5fbar"
+    assert Snapshot.path("http://ex.com__port_8080/a") =~ "ex.com__port%5f8080"
     refute Snapshot.path("http://ex.com/a?x=1:2") =~ ":"
   end
 
@@ -118,6 +118,305 @@ defmodule Crawler.Linker.SnapshotTest do
     assert String.ends_with?(href, "#section")
     assert href =~ "__q_"
     refute href =~ "post.html?q=1#section"
+  end
+
+  test "https, userinfo, and a bare question mark stay in the file path" do
+    assert Snapshot.path("http://ex.com/a") == "ex.com/a/__index.html"
+    assert Snapshot.path("https://ex.com/a") == "ex.com__scheme_https/a/__index.html"
+    assert Snapshot.path("https://ex.com:443/a") == "ex.com__scheme_https/a/__index.html"
+
+    assert Snapshot.path("https://ex.com:8443/a") ==
+             "ex.com__port_8443__scheme_https/a/__index.html"
+
+    assert Snapshot.path("http://a:b@ex.com/secret") ==
+             "ex.com__user_a%3ab/secret/__index.html"
+
+    assert Snapshot.path("https://a:b@ex.com:8080/secret") ==
+             "ex.com__user_a%3ab__port_8080__scheme_https/secret/__index.html"
+
+    assert Snapshot.path("http://ex.com/search?") == "ex.com/search/__index__q_.html"
+    assert Snapshot.path("http://ex.com?") == "ex.com/__index__q_.html"
+    assert Snapshot.path("http://ex.com/Docs") == "ex.com/__u_docs/__index.html"
+    assert Snapshot.path("http://[::1]/a") == "__c___c_1/a/__index.html"
+
+    literal_scheme = Snapshot.path("http://ex.com__scheme_https/a")
+    assert literal_scheme == "ex.com__scheme%5fhttps/a/__index.html"
+    refute Snapshot.path("https://ex.com/a") == literal_scheme
+
+    assert Snapshot.path("http://ex.com/__user_x") == "ex.com/__user%5fx/__index.html"
+    refute Snapshot.path("http://x@ex.com/__user_x") == Snapshot.path("http://ex.com/__user_x")
+
+    refute Snapshot.path("http://ex.com/search?") ==
+             Snapshot.path("http://ex.com/search/__index__q_.html")
+  end
+
+  test "case and combining marks do not share a case-folded path" do
+    docs = Snapshot.path("http://ex.com/Docs")
+    lower = Snapshot.path("http://ex.com/docs")
+    assert docs != lower
+    refute String.downcase(docs) == String.downcase(lower)
+
+    user = Snapshot.path("http://A:B@ex.com/Docs")
+    user_lower = Snapshot.path("http://a:b@ex.com/docs")
+    assert user != user_lower
+    refute String.downcase(user) == String.downcase(user_lower)
+
+    query = Snapshot.path("http://ex.com/search?Q=1")
+    query_lower = Snapshot.path("http://ex.com/search?q=1")
+    assert query != query_lower
+    refute String.downcase(query) == String.downcase(query_lower)
+
+    nfc = "http://ex.com/" <> <<0x00E9::utf8>>
+    nfd = "http://ex.com/e" <> <<0x0301::utf8>>
+    nfd_path = Snapshot.path(nfd)
+    assert Snapshot.path(nfc) != nfd_path
+    refute String.downcase(Snapshot.path(nfc)) == String.downcase(nfd_path)
+    assert nfd_path =~ "__m_000301"
+    refute nfd_path =~ <<0x0301::utf8>>
+
+    marked = Snapshot.path("http://ex.com/a" <> <<0x036F::utf8>>)
+    assert marked =~ "__m_00036f"
+    refute marked =~ "__m_36F"
+
+    short = Snapshot.path("http://ex.com/" <> <<0x0309::utf8>> <> "9")
+    voiced = Snapshot.path("http://ex.com/" <> <<0x3099::utf8>>)
+    assert short =~ "__m_000309"
+    assert voiced =~ "__m_003099"
+    refute String.downcase(short) == String.downcase(voiced)
+  end
+
+  test "a literal case or mark marker does not share a file" do
+    docs = Snapshot.path("http://ex.com/Docs")
+    literal_case = Snapshot.path("http://ex.com/__u_docs")
+    assert literal_case == "ex.com/__u%5fdocs/__index.html"
+    assert literal_case != docs
+    refute String.downcase(literal_case) == String.downcase(docs)
+
+    nfd = "http://ex.com/e" <> <<0x0301::utf8>>
+    nfd_path = Snapshot.path(nfd)
+    literal_mark = Snapshot.path("http://ex.com/e__m_301")
+    assert literal_mark == "ex.com/e__m%5f301/__index.html"
+    assert literal_mark != nfd_path
+    refute String.downcase(literal_mark) == String.downcase(nfd_path)
+
+    root = tmp("snapshot-literal-markers")
+    snap("DOCS", "http://ex.com/Docs", root)
+    snap("CASE", "http://ex.com/__u_docs", root)
+    snap("NFD", nfd, root)
+    snap("MARK", "http://ex.com/e__m_301", root)
+
+    assert File.read!(file(root, "http://ex.com/Docs")) == "DOCS"
+    assert File.read!(file(root, "http://ex.com/__u_docs")) == "CASE"
+    assert File.read!(file(root, nfd)) == "NFD"
+    assert File.read!(file(root, "http://ex.com/e__m_301")) == "MARK"
+  end
+
+  test "a decomposed hiragana letter does not share a file with the composed letter" do
+    composed = "http://ex.com/" <> <<0x304C::utf8>>
+    decomposed = "http://ex.com/" <> <<0x304B::utf8>> <> <<0x3099::utf8>>
+    composed_path = Snapshot.path(composed)
+    decomposed_path = Snapshot.path(decomposed)
+
+    assert decomposed_path =~ "__m_003099"
+    refute decomposed_path =~ <<0x3099::utf8>>
+    assert composed_path != decomposed_path
+    refute String.downcase(composed_path) == String.downcase(decomposed_path)
+
+    root = tmp("snapshot-hiragana")
+    snap("COMPOSED", composed, root)
+    snap("DECOMPOSED", decomposed, root)
+    assert File.read!(file(root, composed)) == "COMPOSED"
+    assert File.read!(file(root, decomposed)) == "DECOMPOSED"
+  end
+
+  test "İ does not share a file with I plus a combining dot" do
+    dotted = "http://ex.com/" <> <<0x0130::utf8>>
+    split = "http://ex.com/" <> <<0x0049::utf8>> <> <<0x0307::utf8>>
+    dotted_path = Snapshot.path(dotted)
+    split_path = Snapshot.path(split)
+
+    assert dotted_path == "ex.com/__u_000130/__index.html"
+    assert split_path =~ "__u_i"
+    assert split_path =~ "__m_000307"
+    refute String.downcase(dotted_path) == String.downcase(split_path)
+
+    root = tmp("snapshot-dotted-i")
+    snap("DOTTED", dotted, root)
+    snap("SPLIT", split, root)
+    assert File.read!(file(root, dotted)) == "DOTTED"
+    assert File.read!(file(root, split)) == "SPLIT"
+  end
+
+  test "a decomposed hangul syllable does not share a file with the composed letter" do
+    composed = "http://ex.com/" <> <<0xAC00::utf8>>
+    decomposed = "http://ex.com/" <> <<0x1100::utf8>> <> <<0x1161::utf8>>
+    composed_path = Snapshot.path(composed)
+    decomposed_path = Snapshot.path(decomposed)
+    literal = Snapshot.path("http://ex.com/__j_001100")
+
+    assert composed_path == "ex.com/" <> <<0xAC00::utf8>> <> "/__index.html"
+    assert decomposed_path == "ex.com/__j_001100__j_001161/__index.html"
+    assert literal == "ex.com/__j%5f001100/__index.html"
+    refute String.downcase(composed_path) == String.downcase(decomposed_path)
+    refute String.downcase(literal) == String.downcase(decomposed_path)
+
+    root = tmp("snapshot-hangul")
+    snap("COMPOSED", composed, root)
+    snap("JAMO", decomposed, root)
+    snap("LITERAL", "http://ex.com/__j_001100", root)
+    assert File.read!(file(root, composed)) == "COMPOSED"
+    assert File.read!(file(root, decomposed)) == "JAMO"
+    assert File.read!(file(root, "http://ex.com/__j_001100")) == "LITERAL"
+  end
+
+  test "letters that share a lowercase form do not share a file" do
+    kay = "http://ex.com/K"
+    kelvin = "http://ex.com/" <> <<0x212A::utf8>>
+
+    assert Snapshot.path(kay) == "ex.com/__u_k/__index.html"
+    assert Snapshot.path(kelvin) == "ex.com/__u_00212a/__index.html"
+
+    pairs = [
+      {0x00C5, "0000c5", 0x212B, "00212b"},
+      {0x01C4, "0001c4", 0x01C5, "0001c5"},
+      {0x01C7, "0001c7", 0x01C8, "0001c8"},
+      {0x01CA, "0001ca", 0x01CB, "0001cb"},
+      {0x01F1, "0001f1", 0x01F2, "0001f2"},
+      {0x0398, "000398", 0x03F4, "0003f4"},
+      {0x03A9, "0003a9", 0x2126, "002126"}
+    ]
+
+    for {left, left_hex, right, right_hex} <- pairs do
+      assert Snapshot.path("http://ex.com/" <> <<left::utf8>>) ==
+               "ex.com/__u_#{left_hex}/__index.html"
+
+      assert Snapshot.path("http://ex.com/" <> <<right::utf8>>) ==
+               "ex.com/__u_#{right_hex}/__index.html"
+    end
+
+    root = tmp("snapshot-case-fold")
+    snap("K", kay, root)
+    snap("KELVIN", kelvin, root)
+    assert File.read!(file(root, kay)) == "K"
+    assert File.read!(file(root, kelvin)) == "KELVIN"
+  end
+
+  test "a casefold that downcase leaves unchanged does not share a file" do
+    pairs = [
+      {<<0x00DF::utf8>>, "__u_0000df", "ss"},
+      {<<0xFB01::utf8>>, "__u_00fb01", "fi"},
+      {<<0x00B5::utf8>>, "__u_0000b5", <<0x03BC::utf8>>},
+      {<<0x017F::utf8>>, "__u_00017f", "s"},
+      {<<0x03C2::utf8>>, "__u_0003c2", <<0x03C3::utf8>>}
+    ]
+
+    root = tmp("snapshot-casefold-stable")
+
+    for {letter, marker, other} <- pairs do
+      url = "http://ex.com/" <> letter
+      other_url = "http://ex.com/" <> other
+
+      assert Snapshot.path(url) == "ex.com/#{marker}/__index.html"
+      refute Snapshot.path(url) == Snapshot.path(other_url)
+
+      snap("LETTER", url, root)
+      snap("OTHER", other_url, root)
+      assert File.read!(file(root, url)) == "LETTER"
+      assert File.read!(file(root, other_url)) == "OTHER"
+    end
+  end
+
+  test "a literal query marker does not share a file" do
+    literal = "http://ex.com/app__q_v=1.js"
+    query = "http://ex.com/app.js?v=1"
+    literal_path = Snapshot.path(literal)
+    query_path = Snapshot.path(query)
+
+    assert literal_path == "ex.com/app__q%5fv=1.js"
+    assert query_path == "ex.com/app__q_v=1.js"
+    refute literal_path =~ "__u_"
+    refute String.downcase(literal_path) == String.downcase(query_path)
+
+    root = tmp("snapshot-query-marker")
+    snap("LITERAL", literal, root)
+    snap("QUERY", query, root)
+    assert File.read!(file(root, literal)) == "LITERAL"
+    assert File.read!(file(root, query)) == "QUERY"
+  end
+
+  test "a byte that is not utf-8 does not share a file with the same character" do
+    raw = "http://ex.com/caf" <> <<0xE9>>
+    utf8 = "http://ex.com/caf" <> <<0x00E9::utf8>>
+    raw_path = Snapshot.path(raw)
+    utf8_path = Snapshot.path(utf8)
+
+    assert raw_path =~ "%e9"
+    assert raw_path != utf8_path
+    refute String.downcase(raw_path) == String.downcase(utf8_path)
+
+    root = tmp("snapshot-latin1")
+    snap("RAW", raw, root)
+    snap("UTF8", utf8, root)
+    assert File.read!(file(root, raw)) == "RAW"
+    assert File.read!(file(root, utf8)) == "UTF8"
+  end
+
+  test "scheme and userinfo do not add a directory to a relative link" do
+    assert Snapshot.relative("https://ex.com/dir/page", "https://ex.com/other") ==
+             "../../../ex.com__scheme_https/other/__index.html"
+
+    assert Snapshot.relative("http://a:b@ex.com/dir/page", "http://a:b@ex.com/other") ==
+             "../../../ex.com__user_a%3ab/other/__index.html"
+
+    assert Snapshot.relative("http://ex.com/dir/page", "https://ex.com/other") ==
+             "../../../ex.com__scheme_https/other/__index.html"
+  end
+
+  test "distinct identities do not share a file on disk" do
+    root = tmp("snapshot-identity")
+    nfc = "http://ex.com/" <> <<0x00E9::utf8>>
+    nfd = "http://ex.com/e" <> <<0x0301::utf8>>
+
+    pairs = [
+      {"http://ex.com/a", "http"},
+      {"https://ex.com/a", "https"},
+      {"http://a:b@ex.com/secret", "user"},
+      {"http://A:B@ex.com/secret", "user-case"},
+      {"http://ex.com/secret", "open"},
+      {"http://ex.com/search", "bare"},
+      {"http://ex.com/search?", "empty"},
+      {"http://ex.com/search?q=1", "q"},
+      {"http://ex.com/search?Q=1", "Q"},
+      {"http://ex.com?", "root-empty"},
+      {"http://ex.com", "root"},
+      {"http://ex.com/docs", "docs"},
+      {"http://ex.com/Docs", "Docs"},
+      {nfc, "nfc"},
+      {nfd, "nfd"}
+    ]
+
+    Enum.each(pairs, fn {url, body} -> snap(body, url, root) end)
+
+    Enum.each(pairs, fn {url, body} ->
+      assert File.read!(file(root, url)) == body
+    end)
+
+    paths = Enum.map(pairs, fn {url, _} -> String.downcase(Snapshot.path(url)) end)
+    assert paths == Enum.uniq(paths)
+
+    page = "http://ex.com/page"
+
+    snap(
+      Enum.map_join(pairs, "", fn {url, _} -> ~s(<a href="#{url}"></a>) end),
+      page,
+      root
+    )
+
+    saved = File.read!(file(root, page))
+
+    Enum.each(pairs, fn {url, _body} ->
+      assert_saved_expands(saved, page, url, root)
+    end)
   end
 
   defp assert_expands(from_url, link, target_url) do

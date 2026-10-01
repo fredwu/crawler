@@ -2,6 +2,7 @@
 
 ## master
 
+- [Fixed] A saved link opens the page that was fetched. A redirect is stored under both the requested address and the address it landed on, and a redirect the crawl would reject is not saved or followed. A blank redirect is not followed, and a redirect past the hop limit stays a too-many-redirects error. `http` and `https`, a username or password, a bare `?`, and path case, letters that case-fold to the same spelling, and a decomposed Hangul syllable no longer share one file.
 - [Added] Add `:retries` option
 - [Improved] Replace HTTPoison/Bypass HTTP handling and tests with Req/Req.Test.
 - [Fixed] Stopping a crawl shuts down the queue processes it started, without changing the caller's exit trapping, and releases that scope's URLs, counters, and in-flight slots

@@ -9,6 +9,8 @@ defmodule Crawler.Fetcher do
   alias Crawler.Fetcher.Policer
   alias Crawler.Fetcher.Recorder
   alias Crawler.Fetcher.Requester
+  alias Crawler.HTTP
+  alias Crawler.Linker.Snapshot
   alias Crawler.Snapper
   alias Crawler.Store
   alias Crawler.Store.Page
@@ -50,6 +52,9 @@ defmodule Crawler.Fetcher do
 
       {:ok, %Req.Response{status: status_code}} ->
         fetch_url_non_200(status_code, opts)
+
+      {:error, %HTTP.RedirectRejected{} = rejected} ->
+        fetch_url_rejected(rejected, opts)
 
       {:error, %Req.TransportError{reason: reason}} ->
         fetch_url_failed(reason, opts)
@@ -109,6 +114,14 @@ defmodule Crawler.Fetcher do
     {:error, msg}
   end
 
+  defp fetch_url_rejected(%HTTP.RedirectRejected{url: next}, opts) do
+    msg = "Redirect rejected for #{opts[:url]} to #{next}"
+
+    Logger.debug(msg)
+
+    {:warn, msg}
+  end
+
   defp format_reason(reason) when is_binary(reason), do: reason
   defp format_reason(reason), do: inspect(reason)
 
@@ -162,9 +175,29 @@ defmodule Crawler.Fetcher do
 
   defp snap_page(body, opts) do
     if opts[:save_to] do
-      Snapper.snap(body, opts)
+      with {:ok, _} <- Snapper.snap(body, opts) do
+        snap_distinct_landing(body, opts)
+      end
     else
       {:ok, ""}
     end
   end
+
+  # The response body belongs to the landing page. Links to that address need
+  # their own file, with relatives computed from where that file sits. The
+  # requested address keeps a copy too, so a link to the old address still
+  # opens the page that was fetched.
+  defp snap_distinct_landing(body, %{url: url, referrer_url: final} = opts)
+       when is_binary(final) do
+    if final == url or Snapshot.path(final) == Snapshot.path(url) do
+      {:ok, opts}
+    else
+      case Snapper.snap(body, %{opts | url: final}) do
+        {:ok, _} -> {:ok, opts}
+        other -> other
+      end
+    end
+  end
+
+  defp snap_distinct_landing(_body, opts), do: {:ok, opts}
 end

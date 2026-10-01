@@ -3,6 +3,7 @@ defmodule Crawler.Fetcher.Requester do
   Makes HTTP requests.
   """
 
+  alias Crawler.Fetcher.UrlFilter
   alias Crawler.HTTP
 
   @fetch_opts [
@@ -31,7 +32,7 @@ defmodule Crawler.Fetcher.Requester do
       200
   """
   def make(opts) do
-    HTTP.get(opts[:url], fetch_headers(opts), fetch_opts(opts))
+    HTTP.get(opts[:url], fetch_headers(opts), fetch_opts(opts), &allow_redirect?(&1, opts))
   end
 
   defp fetch_headers(opts) do
@@ -50,4 +51,11 @@ defmodule Crawler.Fetcher.Requester do
   end
 
   defp timeout_opts(_timeout), do: []
+
+  defp allow_redirect?(url, opts) do
+    filter = opts[:url_filter] || UrlFilter
+    opts = opts |> Enum.into(%{}) |> Map.put(:url, url)
+
+    match?({:ok, true}, filter.filter(url, opts))
+  end
 end

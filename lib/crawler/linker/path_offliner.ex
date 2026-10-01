@@ -65,6 +65,13 @@ defmodule Crawler.Linker.PathOffliner do
       iex> PathOffliner.transform("http://host/search?q=1&x=2") ==
       iex>   PathOffliner.transform("http://host/search/__index.html?q=1&x=2")
       false
+
+      iex> PathOffliner.transform("http://host/search?")
+      "http://host/search/__index__q_.html"
+
+      iex> PathOffliner.transform("http://host/search?") ==
+      iex>   PathOffliner.transform("http://host/search")
+      false
   """
   def transform(link) do
     {bare, query} = link |> collapse_file_slash() |> split_query()
@@ -87,10 +94,12 @@ defmodule Crawler.Linker.PathOffliner do
     end
   end
 
+  # A bare "?" is a different page from a URL with no query. Keep it as an
+  # empty query so the file name does not collapse onto the page without one.
   defp split_query(link) do
     case String.split(link, "?", parts: 2) do
-      [bare, query] when query != "" -> {bare, query}
-      [bare | _] -> {bare, nil}
+      [bare, query] -> {bare, query}
+      [bare] -> {bare, nil}
     end
   end
 
@@ -131,7 +140,7 @@ defmodule Crawler.Linker.PathOffliner do
   defp escape_reserved(offline, original) do
     offline
     |> String.replace("%", "%25")
-    |> String.replace(@query_marker, "__q%5F")
+    |> String.replace(@query_marker, "__q%5f")
     |> escape_literal_index(original)
   end
 

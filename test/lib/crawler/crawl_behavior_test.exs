@@ -699,11 +699,17 @@ defmodule Crawler.CrawlBehaviorTest do
       """)
     end)
 
-    ReqTestSite.expect_once(site, "GET", "/slash/foo", fn conn ->
-      conn
-      |> Plug.Conn.put_resp_header("content-type", "text/html")
-      |> Plug.Conn.resp(200, "FOO")
-    end)
+    hits = :counters.new(1, [:atomics])
+
+    for path <- ["/slash/foo", "/slash/foo/"] do
+      ReqTestSite.stub(site, "GET", path, fn conn ->
+        :counters.add(hits, 1, 1)
+
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "text/html")
+        |> Plug.Conn.resp(200, "FOO")
+      end)
+    end
 
     {:ok, opts} =
       Crawler.crawl("#{url}/slash/entry",
@@ -715,7 +721,7 @@ defmodule Crawler.CrawlBehaviorTest do
 
     wait(fn ->
       refute Crawler.running?(opts)
-
+      assert :counters.get(hits, 1) == 1
       assert File.read!(tmp("behavior-slash/#{site.path}/slash/foo", "__index.html")) == "FOO"
       assert Store.find_processed({"#{url}/slash/foo", "slash"})
       assert Store.find_processed({"#{url}/slash/foo/", "slash"})
