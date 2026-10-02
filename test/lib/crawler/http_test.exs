@@ -15,7 +15,7 @@ defmodule Crawler.HTTPTest do
       Plug.Conn.resp(conn, 200, "")
     end)
 
-    Crawler.crawl("#{url}/http/default_ua", req_options: req_options)
+    start_crawl("#{url}/http/default_ua", req_options: req_options)
 
     wait(fn ->
       assert String.match?(
@@ -36,7 +36,7 @@ defmodule Crawler.HTTPTest do
       Plug.Conn.resp(conn, 200, "")
     end)
 
-    Crawler.crawl("#{url}/http/custom_ua", user_agent: "Hello World", req_options: req_options)
+    start_crawl("#{url}/http/custom_ua", user_agent: "Hello World", req_options: req_options)
 
     wait(fn ->
       assert Agent.get(HTTP.CustomUA, & &1) == "Hello World"

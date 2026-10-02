@@ -7,6 +7,7 @@ defmodule Crawler.Parser.LinkParser do
   alias Crawler.Parser.CssParser
   alias Crawler.Parser.JsParser
   alias Crawler.Parser.LinkParser.LinkExpander
+  alias Crawler.Parser.Srcset
 
   @media_tags ["img", "source", "video", "audio", "script"]
 
@@ -51,7 +52,7 @@ defmodule Crawler.Parser.LinkParser do
   end
 
   defp links("style", _attrs, children, opts) do
-    if enabled?(opts, "css"), do: children |> node_text() |> style_links(), else: []
+    if enabled?(opts, "css"), do: children |> raw_text() |> style_links(), else: []
   end
 
   defp links("script", attrs, children, opts) do
@@ -192,13 +193,8 @@ defmodule Crawler.Parser.LinkParser do
     type in ["", "module"] or MediaType.javascript?(type)
   end
 
-  @srcset_candidate ~r/\s*((?i:data):[^\s,]+(?:,[^\s,]+)*|[^,\s]+)(?:\s+[^,]+)?\s*(?:,|$)/
-
   defp values("srcset", value) do
-    @srcset_candidate
-    |> Regex.scan(value, capture: :all_but_first)
-    |> List.flatten()
-    |> Enum.reject(&(&1 == "" or data_url?(&1)))
+    value |> Srcset.urls() |> Enum.reject(&data_url?/1)
   end
 
   defp values("imagesrcset", value), do: values("srcset", value)
@@ -208,17 +204,20 @@ defmodule Crawler.Parser.LinkParser do
   defp values(_name, value), do: [value]
 
   defp refresh_targets(value) do
-    cond do
-      match = Regex.run(~r/url\s*=\s*(["'])([^"']*)\1/i, value) ->
-        present(Enum.at(match, 2))
-
-      match = Regex.run(~r/url\s*=\s*([^;\s"']+)/i, value) ->
-        present(Enum.at(match, 1))
-
-      true ->
-        []
+    case Regex.run(~r/url\s*=\s*(.*)$/is, value, capture: :all_but_first) do
+      [target] -> refresh_target(target)
+      _ -> []
     end
   end
+
+  defp refresh_target(<<quote, rest::binary>>) when quote in [?", ?'] do
+    case :binary.split(rest, <<quote>>) do
+      [url, _remaining] -> present(url)
+      _ -> []
+    end
+  end
+
+  defp refresh_target(target), do: present(target)
 
   defp present(url) when is_binary(url) do
     # Keep the original text, spaces included, so the saved tag can be
@@ -239,28 +238,14 @@ defmodule Crawler.Parser.LinkParser do
     |> Enum.map(fn {"link", [{"href", url}], _} -> {"style", url} end)
   end
 
-  defp node_text(children) do
-    children |> raw_text() |> unescape_style()
-  end
-
-  # Script text is raw data. HTML does not decode entities there, so a quote
-  # entity must not change which imports are real.
+  # Script and style text are raw data. HTML decodes entities in attributes,
+  # but their text must retain URL query strings and JavaScript quotes.
   defp raw_text(children) do
     Enum.map_join(children, fn
       text when is_binary(text) -> text
       {_tag, _attrs, inner} -> raw_text(inner)
       _ -> ""
     end)
-  end
-
-  defp unescape_style(text) do
-    text
-    |> String.replace("&amp;", "&")
-    |> String.replace("&quot;", "\"")
-    |> String.replace("&#34;", "\"")
-    |> String.replace("&#39;", "'")
-    |> String.replace(~r/&#x0*22;/i, "\"")
-    |> String.replace(~r/&#x0*27;/i, "'")
   end
 
   defp attribute(attrs, name) do

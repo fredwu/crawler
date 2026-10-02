@@ -1,9 +1,10 @@
 defmodule Crawler.Linker.Snapshot do
   @moduledoc """
-  Builds one offline path for both the saved file and the links that point at it.
+  Builds offline filesystem paths and URL references to the saved files.
   """
 
   alias Crawler.Linker.PathOffliner
+  alias Crawler.Linker.Snapshot.Component
   alias Crawler.URL
 
   @port_marker "__port_"
@@ -14,6 +15,8 @@ defmodule Crawler.Linker.Snapshot do
   @case_marker "__u_"
   @mark_marker "__m_"
   @jamo_marker "__j_"
+  @extension_marker "__ext_"
+  @directory_marker "__dir_"
   @combining_mark ~r/\p{M}/u
   # Longer markers stay ahead of their prefixes. `__u_` is a prefix of `__user_`.
   @markers [
@@ -24,7 +27,10 @@ defmodule Crawler.Linker.Snapshot do
     @scheme_marker,
     @case_marker,
     @mark_marker,
-    @jamo_marker
+    @jamo_marker,
+    @extension_marker,
+    @directory_marker,
+    Component.marker()
   ]
 
   def path(url) when is_binary(url) do
@@ -36,7 +42,8 @@ defmodule Crawler.Linker.Snapshot do
         |> PathOffliner.transform()
         |> encode_segments()
         |> decorate_host(uri)
-        |> encode_identity()
+        |> encode_file_identity()
+        |> Component.bound()
 
       _ ->
         url
@@ -47,7 +54,14 @@ defmodule Crawler.Linker.Snapshot do
     directory = from_url |> path() |> drop_last_segment()
     depth = directory |> String.split("/", trim: true) |> length()
 
-    String.duplicate("../", depth) <> path(to_url)
+    String.duplicate("../", depth) <> url_path(to_url)
+  end
+
+  @doc "Encodes a filesystem path as a URL path, preserving directory separators."
+  def url_path(url) when is_binary(url) do
+    url
+    |> path()
+    |> URI.encode(fn byte -> byte == ?/ or URI.char_unreserved?(byte) end)
   end
 
   defp logical_path(%URI{host: host, path: path, query: query}) do
@@ -65,14 +79,18 @@ defmodule Crawler.Linker.Snapshot do
   defp path_segments(path) do
     path =
       path
+      |> drop_optional_trailing_slash()
       |> drop_one_leading_slash()
-      |> String.trim_trailing("/")
 
     if path == "", do: [], else: String.split(path, "/")
   end
 
   defp drop_one_leading_slash("/" <> rest), do: rest
   defp drop_one_leading_slash(path), do: path
+
+  defp drop_optional_trailing_slash(path) do
+    if String.ends_with?(path, "//"), do: path, else: String.trim_trailing(path, "/")
+  end
 
   defp drop_last_segment(path) do
     path
@@ -86,9 +104,20 @@ defmodule Crawler.Linker.Snapshot do
   # Empty segments would otherwise collapse to the same file as a path
   # without them. Host suffixes are added after this step.
   defp encode_segments(path) do
-    path
-    |> String.split("/")
-    |> Enum.map_join("/", &encode_segment/1)
+    segments = String.split(path, "/")
+    last = length(segments) - 1
+
+    segments
+    |> Enum.with_index()
+    |> Enum.map_join("/", fn {segment, index} ->
+      encoded = encode_segment(segment)
+
+      if index > 0 and index < last and PathOffliner.resource_filename?(segment) do
+        @directory_marker <> encoded
+      else
+        encoded
+      end
+    end)
   end
 
   defp encode_segment(""), do: @empty_marker
@@ -165,6 +194,19 @@ defmodule Crawler.Linker.Snapshot do
 
   defp escape_marker(marker) do
     String.replace_suffix(marker, "_", "%5f")
+  end
+
+  defp encode_file_identity(path) do
+    extension = Path.extname(path)
+    lowercase = String.downcase(extension)
+    encoded = encode_identity(path)
+
+    if extension == lowercase do
+      encoded
+    else
+      # The marker keeps `a.CSS` distinct from `a.CSS.css` and literal suffixes.
+      encoded <> @extension_marker <> lowercase
+    end
   end
 
   # `Docs` and `docs` are one file on a case-insensitive disk. So are ß

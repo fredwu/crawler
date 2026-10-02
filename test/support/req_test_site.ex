@@ -50,6 +50,20 @@ defmodule Crawler.ReqTestSite do
   def req_options(%__MODULE__{req_options: req_options}), do: req_options
   def req_options(%{site: site}), do: req_options(site)
 
+  def track_crawl(%{queue: queue} = opts) when is_pid(queue) do
+    case Keyword.get(opts[:req_options] || [], :plug) do
+      {__MODULE__, plug_opts} ->
+        agent = Keyword.fetch!(plug_opts, :agent)
+        work = {opts[:scope], opts[:generation], opts[:queue]}
+        Agent.update(agent, &%{&1 | crawls: MapSet.put(&1.crawls, work)})
+
+      _ ->
+        :ok
+    end
+  end
+
+  def track_crawl(_opts), do: :ok
+
   def close(site_or_context) do
     stop_agent(site_or_context)
   end
@@ -208,7 +222,15 @@ defmodule Crawler.ReqTestSite do
   end
 
   defp initial_state do
-    %{routes: %{}, unexpected: [], failures: [], active: 0, waiters: [], finished: MapSet.new()}
+    %{
+      routes: %{},
+      unexpected: [],
+      failures: [],
+      active: 0,
+      waiters: [],
+      finished: MapSet.new(),
+      crawls: MapSet.new()
+    }
   end
 
   defp record_failure(agent, message) do
@@ -246,10 +268,10 @@ defmodule Crawler.ReqTestSite do
   end
 
   defp wait_until_settled(agent, deadline) do
-    wait_for_crawler_queues(deadline)
+    wait_for_crawls(agent, deadline)
     wait_until_idle(agent, deadline)
 
-    unless crawler_queues_idle?() do
+    unless crawls_idle?(agent) do
       wait_until_settled(agent, deadline)
     end
   end
@@ -285,41 +307,21 @@ defmodule Crawler.ReqTestSite do
     end)
   end
 
-  defp wait_for_crawler_queues(deadline) do
-    if crawler_queues_idle?() do
+  defp wait_for_crawls(agent, deadline) do
+    if crawls_idle?(agent) do
       :ok
     else
       wait_for_timeout(10, deadline)
-      wait_for_crawler_queues(deadline)
+      wait_for_crawls(agent, deadline)
     end
   end
 
-  defp crawler_queues_idle? do
-    case Process.whereis(Crawler.QueueSupervisor) do
-      nil ->
-        true
-
-      supervisor ->
-        supervisor
-        |> DynamicSupervisor.which_children()
-        |> Enum.all?(fn
-          {_, pid, :worker, _} when is_pid(pid) -> queue_idle?(pid)
-          _ -> true
-        end)
-    end
-  catch
-    :exit, _ -> true
-  end
-
-  defp queue_idle?(pid) do
-    feeder = Crawler.Queue.feeder(pid)
-    not Process.alive?(feeder) or queue_empty?(OPQ.info(feeder))
-  catch
-    :exit, _ -> true
-  end
-
-  defp queue_empty?({_status, %OPQ.Queue{data: data}, _demand}) do
-    :queue.is_empty(data)
+  defp crawls_idle?(agent) do
+    agent
+    |> Agent.get(& &1.crawls)
+    |> Enum.all?(fn {scope, generation, queue} ->
+      not Crawler.Store.work_pending?(scope, generation, queue)
+    end)
   end
 
   defp deadline do

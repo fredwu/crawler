@@ -4,7 +4,7 @@
 
 - [Fixed] A saved link opens the page that was fetched. A redirect is stored under both the requested address and the address it landed on, and a redirect the crawl would reject is not saved or followed. A blank redirect is not followed, and a redirect past the hop limit stays a too-many-redirects error. `http` and `https`, a username or password, a bare `?`, and path case, letters that case-fold to the same spelling, and a decomposed Hangul syllable no longer share one file.
 - [Fixed] Addresses a browser treats as the same page are fetched once and saved as one file. The store key drops the fragment, and a saved link keeps it. `http` and `https`, userinfo, path case, an encoded slash, an empty query, and query order stay separate pages unless an allowed redirect stores the landing page under both addresses.
-- [Added] A text response is decoded from its BOM, HTTP charset, or HTML meta charset and saved as UTF-8. An HTML charset declaration that named another known encoding is rewritten to `utf-8`. CSS and non-text bodies stay as received.
+- [Added] A text response is decoded from its BOM, HTTP charset, HTML meta charset, XHTML XML encoding declaration, or leading CSS charset declaration and saved as UTF-8. HTML charset declarations, leading CSS declarations, and XHTML XML encoding declarations are rewritten to `utf-8`. Non-text bodies stay as received.
 - [Added] Add `:retries` option
 - [Improved] Replace HTTPoison/Bypass HTTP handling and tests with Req/Req.Test.
 - [Fixed] Stopping a crawl shuts down the queue processes it started, without changing the caller's exit trapping, and releases that scope's URLs, counters, and in-flight slots

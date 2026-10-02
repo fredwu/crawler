@@ -5,36 +5,40 @@ defmodule Crawler.Snapper do
 
   require Logger
 
+  alias Crawler.MediaType
   alias Crawler.Snapper.DirMaker
   alias Crawler.Snapper.LinkReplacer
   alias Crawler.Store
+
+  @utf8_bom <<0xEF, 0xBB, 0xBF>>
 
   @doc """
   In order to store pages offline, it provides the following functionalities:
 
   - replaces all URLs to their equivalent relative paths
   - creates directories when necessary to store the files
+  - marks saved HTML as UTF-8 with a byte-order mark
 
   ## Examples
 
       iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://hello-world.local"})
       iex> File.read(tmp("snapper/hello-world.local", "__index.html"))
-      {:ok, "hello"}
+      {:ok, <<0xEF, 0xBB, 0xBF, "hello">>}
 
       iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://snapper.local/index.html"})
       iex> File.read(tmp("snapper/snapper.local", "index.html"))
-      {:ok, "hello"}
+      {:ok, <<0xEF, 0xBB, 0xBF, "hello">>}
 
       iex> Snapper.snap("hello", %{save_to: "nope", url: "http://snapper.local/index.html"})
       {:error, "Cannot write to file nope/snapper.local/index.html, reason: enoent"}
 
       iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://snapper.local/hello"})
       iex> File.read(tmp("snapper/snapper.local/hello", "__index.html"))
-      {:ok, "hello"}
+      {:ok, <<0xEF, 0xBB, 0xBF, "hello">>}
 
       iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://snapper.local/hello1/"})
       iex> File.read(tmp("snapper/snapper.local/hello1", "__index.html"))
-      {:ok, "hello"}
+      {:ok, <<0xEF, 0xBB, 0xBF, "hello">>}
 
       iex> Snapper.snap(
       iex>   "<a href='http://another.domain/page'></a>",
@@ -48,7 +52,7 @@ defmodule Crawler.Snapper do
       iex>   }
       iex> )
       iex> File.read(tmp("snapper/snapper.local/depth0", "__index.html"))
-      {:ok, "<a href='../../another.domain/page/__index.html'></a>"}
+      {:ok, <<0xEF, 0xBB, 0xBF, "<a href='../../another.domain/page/__index.html'></a>">>}
 
       iex> Snapper.snap(
       iex>   "<a href='https://another.domain:8888/page'></a>",
@@ -62,16 +66,26 @@ defmodule Crawler.Snapper do
       iex>   }
       iex> )
       iex> File.read(tmp("snapper/snapper.local__port_7777/dir/depth1", "__index.html"))
-      {:ok, "<a href='../../../another.domain__port_8888__scheme_https/page/__index.html'></a>"}
+      {:ok, <<0xEF, 0xBB, 0xBF, "<a href='../../../another.domain__port_8888__scheme_https/page/__index.html'></a>">>}
   """
   def snap(body, opts) do
     {:ok, body} = LinkReplacer.replace_links(body, opts)
+    body = snapshot_body(body, opts)
     file_path = DirMaker.make_dir(opts)
 
     if publish?(opts) do
       publish(body, file_path, opts)
     else
       write_file(file_path, body, opts)
+    end
+  end
+
+  defp snapshot_body(body, opts) do
+    if MediaType.html?(opts[:content_type]) and not MediaType.xhtml?(opts[:content_type]) and
+         not String.starts_with?(body, @utf8_bom) do
+      @utf8_bom <> body
+    else
+      body
     end
   end
 
@@ -83,7 +97,7 @@ defmodule Crawler.Snapper do
     temp =
       Path.join(
         Path.dirname(file_path),
-        ".#{Path.basename(file_path)}.#{System.unique_integer([:positive])}.tmp"
+        ".crawler-#{System.unique_integer([:positive])}.tmp"
       )
 
     # An external exit skips `rescue` and `after`, so this process removes the
@@ -122,7 +136,7 @@ defmodule Crawler.Snapper do
   end
 
   defp publish_temp(temp, file_path, opts) do
-    case Store.publish_file(opts[:scope], opts[:generation], file_path, temp) do
+    case Store.publish_file(opts[:scope], opts[:generation], file_path, temp, opts[:queue]) do
       :ok ->
         {:ok, opts}
 

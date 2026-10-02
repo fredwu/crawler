@@ -36,8 +36,8 @@ defmodule Crawler.Fetcher do
     if stale?(opts), do: {:warn, :stale}, else: request(opts)
   end
 
-  defp stale?(%{generation: generation, scope: scope}) when is_integer(generation) do
-    Store.generation(scope) != generation
+  defp stale?(%{generation: generation, scope: scope} = opts) when is_integer(generation) do
+    not Store.current?(scope, generation, opts[:queue])
   end
 
   defp stale?(_opts), do: false
@@ -62,9 +62,6 @@ defmodule Crawler.Fetcher do
 
       {:error, %{__exception__: true} = exception} ->
         fetch_url_failed(Exception.message(exception), opts)
-
-      {:error, reason} ->
-        fetch_url_failed(reason, opts)
     end
   end
 
@@ -135,35 +132,39 @@ defmodule Crawler.Fetcher do
   end
 
   defp remember_alias(final, body, %{url: url} = opts) when final != url do
-    case Store.find({final, opts[:scope]}) do
-      nil ->
-        case Store.add({final, opts[:scope]}, opts[:generation]) do
-          {:ok, _} ->
-            Store.add_page_data({final, opts[:scope]}, body, %{opts | url: final})
-            {:ok, Map.put(opts, :alias_url, final)}
-
-          {:error, {:already_registered, _}} ->
-            {:ok, opts}
-
-          {:error, :stale} ->
-            {:error, :stale}
+    case Store.register_alias({final, opts[:scope]}, opts[:generation], opts[:queue]) do
+      {:ok, :skip} ->
+        with {:ok, ref} <- Store.retain_alias({final, opts[:scope]}, body, opts) do
+          {:ok, if(ref, do: Map.put(opts, :alias_candidate, ref), else: opts)}
         end
 
-      _page ->
-        {:ok, opts}
+      {:ok, status} ->
+        opts = Map.merge(opts, %{alias_url: final, alias_created: status == :created})
+        store_alias(body, opts)
+
+      {:error, _} = error ->
+        error
     end
   end
 
   defp remember_alias(_final, _body, opts), do: {:ok, opts}
 
-  defp drop_owned_alias(%{alias_url: url, scope: scope} = opts) when is_binary(url) do
-    key = {url, scope}
+  defp store_alias(body, opts) do
+    case Recorder.maybe_store_page(body, %{opts | url: opts[:alias_url]}) do
+      {:ok, _} ->
+        {:ok, opts}
 
-    case Store.find(key) do
-      %Page{processed: true} -> :ok
-      nil -> :ok
-      _page -> Store.delete(key, opts[:generation])
+      {:error, _} = error ->
+        drop_owned_alias(opts)
+        error
     end
+  end
+
+  defp drop_owned_alias(%{alias_candidate: ref}), do: Store.discard_retained_alias(ref)
+
+  defp drop_owned_alias(%{alias_url: url, alias_created: created?, scope: scope} = opts)
+       when is_binary(url) do
+    Store.rollback_alias({url, scope}, opts[:generation], opts[:queue], created?)
   end
 
   defp drop_owned_alias(_opts), do: :ok
@@ -189,6 +190,8 @@ defmodule Crawler.Fetcher do
   # their own file, with relatives computed from where that file sits. The
   # requested address keeps a copy too, so a link to the old address still
   # opens the page that was fetched.
+  defp snap_distinct_landing(_body, %{alias_candidate: _ref} = opts), do: {:ok, opts}
+
   defp snap_distinct_landing(body, %{url: url, referrer_url: final} = opts)
        when is_binary(final) do
     if final == url or Snapshot.path(final) == Snapshot.path(url) do

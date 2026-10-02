@@ -164,7 +164,8 @@ defmodule Crawler.FetcherTest do
     |> Fetcher.fetch()
 
     wait(fn ->
-      assert {:ok, "<html>200</html>"} == File.read(tmp("fetcher/#{path}/fetcher", "page.html"))
+      assert {:ok, <<0xEF, 0xBB, 0xBF, "<html>200</html>">>} ==
+               File.read(tmp("fetcher/#{path}/fetcher", "page.html"))
     end)
   end
 end

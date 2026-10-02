@@ -104,6 +104,17 @@ defmodule Crawler.Parser.AssetDiscoveryTest do
            ]
   end
 
+  test "keeps style text raw while decoding entities in style attributes" do
+    html =
+      ~s|<style>.raw { background: url("raw.png?x=1&amp;y=2") }</style>| <>
+        ~s|<div style="background:url(&quot;attribute.png?x=1&amp;y=2&quot;)"></div>|
+
+    assert links(html, content_type: "text/html", html_tag: "a") == [
+             "http://example.com/blog/attribute.png?x=1&y=2",
+             "http://example.com/blog/raw.png?x=1&amp;y=2"
+           ]
+  end
+
   test "skips json-ld and reads a javascript script whose type is not lowercase" do
     html = """
     <script type="application/ld+json">

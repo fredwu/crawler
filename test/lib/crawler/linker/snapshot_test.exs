@@ -1,11 +1,14 @@
 defmodule Crawler.Linker.SnapshotTest do
   use ExUnit.Case, async: true
 
+  import Crawler.SnapshotHelpers, only: [link_path: 1]
   import Crawler.TestHelpers
 
   alias Crawler.Linker
   alias Crawler.Linker.Snapshot
   alias Crawler.Snapper
+
+  @utf8_bom <<0xEF, 0xBB, 0xBF>>
 
   test "parent links expand to the file that was saved" do
     page = "http://example.com/blog/post"
@@ -69,10 +72,10 @@ defmodule Crawler.Linker.SnapshotTest do
     snap("COLON", colon, root)
     snap("HYPHEN", dashed_path, root)
 
-    assert File.read!(file(root, port)) == "PORT"
-    assert File.read!(file(root, dashed_host)) == "DASH"
-    assert File.read!(file(root, colon)) == "COLON"
-    assert File.read!(file(root, dashed_path)) == "HYPHEN"
+    assert File.read!(file(root, port)) == @utf8_bom <> "PORT"
+    assert File.read!(file(root, dashed_host)) == @utf8_bom <> "DASH"
+    assert File.read!(file(root, colon)) == @utf8_bom <> "COLON"
+    assert File.read!(file(root, dashed_path)) == @utf8_bom <> "HYPHEN"
 
     saved = File.read!(file(root, page))
     assert_saved_expands(saved, page, port, root)
@@ -104,11 +107,11 @@ defmodule Crawler.Linker.SnapshotTest do
     snap("MARK", marker, root)
     snap(~s(<a href="#{doubled}"></a>), page, root)
 
-    assert File.read!(file(root, doubled)) == "DOUBLED"
-    assert File.read!(file(root, plain)) == "PLAIN"
-    assert File.read!(file(root, leading)) == "LEAD"
-    assert File.read!(file(root, normal)) == "NORM"
-    assert File.read!(file(root, marker)) == "MARK"
+    assert File.read!(file(root, doubled)) == @utf8_bom <> "DOUBLED"
+    assert File.read!(file(root, plain)) == @utf8_bom <> "PLAIN"
+    assert File.read!(file(root, leading)) == @utf8_bom <> "LEAD"
+    assert File.read!(file(root, normal)) == @utf8_bom <> "NORM"
+    assert File.read!(file(root, marker)) == @utf8_bom <> "MARK"
     assert_saved_expands(File.read!(file(root, page)), page, doubled, root)
   end
 
@@ -118,6 +121,66 @@ defmodule Crawler.Linker.SnapshotTest do
     assert String.ends_with?(href, "#section")
     assert href =~ "__q_"
     refute href =~ "post.html?q=1#section"
+  end
+
+  test "offline URL references escape literal filesystem percent signs" do
+    page = "http://ex.com/page"
+
+    assert Linker.offline_url(page, "http://ex.com/__u_docs") ==
+             "http://ex.com/__u%255fdocs/__index.html"
+
+    assert Linker.offline_url(page, "http://ex.com/app.js?q=1&x=2") ==
+             "http://ex.com/app__q_q%3D1%2526x%3D2.js"
+
+    assert Snapshot.path("http://ex.com/__u_docs") == "ex.com/__u%5fdocs/__index.html"
+  end
+
+  test "rewritten URLs open distinct saved files after one browser URL decode" do
+    root = tmp("snapshot-browser-decoding")
+    page = "http://ex.com/page"
+
+    targets = [
+      {"http://ex.com/Docs", "CASE", ""},
+      {"http://ex.com/__u_docs", "LITERAL CASE", "#part%20one"},
+      {"http://ex.com/app.js?q=a&b=c", "QUERY SEPARATOR", ""},
+      {"http://ex.com/app.js?q=a%26b=c", "ENCODED QUERY SEPARATOR", ""},
+      {"http://ex.com/a/b", "PATH SEPARATOR", ""},
+      {"http://ex.com/a%2fb", "ENCODED PATH SEPARATOR", "#section"},
+      {"http://ex.com/__index.html", "LITERAL INDEX", ""},
+      {"http://ex.com/", "DIRECTORY INDEX", ""},
+      {"http://ex.com/café", "UNICODE", "#café"},
+      {"http://ex.com/cafe" <> <<0x0301::utf8>>, "COMBINING MARK", ""}
+    ]
+
+    Enum.each(targets, fn {url, body, _fragment} -> snap(body, url, root) end)
+
+    html =
+      Enum.map_join(targets, "", fn {url, _body, fragment} ->
+        ~s(<a href="#{url <> fragment}"></a>)
+      end)
+
+    snap(html, page, root)
+
+    hrefs =
+      root
+      |> file(page)
+      |> File.read!()
+      |> Floki.parse_document!()
+      |> Floki.attribute("a", "href")
+
+    assert length(hrefs) == length(targets)
+
+    for {href, {url, body, fragment}} <- Enum.zip(hrefs, targets) do
+      assert href == Linker.offline_link(page, url <> fragment)
+      assert URI.parse(href).query == nil
+
+      assert URI.parse(href).fragment ==
+               if(fragment == "", do: nil, else: String.trim_leading(fragment, "#"))
+
+      opened = Path.expand(link_path(href), Path.dirname(file(root, page)))
+      assert opened == Path.expand(file(root, url))
+      assert File.read!(opened) == @utf8_bom <> body
+    end
   end
 
   test "https, userinfo, and a bare question mark stay in the file path" do
@@ -205,10 +268,10 @@ defmodule Crawler.Linker.SnapshotTest do
     snap("NFD", nfd, root)
     snap("MARK", "http://ex.com/e__m_301", root)
 
-    assert File.read!(file(root, "http://ex.com/Docs")) == "DOCS"
-    assert File.read!(file(root, "http://ex.com/__u_docs")) == "CASE"
-    assert File.read!(file(root, nfd)) == "NFD"
-    assert File.read!(file(root, "http://ex.com/e__m_301")) == "MARK"
+    assert File.read!(file(root, "http://ex.com/Docs")) == @utf8_bom <> "DOCS"
+    assert File.read!(file(root, "http://ex.com/__u_docs")) == @utf8_bom <> "CASE"
+    assert File.read!(file(root, nfd)) == @utf8_bom <> "NFD"
+    assert File.read!(file(root, "http://ex.com/e__m_301")) == @utf8_bom <> "MARK"
   end
 
   test "a decomposed hiragana letter does not share a file with the composed letter" do
@@ -225,8 +288,8 @@ defmodule Crawler.Linker.SnapshotTest do
     root = tmp("snapshot-hiragana")
     snap("COMPOSED", composed, root)
     snap("DECOMPOSED", decomposed, root)
-    assert File.read!(file(root, composed)) == "COMPOSED"
-    assert File.read!(file(root, decomposed)) == "DECOMPOSED"
+    assert File.read!(file(root, composed)) == @utf8_bom <> "COMPOSED"
+    assert File.read!(file(root, decomposed)) == @utf8_bom <> "DECOMPOSED"
   end
 
   test "İ does not share a file with I plus a combining dot" do
@@ -243,8 +306,8 @@ defmodule Crawler.Linker.SnapshotTest do
     root = tmp("snapshot-dotted-i")
     snap("DOTTED", dotted, root)
     snap("SPLIT", split, root)
-    assert File.read!(file(root, dotted)) == "DOTTED"
-    assert File.read!(file(root, split)) == "SPLIT"
+    assert File.read!(file(root, dotted)) == @utf8_bom <> "DOTTED"
+    assert File.read!(file(root, split)) == @utf8_bom <> "SPLIT"
   end
 
   test "a decomposed hangul syllable does not share a file with the composed letter" do
@@ -264,9 +327,9 @@ defmodule Crawler.Linker.SnapshotTest do
     snap("COMPOSED", composed, root)
     snap("JAMO", decomposed, root)
     snap("LITERAL", "http://ex.com/__j_001100", root)
-    assert File.read!(file(root, composed)) == "COMPOSED"
-    assert File.read!(file(root, decomposed)) == "JAMO"
-    assert File.read!(file(root, "http://ex.com/__j_001100")) == "LITERAL"
+    assert File.read!(file(root, composed)) == @utf8_bom <> "COMPOSED"
+    assert File.read!(file(root, decomposed)) == @utf8_bom <> "JAMO"
+    assert File.read!(file(root, "http://ex.com/__j_001100")) == @utf8_bom <> "LITERAL"
   end
 
   test "letters that share a lowercase form do not share a file" do
@@ -297,8 +360,8 @@ defmodule Crawler.Linker.SnapshotTest do
     root = tmp("snapshot-case-fold")
     snap("K", kay, root)
     snap("KELVIN", kelvin, root)
-    assert File.read!(file(root, kay)) == "K"
-    assert File.read!(file(root, kelvin)) == "KELVIN"
+    assert File.read!(file(root, kay)) == @utf8_bom <> "K"
+    assert File.read!(file(root, kelvin)) == @utf8_bom <> "KELVIN"
   end
 
   test "a casefold that downcase leaves unchanged does not share a file" do
@@ -321,8 +384,8 @@ defmodule Crawler.Linker.SnapshotTest do
 
       snap("LETTER", url, root)
       snap("OTHER", other_url, root)
-      assert File.read!(file(root, url)) == "LETTER"
-      assert File.read!(file(root, other_url)) == "OTHER"
+      assert File.read!(file(root, url)) == @utf8_bom <> "LETTER"
+      assert File.read!(file(root, other_url)) == @utf8_bom <> "OTHER"
     end
   end
 
@@ -340,8 +403,8 @@ defmodule Crawler.Linker.SnapshotTest do
     root = tmp("snapshot-query-marker")
     snap("LITERAL", literal, root)
     snap("QUERY", query, root)
-    assert File.read!(file(root, literal)) == "LITERAL"
-    assert File.read!(file(root, query)) == "QUERY"
+    assert File.read!(file(root, literal)) == @utf8_bom <> "LITERAL"
+    assert File.read!(file(root, query)) == @utf8_bom <> "QUERY"
   end
 
   test "a byte that is not utf-8 does not share a file with the same character" do
@@ -357,8 +420,8 @@ defmodule Crawler.Linker.SnapshotTest do
     root = tmp("snapshot-latin1")
     snap("RAW", raw, root)
     snap("UTF8", utf8, root)
-    assert File.read!(file(root, raw)) == "RAW"
-    assert File.read!(file(root, utf8)) == "UTF8"
+    assert File.read!(file(root, raw)) == @utf8_bom <> "RAW"
+    assert File.read!(file(root, utf8)) == @utf8_bom <> "UTF8"
   end
 
   test "scheme and userinfo do not add a directory to a relative link" do
@@ -366,7 +429,7 @@ defmodule Crawler.Linker.SnapshotTest do
              "../../../ex.com__scheme_https/other/__index.html"
 
     assert Snapshot.relative("http://a:b@ex.com/dir/page", "http://a:b@ex.com/other") ==
-             "../../../ex.com__user_a%3ab/other/__index.html"
+             "../../../ex.com__user_a%253ab/other/__index.html"
 
     assert Snapshot.relative("http://ex.com/dir/page", "https://ex.com/other") ==
              "../../../ex.com__scheme_https/other/__index.html"
@@ -398,7 +461,7 @@ defmodule Crawler.Linker.SnapshotTest do
     Enum.each(pairs, fn {url, body} -> snap(body, url, root) end)
 
     Enum.each(pairs, fn {url, body} ->
-      assert File.read!(file(root, url)) == body
+      assert File.read!(file(root, url)) == @utf8_bom <> body
     end)
 
     paths = Enum.map(pairs, fn {url, _} -> String.downcase(Snapshot.path(url)) end)
@@ -421,29 +484,22 @@ defmodule Crawler.Linker.SnapshotTest do
 
   defp assert_expands(from_url, link, target_url) do
     href = Linker.offline_link(from_url, link)
-    {path, _fragment} = split_fragment(href)
 
-    assert Path.expand(path, Path.dirname(Snapshot.path(from_url))) ==
+    assert Path.expand(link_path(href), Path.dirname(Snapshot.path(from_url))) ==
              Path.expand(Snapshot.path(target_url))
   end
 
   defp assert_saved_expands(body, from_url, target_url, root) do
     href = Linker.offline_link(from_url, target_url)
     assert body =~ href
-    {path, _fragment} = split_fragment(href)
     saved = file(root, from_url)
 
-    assert Path.expand(path, Path.dirname(saved)) == Path.expand(file(root, target_url))
+    opened = Path.expand(link_path(href), Path.dirname(saved))
+    assert opened == Path.expand(file(root, target_url))
+    assert File.read!(opened) == File.read!(file(root, target_url))
   end
 
   defp file(root, url), do: Path.join(root, Snapshot.path(url))
-
-  defp split_fragment(href) do
-    case String.split(href, "#", parts: 2) do
-      [path, fragment] -> {path, "#" <> fragment}
-      [path] -> {path, ""}
-    end
-  end
 
   defp snap(body, url, root) do
     assert {:ok, _opts} =

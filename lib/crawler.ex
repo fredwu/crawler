@@ -76,22 +76,10 @@ defmodule Crawler do
   """
   def stop(opts) do
     opts = Enum.into(opts, %{})
-    queue = opts[:queue]
     scope = opts[:scope]
     owner = owning_queue(opts)
 
-    siblings =
-      if is_pid(owner) and is_pid(queue) do
-        queue
-        |> Store.queue_scopes()
-        |> List.delete(scope)
-      else
-        []
-      end
-
     if not is_nil(scope), do: Store.drop_scope(scope)
-
-    Enum.each(siblings, &Store.abandon_inflight/1)
 
     if is_pid(owner), do: Queue.stop(owner)
 
@@ -121,11 +109,11 @@ defmodule Crawler do
     opts = Enum.into(opts, %{})
 
     cond do
-      paused?(opts[:queue]) -> false
-      closed?(opts[:scope], opts[:generation]) -> false
+      paused?(opts) -> false
+      closed?(opts[:scope], opts[:generation], opts[:queue]) -> false
       Store.inflight_count(opts[:scope]) > 0 -> true
       Store.pending_count(opts[:scope]) > 0 -> true
-      queued?(opts[:queue]) -> true
+      queued?(opts) -> true
       true -> false
     end
   end
@@ -135,23 +123,15 @@ defmodule Crawler do
 
   For general purpose use cases, always use `Crawler.crawl/2` instead.
   """
-  def crawl_now(opts) do
-    if page_allowed?(opts) do
-      Worker.run(opts)
-    else
-      Store.finish_work(opts[:scope], opts[:generation], false)
-    end
-  end
+  def crawl_now(opts), do: Worker.run(opts)
 
   defp page_allowed?(%{max_pages: :infinity}), do: true
 
   defp page_allowed?(%{max_pages: max_pages, scope: scope}) when is_integer(max_pages) do
-    Store.ops_count(scope) + Store.inflight_count(scope) < max_pages
+    Store.ops_count(scope) < max_pages
   end
 
   defp page_allowed?(_opts), do: true
-
-  defp owning_queue(%{queue_owner: owner}) when is_pid(owner), do: owner
 
   defp owning_queue(%{queue: queue, scope: scope}) when is_pid(queue) do
     case Store.queue_record(queue) do
@@ -162,28 +142,37 @@ defmodule Crawler do
 
   defp owning_queue(_opts), do: nil
 
-  defp closed?(_scope, generation) when not is_integer(generation), do: false
+  defp closed?(_scope, generation, _queue) when not is_integer(generation), do: false
 
-  defp closed?(scope, generation) do
-    Store.generation(scope) != generation
+  defp closed?(scope, generation, queue) do
+    not Store.current?(scope, generation, queue)
   end
 
-  defp paused?(nil), do: false
+  defp queue_reference(opts) do
+    queue = opts[:queue]
+    name = opts[:queue_name]
 
-  defp paused?(queue) do
-    queue |> OPQ.info() |> elem(0) == :paused
-  catch
-    :exit, _ -> false
+    if is_atom(name) and not is_nil(name) and Process.whereis(name) == queue,
+      do: name,
+      else: queue
   end
 
-  defp queued?(nil), do: false
+  defp paused?(opts), do: match?({:paused, _, _}, queue_info(opts))
 
-  defp queued?(queue) do
-    case OPQ.info(queue) do
+  defp queued?(opts) do
+    case queue_info(opts) do
       {_status, %{data: data}, _workers} -> not :queue.is_empty(data)
       _ -> false
     end
+  end
+
+  defp queue_info(opts) do
+    case queue_reference(opts) do
+      nil -> nil
+      queue when is_pid(queue) -> GenStage.call(queue, :info)
+      name -> OPQ.info(name)
+    end
   catch
-    :exit, _ -> false
+    :exit, _ -> nil
   end
 end

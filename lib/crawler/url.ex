@@ -17,8 +17,8 @@ defmodule Crawler.URL do
   def canonical(url) when is_binary(url) do
     case prepare(url) do
       {:http, uri} ->
-        # The request keeps a directory slash. The store key drops one trailing
-        # slash and the fragment, so `foo`, `foo/`, and `foo#section` are one page.
+        # The store key aliases a single optional trailing slash and drops the
+        # fragment. Repeated trailing slashes remain distinct path segments.
         uri
         |> fold_uri()
         |> URI.to_string()
@@ -118,7 +118,7 @@ defmodule Crawler.URL do
   defp plain_canonical(url) do
     {base, _fragment} = split_piece(url, "#")
     {path, query} = split_piece(base, "?")
-    trim_slashes(path) <> query_part(query)
+    trim_optional_slash(path) <> query_part(query)
   end
 
   defp query_part(nil), do: ""
@@ -131,33 +131,28 @@ defmodule Crawler.URL do
         [base] -> {base, ""}
       end
 
-    String.trim_trailing(base, "/") <> query
+    trim_optional_slash(base) <> query
   end
 
   # Drop `.` and `..`, including a dot that was written as `%2e`. `...` stays a
   # segment. `%2F` is one segment, not a slash.
-  defp remove_dot_segments(nil), do: nil
-
   defp remove_dot_segments(path) when is_binary(path) do
     absolute? = String.starts_with?(path, "/")
-    # A final `.` or `..` names the directory, the same as a trailing slash.
-    trailing? = path != "/" and (String.ends_with?(path, "/") or final_dot_segment?(path))
 
     path
     |> path_segments(absolute?)
     |> Enum.reduce([], &push_segment/2)
+    |> finish_dot_segment(final_dot_segment?(path))
     |> Enum.reverse()
-    |> format_path(absolute?, trailing?)
+    |> format_path(absolute?)
   end
 
   defp path_segments(path, absolute?) do
-    path =
-      path
-      |> String.trim_trailing("/")
-      |> drop_one_leading_slash(absolute?)
-
-    if path == "", do: [], else: String.split(path, "/")
+    path |> drop_one_leading_slash(absolute?) |> String.split("/")
   end
+
+  defp finish_dot_segment(segments, true), do: ["" | segments]
+  defp finish_dot_segment(segments, false), do: segments
 
   defp drop_one_leading_slash("/" <> rest, true), do: rest
   defp drop_one_leading_slash(path, _absolute?), do: path
@@ -171,17 +166,9 @@ defmodule Crawler.URL do
   defp push_segment("..", [_segment | acc]), do: acc
   defp push_segment(segment, acc), do: [segment | acc]
 
-  defp format_path([], true, _trailing?), do: "/"
-  defp format_path([], false, _trailing?), do: ""
-
-  defp format_path(segments, absolute?, trailing?) do
-    body = if absolute?, do: "/" <> Enum.join(segments, "/"), else: Enum.join(segments, "/")
-
-    if trailing? and not String.ends_with?(body, "/") do
-      body <> "/"
-    else
-      body
-    end
+  defp format_path(segments, absolute?) do
+    body = Enum.join(segments, "/")
+    if absolute?, do: "/" <> body, else: body
   end
 
   defp disallowed?(link) do
@@ -296,13 +283,9 @@ defmodule Crawler.URL do
   defp append_piece(url, _mark, nil), do: url
   defp append_piece(url, mark, value), do: url <> mark <> value
 
-  defp trim_slashes(path) do
-    size = byte_size(path)
-
-    if size > 0 and :binary.at(path, size - 1) == ?/ do
-      path
-      |> binary_part(0, size - 1)
-      |> trim_slashes()
+  defp trim_optional_slash(path) do
+    if String.ends_with?(path, "/") and not String.ends_with?(path, "//") do
+      String.replace_suffix(path, "/", "")
     else
       path
     end

@@ -40,7 +40,7 @@ defmodule CrawlerTest do
     end)
 
     {:ok, opts} =
-      Crawler.crawl(url,
+      start_crawl(url,
         max_depths: 3,
         workers: 3,
         interval: 100,
@@ -96,7 +96,7 @@ defmodule CrawlerTest do
     end)
 
     {:ok, opts} =
-      Crawler.crawl(url,
+      start_crawl(url,
         max_depths: 1,
         workers: 1,
         interval: 100,
@@ -150,7 +150,7 @@ defmodule CrawlerTest do
     end)
 
     {:ok, opts} =
-      Crawler.crawl(url,
+      start_crawl(url,
         max_depths: 4,
         force: true,
         workers: 1,
@@ -207,7 +207,7 @@ defmodule CrawlerTest do
     {:ok, queue} = OPQ.init(worker: Crawler.Dispatcher.Worker, workers: 2, interval: 100)
 
     {:ok, opts1} =
-      Crawler.crawl(linked_url1,
+      start_crawl(linked_url1,
         store: Store,
         queue: queue,
         scope: "shared-queue",
@@ -215,7 +215,7 @@ defmodule CrawlerTest do
       )
 
     {:ok, opts2} =
-      Crawler.crawl(linked_url2,
+      start_crawl(linked_url2,
         store: Store,
         queue: queue,
         scope: "shared-queue",
@@ -273,10 +273,10 @@ defmodule CrawlerTest do
     end)
 
     {:ok, opts1} =
-      Crawler.crawl(url, force: true, workers: 1, interval: 100, req_options: req_options)
+      start_crawl(url, force: true, workers: 1, interval: 100, req_options: req_options)
 
     {:ok, opts2} =
-      Crawler.crawl(url, force: true, workers: 2, interval: 100, req_options: req_options)
+      start_crawl(url, force: true, workers: 2, interval: 100, req_options: req_options)
 
     refute opts1[:scope] == opts2[:scope]
 
@@ -306,7 +306,7 @@ defmodule CrawlerTest do
       """)
     end)
 
-    {:ok, opts} = Crawler.crawl(url, workers: 1, interval: 500, req_options: req_options)
+    {:ok, opts} = start_crawl(url, workers: 1, interval: 500, req_options: req_options)
 
     Process.sleep(200)
 

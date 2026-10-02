@@ -3,6 +3,8 @@ defmodule IntegrationTest do
 
   import Plug.Conn
 
+  @utf8_bom <<0xEF, 0xBB, 0xBF>>
+
   test "integration", %{
     site: site,
     url: url,
@@ -21,7 +23,7 @@ defmodule IntegrationTest do
     page3_raw = "<html><a href='dir/page4'>4</a> <a href='/dir/page4'>4</a></html>"
 
     page4_raw =
-      "<html><head><script type='text/javascript' src='/javascript.js' /><link rel='stylesheet' href='../styles.css' /></head><a href='../page5.html'>5</a> <img src='../image1.png' /></html>"
+      "<html><head><script type='text/javascript' src='/javascript.js'></script><link rel='stylesheet' href='../styles.css' /></head><a href='../page5.html'>5</a> <img src='../image1.png' /></html>"
 
     page5_raw = "<html><a href='/page6'>6</a> <img src='/image2.png' /></html>"
     css_raw = "img { url(image3.png); }"
@@ -96,7 +98,7 @@ defmodule IntegrationTest do
       &(&1 |> put_resp_header("content-type", "application/javascript") |> resp(200, "js"))
     )
 
-    Crawler.crawl(linked_url1,
+    start_crawl(linked_url1,
       save_to: tmp("integration"),
       max_depths: 4,
       assets: ["js", "css", "images"],
@@ -112,7 +114,7 @@ defmodule IntegrationTest do
       "<html><a href='../#{path2}/dir/page4/__index.html'>4</a> <a href='../#{path2}/dir/page4/__index.html'>4</a></html>"
 
     page4 =
-      "<html><head><script type='text/javascript' src='../../../#{path2}/javascript.js' /><link rel='stylesheet' href='../../../#{path2}/styles.css' /></head><a href='../../../#{path2}/page5.html'>5</a> <img src='../../../#{path2}/image1.png' /></html>"
+      "<html><head><script type='text/javascript' src='../../../#{path2}/javascript.js'></script><link rel='stylesheet' href='../../../#{path2}/styles.css' /></head><a href='../../../#{path2}/page5.html'>5</a> <img src='../../../#{path2}/image1.png' /></html>"
 
     page5 =
       "<html><a href='../#{path2}/page6/__index.html'>6</a> <img src='../#{path2}/image2.png' /></html>"
@@ -120,11 +122,14 @@ defmodule IntegrationTest do
     css = "img { url(../#{path2}/image3.png); }"
 
     wait(fn ->
-      assert {:ok, page1} == File.read(tmp("integration/#{path}", "page1.html"))
-      assert {:ok, page2} == File.read(tmp("integration/#{path}/dir", "page2.html"))
-      assert {:ok, page3} == File.read(tmp("integration/#{path2}", "page3.html"))
-      assert {:ok, page4} == File.read(tmp("integration/#{path2}/dir/page4", "__index.html"))
-      assert {:ok, page5} == File.read(tmp("integration/#{path2}", "page5.html"))
+      assert {:ok, @utf8_bom <> page1} == File.read(tmp("integration/#{path}", "page1.html"))
+      assert {:ok, @utf8_bom <> page2} == File.read(tmp("integration/#{path}/dir", "page2.html"))
+      assert {:ok, @utf8_bom <> page3} == File.read(tmp("integration/#{path2}", "page3.html"))
+
+      assert {:ok, @utf8_bom <> page4} ==
+               File.read(tmp("integration/#{path2}/dir/page4", "__index.html"))
+
+      assert {:ok, @utf8_bom <> page5} == File.read(tmp("integration/#{path2}", "page5.html"))
       assert {:ok, "png"} == File.read(tmp("integration/#{path2}", "image1.png"))
       assert {:ok, "png"} == File.read(tmp("integration/#{path2}", "image2.png"))
       assert {:ok, "png"} == File.read(tmp("integration/#{path2}", "image3.png"))

@@ -83,7 +83,7 @@ defmodule Crawler.HTTP do
     if allowed_target?(next, allow) do
       {request, Req.Response.put_header(response, "location", next)}
     else
-      Req.Request.halt(request, %RedirectRejected{url: display_url(next)})
+      Req.Request.halt(request, %RedirectRejected{url: next})
     end
   end
 
@@ -106,9 +106,6 @@ defmodule Crawler.HTTP do
   rescue
     ArgumentError -> location
   end
-
-  defp display_url(url) when is_binary(url), do: url
-  defp display_url(url), do: inspect(url)
 
   defp drop_default_port(%URI{scheme: "http", port: 80} = uri), do: %{uri | port: nil}
   defp drop_default_port(%URI{scheme: "https", port: 443} = uri), do: %{uri | port: nil}

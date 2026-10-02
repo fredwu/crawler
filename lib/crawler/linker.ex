@@ -61,13 +61,13 @@ defmodule Crawler.Linker do
       iex>   "http://host/dir/page",
       iex>   "http://host/search?q=foo/../bar"
       iex> )
-      "http://host/search/__index__q_q=foo%2f..%2fbar.html"
+      "http://host/search/__index__q_q%3Dfoo%252f..%252fbar.html"
   """
   def offline_url(current_url, link) when is_binary(link) do
     case URL.resolve(link, current_url) do
       {:ok, target} ->
         %URI{scheme: scheme} = URI.parse(target)
-        scheme <> "://" <> Snapshot.path(target)
+        scheme <> "://" <> Snapshot.url_path(target)
 
       :skip ->
         link

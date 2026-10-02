@@ -1,10 +1,15 @@
 defmodule Crawler.PageSpellingTest do
   use Crawler.TestCase, async: false
 
+  import Crawler.SnapshotHelpers
+
   alias Crawler.Linker
   alias Crawler.Linker.Snapshot
+  alias Crawler.RequestLog
   alias Crawler.Store
   alias Crawler.URL
+
+  @utf8_bom <<0xEF, 0xBB, 0xBF>>
 
   test "equivalent spellings are fetched once and the saved link opens that file", %{site: _site} do
     hub = "http://ex.com/spell/hub"
@@ -29,11 +34,11 @@ defmodule Crawler.PageSpellingTest do
 
     scope = "spell-same"
     root = tmp("spell-same")
-    seen = log_requests()
+    seen = RequestLog.new()
 
     crawl(hub, scope, root, spell_adapter(seen, hub, groups))
 
-    assert frequencies(seen) == %{hub => 1, space => 1, slash => 1}
+    assert RequestLog.frequencies(seen) == %{hub => 1, space => 1, slash => 1}
     assert Store.ops_count(scope) == 3
 
     Enum.each(groups, fn {page, spellings} ->
@@ -55,11 +60,11 @@ defmodule Crawler.PageSpellingTest do
     spellings = ["http://éxample.com/p", "http://ÉXAMPLE.COM./p#top"]
     scope = "spell-idn"
     root = tmp("spell-idn")
-    seen = log_requests()
+    seen = RequestLog.new()
 
     crawl(hub, scope, root, single_target(seen, hub, page, spellings))
 
-    assert frequencies(seen) == %{hub => 1, page => 1}
+    assert RequestLog.frequencies(seen) == %{hub => 1, page => 1}
     assert Store.find({page, scope}).body == "PAGE #{page}"
 
     Enum.each(spellings, fn spelling ->
@@ -82,11 +87,11 @@ defmodule Crawler.PageSpellingTest do
 
     scope = "spell-ipv6"
     root = tmp("spell-ipv6")
-    seen = log_requests()
+    seen = RequestLog.new()
 
     crawl(hub, scope, root, single_target(seen, hub, page, spellings))
 
-    assert frequencies(seen) == %{hub => 1, page => 1}
+    assert RequestLog.frequencies(seen) == %{hub => 1, page => 1}
 
     Enum.each(spellings, fn spelling ->
       assert Store.find({spelling, scope}).body == "PAGE #{page}"
@@ -113,12 +118,12 @@ defmodule Crawler.PageSpellingTest do
 
     scope = "spell-apart"
     root = tmp("spell-apart")
-    seen = log_requests()
+    seen = RequestLog.new()
     groups = Map.new(leaves, &{&1, [&1]})
 
     crawl(hub, scope, root, spell_adapter(seen, hub, groups))
 
-    assert frequencies(seen) == Map.new([hub | leaves], &{URL.normalize(&1), 1})
+    assert RequestLog.frequencies(seen) == Map.new([hub | leaves], &{URL.normalize(&1), 1})
     assert Store.ops_count(scope) == length(leaves) + 1
     assert Enum.uniq(Enum.map(leaves, &Snapshot.path/1)) == Enum.map(leaves, &Snapshot.path/1)
 
@@ -133,11 +138,11 @@ defmodule Crawler.PageSpellingTest do
     new = "https://ex.com/"
     scope = "spell-root-https"
     root = tmp("spell-root-https")
-    seen = log_requests()
+    seen = RequestLog.new()
 
     adapter = fn request ->
       url = request_url(request)
-      log(seen, url)
+      RequestLog.record(seen, url)
 
       if request.url.scheme == "http" do
         {request, Req.Response.new(status: 302, headers: [{"location", new}], body: "")}
@@ -153,7 +158,7 @@ defmodule Crawler.PageSpellingTest do
 
     crawl(old, scope, root, adapter, 1)
 
-    assert frequencies(seen) == %{old => 1, new => 1}
+    assert RequestLog.frequencies(seen) == %{old => 1, new => 1}
     assert Store.ops_count(scope) == 1
     assert Store.find_processed({old, scope}).body =~ "ROOT"
     assert Store.find_processed({new, scope}).body =~ "ROOT"
@@ -173,11 +178,11 @@ defmodule Crawler.PageSpellingTest do
     cafe = "http://ex.com/cs/café"
     scope = "spell-charset-header"
     root = tmp("spell-charset-header")
-    seen = log_requests()
+    seen = RequestLog.new()
 
     adapter = fn request ->
       url = request_url(request)
-      log(seen, url)
+      RequestLog.record(seen, url)
       assert :binary.match(url, <<0xE9>>) == :nomatch
 
       cond do
@@ -186,7 +191,9 @@ defmodule Crawler.PageSpellingTest do
            Req.Response.new(
              status: 200,
              headers: [{"content-type", "text/html; charset=iso-8859-1"}],
-             body: ~s(<meta charset="utf-8"><a href="caf) <> <<0xE9>> <> ~s("></a>)
+             body:
+               ~s(<meta charset="utf-8"><a href="caf) <>
+                 <<0xE9>> <> ~s(">caf) <> <<0xE9>> <> ~s(</a>)
            )}
 
         url == cafe ->
@@ -200,10 +207,11 @@ defmodule Crawler.PageSpellingTest do
 
     crawl(page, scope, root, adapter)
 
-    assert frequencies(seen) == %{page => 1, cafe => 1}
+    assert RequestLog.frequencies(seen) == %{page => 1, cafe => 1}
     saved = File.read!(saved(root, page))
     assert String.valid?(saved)
     assert saved =~ "café"
+    assert saved =~ "caf%C3%A9"
     assert_link_opens(root, page, cafe)
     assert File.read!(saved(root, cafe)) == "CAFE"
   end
@@ -213,11 +221,11 @@ defmodule Crawler.PageSpellingTest do
     cafe = "http://ex.com/cs/café"
     scope = "spell-charset-meta"
     root = tmp("spell-charset-meta")
-    seen = log_requests()
+    seen = RequestLog.new()
 
     adapter = fn request ->
       url = request_url(request)
-      log(seen, url)
+      RequestLog.record(seen, url)
 
       cond do
         url == page ->
@@ -225,7 +233,9 @@ defmodule Crawler.PageSpellingTest do
            Req.Response.new(
              status: 200,
              headers: [{"content-type", "text/html"}],
-             body: ~s(<meta charset="iso-8859-1"><a href="caf) <> <<0xE9>> <> ~s("></a>)
+             body:
+               ~s(<meta charset="iso-8859-1"><a href="caf) <>
+                 <<0xE9>> <> ~s(">caf) <> <<0xE9>> <> ~s(</a>)
            )}
 
         url == cafe ->
@@ -239,9 +249,11 @@ defmodule Crawler.PageSpellingTest do
 
     crawl(page, scope, root, adapter)
 
-    assert frequencies(seen) == %{page => 1, cafe => 1}
+    assert RequestLog.frequencies(seen) == %{page => 1, cafe => 1}
     saved = File.read!(saved(root, page))
+    assert String.valid?(saved)
     assert saved =~ "café"
+    assert saved =~ "caf%C3%A9"
     assert saved =~ ~s(charset="utf-8")
     refute saved =~ "iso-8859-1"
     assert_link_opens(root, page, cafe)
@@ -252,11 +264,11 @@ defmodule Crawler.PageSpellingTest do
     cafe = "http://ex.com/cs/café"
     scope = "spell-charset-utf8"
     root = tmp("spell-charset-utf8")
-    seen = log_requests()
+    seen = RequestLog.new()
 
     adapter = fn request ->
       url = request_url(request)
-      log(seen, url)
+      RequestLog.record(seen, url)
 
       cond do
         url == page ->
@@ -264,7 +276,7 @@ defmodule Crawler.PageSpellingTest do
            Req.Response.new(
              status: 200,
              headers: [{"content-type", "text/html; charset=utf-8"}],
-             body: ~s(<meta charset="iso-8859-1"><a href="caf) <> <<0xC3, 0xA9>> <> ~s("></a>)
+             body: ~s(<meta charset="iso-8859-1"><a href="café">café</a>)
            )}
 
         url == cafe ->
@@ -278,9 +290,11 @@ defmodule Crawler.PageSpellingTest do
 
     crawl(page, scope, root, adapter)
 
-    assert frequencies(seen) == %{page => 1, cafe => 1}
+    assert RequestLog.frequencies(seen) == %{page => 1, cafe => 1}
     saved = File.read!(saved(root, page))
+    assert String.valid?(saved)
     assert saved =~ "café"
+    assert saved =~ "caf%C3%A9"
     refute saved =~ "cafÃ©"
     assert_link_opens(root, page, cafe)
   end
@@ -290,17 +304,16 @@ defmodule Crawler.PageSpellingTest do
     cafe = "http://ex.com/cs/café"
     scope = "spell-charset-bom"
     root = tmp("spell-charset-bom")
-    seen = log_requests()
+    seen = RequestLog.new()
 
     adapter = fn request ->
       url = request_url(request)
-      log(seen, url)
+      RequestLog.record(seen, url)
 
       cond do
         url == page ->
           body =
-            <<0xEF, 0xBB, 0xBF>> <>
-              ~s(<meta charset="iso-8859-1"><a href="caf) <> <<0xC3, 0xA9>> <> ~s("></a>)
+            <<0xEF, 0xBB, 0xBF>> <> ~s(<meta charset="iso-8859-1"><a href="café">café</a>)
 
           {request,
            Req.Response.new(
@@ -320,9 +333,14 @@ defmodule Crawler.PageSpellingTest do
 
     crawl(page, scope, root, adapter)
 
-    assert frequencies(seen) == %{page => 1, cafe => 1}
-    assert File.read!(saved(root, page)) =~ "café"
-    refute File.read!(saved(root, page)) =~ <<0xEF, 0xBB, 0xBF>>
+    assert RequestLog.frequencies(seen) == %{page => 1, cafe => 1}
+    saved = File.read!(saved(root, page))
+    assert String.valid?(saved)
+    assert saved =~ "café"
+    assert saved =~ "caf%C3%A9"
+    assert <<@utf8_bom, html::binary>> = saved
+    refute html =~ @utf8_bom
+    refute Store.find_processed({page, scope}).body =~ @utf8_bom
     assert_link_opens(root, page, cafe)
   end
 
@@ -378,7 +396,7 @@ defmodule Crawler.PageSpellingTest do
 
     fn request ->
       url = request_url(request)
-      log(seen, url)
+      RequestLog.record(seen, url)
 
       cond do
         url == hub ->
@@ -421,38 +439,5 @@ defmodule Crawler.PageSpellingTest do
 
   defp request_url(request) do
     request.url |> URI.to_string() |> URL.normalize()
-  end
-
-  defp log_requests do
-    :ets.new(:spell_requests, [:public, :bag])
-  end
-
-  defp log(table, url), do: :ets.insert(table, {:url, url})
-
-  defp frequencies(table) do
-    table
-    |> :ets.lookup(:url)
-    |> Enum.map(fn {:url, url} -> url end)
-    |> Enum.frequencies()
-  end
-
-  defp assert_link_opens(root, from, to) do
-    href = Linker.offline_link(from, to)
-    assert File.read!(saved(root, from)) =~ href
-
-    {relative, _fragment} =
-      case String.split(href, "#", parts: 2) do
-        [path, fragment] -> {path, "#" <> fragment}
-        [path] -> {path, ""}
-      end
-
-    opened = Path.expand(relative, Path.dirname(saved(root, from)))
-    assert File.read!(opened) == File.read!(saved(root, to))
-  end
-
-  defp saved(root, url), do: Path.join(root, Snapshot.path(url))
-
-  defp await_idle(opts) do
-    wait(fn -> refute Crawler.running?(opts) end)
   end
 end

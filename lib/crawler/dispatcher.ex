@@ -18,7 +18,15 @@ defmodule Crawler.Dispatcher do
     opts =
       opts
       |> Enum.into(%{})
-      |> Map.drop([:alias_url, :headers, :content_type, :referrer_url, :before_publish])
+      |> Map.drop([
+        :alias_url,
+        :alias_created,
+        :alias_candidate,
+        :headers,
+        :content_type,
+        :referrer_url,
+        :before_publish
+      ])
 
     case request do
       {_, _link, _, url} -> Crawler.crawl(url, opts)

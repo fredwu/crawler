@@ -37,19 +37,30 @@ defmodule Crawler.Fetcher.Recorder do
       iex> Recorder.maybe_store_page("body", %{store: Store, url: "url", scope: nil})
       {:ok, {%Page{url: "url", body: "body", opts: %{store: Store, url: "url", scope: nil}}, %Page{url: "url", body: nil}}}
   """
-  def maybe_store_page(_body, %{store: nil} = _opts) do
+  def maybe_store_page(body, opts) do
+    with true <- Store.current?(opts[:scope], opts[:generation], opts[:queue]),
+         {:ok, _} = result <- store_page(body, opts),
+         true <- Store.current?(opts[:scope], opts[:generation], opts[:queue]) do
+      result
+    else
+      false -> {:error, :stale}
+      error -> error
+    end
+  end
+
+  defp store_page(_body, %{store: nil} = _opts) do
     {:ok, nil}
   end
 
-  def maybe_store_page(body, opts) do
+  defp store_page(body, opts) do
     case opts[:store].add_page_data({opts[:url], opts[:scope]}, body, opts) do
-      {:error, :stale} = error -> error
+      {:error, _} = error -> error
       result -> {:ok, result}
     end
   end
 
   defp store_url(opts) do
-    Store.add({opts[:url], opts[:scope]}, opts[:generation])
+    Store.add({opts[:url], opts[:scope]}, opts[:generation], opts[:queue])
   end
 
   defp store_url_depth(opts) do

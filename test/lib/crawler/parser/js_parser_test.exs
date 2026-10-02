@@ -73,6 +73,16 @@ defmodule Crawler.Parser.JsParserTest do
     assert JsParser.specs(source) == ["./real.js"]
   end
 
+  for expression <- ["n++", "n--", "++n", "--n"] do
+    test "follows an import after division with #{expression} and skips regular expression text" do
+      source =
+        ~s|let n=2;#{unquote(expression)} / 2;import("./chunk.js");| <>
+          ~S|const quoted=/["']/;const decoy=/import\("\.\/hidden.js"\)/;|
+
+      assert JsParser.specs(source) == ["./chunk.js"]
+    end
+  end
+
   test "follows an import after a closing brace" do
     source = """
     }import "./a.js";
@@ -132,6 +142,29 @@ defmodule Crawler.Parser.JsParserTest do
     """
 
     assert Enum.sort(JsParser.specs(source)) == Enum.sort(["./lib.js", "./top.js"])
+  end
+
+  test "keeps byte spans inside nested template interpolations" do
+    source =
+      "const label = \"café\";\n" <>
+        ~S|const result = `outer ${`inner ${import("./inner.js")} import('./text.js')`} ${import("./outer.js")}`;|
+
+    spans = JsParser.spans(source)
+
+    assert Enum.sort(Enum.map(spans, &elem(&1, 2))) == ["./inner.js", "./outer.js"]
+
+    for {start, length, specifier} <- spans do
+      assert binary_part(source, start, length) == specifier
+    end
+  end
+
+  test "skips import text in unfinished strings and templates" do
+    assert JsParser.specs(~S|const text = "import('./string.js')|) == []
+
+    assert JsParser.specs("const text = `\nimport './template.js';") == []
+
+    assert JsParser.specs(~S|const text = `value ${import("./real.js")} import('./text.js')|) ==
+             ["./real.js"]
   end
 
   test "follows backtick specifiers and keeps an upper-case scheme" do

@@ -1,7 +1,8 @@
 defmodule Crawler.OfflineSnapshotTest do
   use Crawler.TestCase, async: false
 
-  alias Crawler.Linker
+  import Crawler.SnapshotHelpers
+
   alias Crawler.Linker.Snapshot
   alias Crawler.Store
 
@@ -53,7 +54,7 @@ defmodule Crawler.OfflineSnapshotTest do
     end
 
     {:ok, _opts} =
-      Crawler.crawl(page,
+      start_crawl(page,
         req_options: req_options,
         save_to: root,
         workers: 2,
@@ -175,7 +176,7 @@ defmodule Crawler.OfflineSnapshotTest do
     end
 
     {:ok, _opts} =
-      Crawler.crawl(page,
+      start_crawl(page,
         req_options: req_options,
         workers: 1,
         max_depths: 2,
@@ -215,7 +216,7 @@ defmodule Crawler.OfflineSnapshotTest do
     serve(site, "/identity/a/.../other", "text/plain", "ellipsis")
 
     {:ok, _opts} =
-      Crawler.crawl(entry,
+      start_crawl(entry,
         req_options: req_options,
         workers: 1,
         max_depths: 2,
@@ -282,25 +283,5 @@ defmodule Crawler.OfflineSnapshotTest do
       |> Plug.Conn.put_resp_header("content-type", type)
       |> Plug.Conn.send_resp(200, body)
     end)
-  end
-
-  defp saved(root, url), do: Path.join(root, Snapshot.path(url))
-
-  defp assert_points(body, from_url, target_url, root, fragment \\ "") do
-    href = Linker.offline_link(from_url, target_url <> fragment)
-    assert body =~ href
-
-    {path, found} = split_fragment(href)
-    assert found == fragment
-
-    assert Path.expand(path, Path.dirname(saved(root, from_url))) ==
-             Path.expand(saved(root, target_url))
-  end
-
-  defp split_fragment(href) do
-    case String.split(href, "#", parts: 2) do
-      [path, fragment] -> {path, "#" <> fragment}
-      [path] -> {path, ""}
-    end
   end
 end

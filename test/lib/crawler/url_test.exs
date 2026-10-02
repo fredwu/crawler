@@ -22,6 +22,50 @@ defmodule Crawler.URLTest do
     assert URL.normalize("http://host/foo/?q=1") == "http://host/foo/?q=1"
   end
 
+  test "preserves repeated trailing slashes in requests and store identities" do
+    for path <- ["//", "/a//", "/a///", "/app.js//"] do
+      assert URL.normalize("http://host" <> path) == "http://host" <> path
+      assert URL.canonical("http://host" <> path) == "http://host" <> path
+
+      assert URL.canonical("http://host" <> path <> "?q=1#section") ==
+               "http://host" <> path <> "?q=1"
+    end
+
+    assert URL.canonical("http://host/a/") == URL.canonical("http://host/a")
+    assert Snapshot.path("http://host/a/") == Snapshot.path("http://host/a")
+
+    identities = Enum.map(["/a", "/a//", "/a///"], &URL.canonical("http://host" <> &1))
+    assert length(Enum.uniq(identities)) == 3
+    assert_different("http://host/a/", "http://host/a//")
+    assert_different("http://host/a//", "http://host/a///")
+    assert_different("http://host/app.js", "http://host/app.js//")
+  end
+
+  test "preserves empty trailing segments when removing dot segments" do
+    for {input, expected} <- [
+          {"/a//.", "/a//"},
+          {"/a//./", "/a//"},
+          {"/a//..", "/a/"},
+          {"/a///..", "/a//"},
+          {"/a/./b/..//", "/a//"},
+          {"/a/x/..///", "/a///"},
+          {"/a/..//", "//"},
+          {"/a//%2e", "/a//"}
+        ] do
+      assert URL.normalize("http://host" <> input) == "http://host" <> expected
+    end
+  end
+
+  test "resolves relative paths without losing repeated trailing slashes" do
+    base = "http://host/dir/page"
+
+    assert URL.resolve("a//", base) == {:ok, "http://host/dir/a//"}
+    assert URL.resolve("a///", base) == {:ok, "http://host/dir/a///"}
+    assert URL.resolve("a/x/..//", base) == {:ok, "http://host/dir/a//"}
+    assert URL.resolve("a//.", base) == {:ok, "http://host/dir/a//"}
+    assert URL.resolve("../a//?q=1", base) == {:ok, "http://host/a//?q=1"}
+  end
+
   test "drops the fragment from the request and the store key" do
     assert URL.normalize("http://Example.com/a/../b#x") == "http://example.com/b"
     assert URL.canonical("http://Example.com/a/../b#x") == "http://example.com/b"

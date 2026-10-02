@@ -7,11 +7,7 @@ defmodule Crawler.Linker.PathOffliner do
 
   @query_marker "__q_"
 
-  @extensions ~w(
-    html htm xhtml css js mjs cjs jpg jpeg png gif webp avif svg ico bmp
-    mp4 webm mp3 wav ogg m4a woff woff2 ttf otf eot json xml txt pdf map
-    vtt wasm webmanifest appcache gz zip csv rss atom php asp aspx
-  )
+  @extra_extensions ~w(cjs ogg m4a map vtt appcache asp aspx)
 
   @doc """
   Transforms a given link so that it can be stored and linked to by other pages.
@@ -82,11 +78,23 @@ defmodule Crawler.Linker.PathOffliner do
     |> attach_query(query)
   end
 
+  @doc false
+  def resource_filename?(segment) do
+    ext =
+      segment
+      |> Path.extname()
+      |> String.trim_leading(".")
+      |> String.downcase()
+
+    MIME.has_type?(ext) or ext in @extra_extensions
+  end
+
   defp collapse_file_slash(link) do
     {bare, query} = split_query(link)
     segment = bare |> String.trim_trailing("/") |> String.split("/") |> List.last()
 
-    if String.ends_with?(bare, "/") and has_extension(segment) do
+    if String.ends_with?(bare, "/") and not String.ends_with?(bare, "//") and
+         resource_filename?(segment) do
       bare = String.trim_trailing(bare, "/")
       if query, do: bare <> "?" <> query, else: bare
     else
@@ -120,22 +128,15 @@ defmodule Crawler.Linker.PathOffliner do
     |> String.split("/")
     |> Enum.take(-1)
     |> Kernel.hd()
-    |> has_extension()
+    |> resource_filename?()
     |> append_index(link)
   end
 
-  defp has_extension(segment) do
-    ext =
-      segment
-      |> Path.extname()
-      |> String.trim_leading(".")
-      |> String.downcase()
-
-    ext in @extensions
-  end
-
   defp append_index(true, link), do: link
-  defp append_index(false, link), do: Path.join(link, "__index.html")
+
+  defp append_index(false, link) do
+    if String.ends_with?(link, "/"), do: link <> "__index.html", else: link <> "/__index.html"
+  end
 
   defp escape_reserved(offline, original) do
     offline

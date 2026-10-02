@@ -44,6 +44,42 @@ defmodule Crawler.Parser.LinkParserTest do
              )
   end
 
+  for {tag, attribute, attrs} <- [
+        {"img", "srcset", []},
+        {"link", "imagesrcset", [{"rel", "preload"}, {"as", "image"}]}
+      ] do
+    test "preserves commas inside #{attribute} URLs and separates descriptor commas" do
+      attribute = unquote(attribute)
+      candidates = "https://cdn.example/c_fill,w_400/photo.jpg 1x,next.jpg 2x, bare.jpg,"
+
+      links =
+        LinkParser.parse(
+          {unquote(tag), [{attribute, candidates} | unquote(attrs)], []},
+          %{referrer_url: "http://example.com/dir/page", assets: ["images"]},
+          fn element, _opts -> element end
+        )
+
+      assert links == [
+               {attribute, "https://cdn.example/c_fill,w_400/photo.jpg"},
+               {"link", "next.jpg", attribute, "http://example.com/dir/next.jpg"},
+               {"link", "bare.jpg", attribute, "http://example.com/dir/bare.jpg"}
+             ]
+    end
+  end
+
+  test "preserves whitespace-free comma URLs and skips complete data candidates" do
+    assert [
+             {"link", "a.jpg,b.jpg", "srcset", "http://example.com/dir/a.jpg,b.jpg"},
+             {"link", "next.jpg", "srcset", "http://example.com/dir/next.jpg"}
+           ] ==
+             LinkParser.parse(
+               {"img", [{"srcset", "a.jpg,b.jpg, DATA:image/png;base64,AAAA 1x,next.jpg 2x"}],
+                []},
+               %{referrer_url: "http://example.com/dir/page", assets: ["images"]},
+               fn element, _opts -> element end
+             )
+  end
+
   test "skips data srcset fragments and still follows a css file without the css flag" do
     parent = self()
 
@@ -89,7 +125,7 @@ defmodule Crawler.Parser.LinkParserTest do
     assert_receive {:css, {"link", "a.png", "href", "http://example.com/a.png"}}
 
     Crawler.Parser.parse_links(
-      "<style>body { background: url(&#x27;hex.png&#x27;); }</style>",
+      ~s|<div style="background: url(&#x27;hex.png&#x27;)"></div>|,
       %{
         assets: ["css"],
         html_tag: "a",
