@@ -1,37 +1,38 @@
 defmodule Crawler.URL do
   @moduledoc false
 
+  alias Crawler.URL.Host
+  alias Crawler.URL.Percent
+
   @schemes ["http", "https"]
 
   def normalize(url) when is_binary(url) do
-    case http_uri(url) do
-      {:ok, uri} -> uri |> fold_uri() |> URI.to_string()
-      :plain -> plain_normalize(url)
+    case prepare(url) do
+      {:http, uri} -> uri |> fold_uri() |> URI.to_string()
+      {:plain, plain} -> plain_normalize(plain)
     end
   end
 
   @doc false
   def canonical(url) when is_binary(url) do
-    case http_uri(url) do
-      {:ok, uri} ->
-        # The request keeps a directory slash. The store key drops it, so
-        # `foo` and `foo/` are one page, while a fragment stays on the key
-        # and does not match the fetched page.
-        folded =
-          uri
-          |> fold_uri()
-          |> URI.to_string()
-          |> strip_trailing_slash()
+    case prepare(url) do
+      {:http, uri} ->
+        # The request keeps a directory slash. The store key drops one trailing
+        # slash and the fragment, so `foo`, `foo/`, and `foo#section` are one page.
+        uri
+        |> fold_uri()
+        |> URI.to_string()
+        |> strip_trailing_slash()
 
-        folded <> fragment_suffix(url)
-
-      :plain ->
-        plain_canonical(url)
+      {:plain, plain} ->
+        plain_canonical(plain)
     end
   end
 
   def resolve(link, base) when is_binary(link) do
-    link = String.trim(link)
+    # Scheme checks must see the same spelling normalize/1 fetches. A tab,
+    # break, or path backslash is removed before this link is classified.
+    link = sanitize(link)
 
     cond do
       link == "" ->
@@ -59,15 +60,52 @@ defmodule Crawler.URL do
     end
   end
 
+  defp prepare(url) do
+    trimmed = url |> strip_breaks() |> trim_c0()
+
+    if http_scheme?(trimmed) do
+      case http_uri(slash_before_query(trimmed)) do
+        {:ok, uri} -> {:http, uri}
+        :plain -> {:plain, trimmed}
+      end
+    else
+      {:plain, trimmed}
+    end
+  end
+
+  @doc false
+  def sanitize(url) when is_binary(url) do
+    trimmed = url |> strip_breaks() |> trim_c0()
+    if http_scheme?(trimmed), do: slash_before_query(trimmed), else: trimmed
+  end
+
   defp fold_uri(%URI{} = uri) do
     drop_default_port(%{
       uri
       | scheme: String.downcase(uri.scheme),
-        host: String.downcase(uri.host),
-        path: remove_dot_segments(uri.path),
+        userinfo: fold_userinfo(uri.userinfo),
+        host: Host.fold(uri.host),
+        path: fold_path(uri.path),
+        query: fold_query(uri.query),
         fragment: nil
     })
   end
+
+  # Userinfo case is a different page. Only the hex digits inside `%HH` fold.
+  defp fold_userinfo(nil), do: nil
+  defp fold_userinfo(userinfo), do: Percent.lowercase_hex(userinfo)
+
+  defp fold_path(nil), do: nil
+
+  defp fold_path(path) do
+    path
+    |> :binary.replace("\\", "/", [:global])
+    |> Percent.canonicalize()
+    |> remove_dot_segments()
+  end
+
+  defp fold_query(nil), do: nil
+  defp fold_query(query), do: Percent.canonicalize(query)
 
   defp plain_normalize(url) do
     url
@@ -78,27 +116,13 @@ defmodule Crawler.URL do
   end
 
   defp plain_canonical(url) do
-    {base, fragment} =
-      case String.split(url, "#", parts: 2) do
-        [base, fragment] -> {base, "#" <> fragment}
-        [base] -> {base, ""}
-      end
-
-    {path, query} =
-      case String.split(base, "?", parts: 2) do
-        [path, query] -> {path, "?" <> query}
-        [path] -> {path, ""}
-      end
-
-    String.trim_trailing(path, "/") <> query <> fragment
+    {base, _fragment} = split_piece(url, "#")
+    {path, query} = split_piece(base, "?")
+    trim_slashes(path) <> query_part(query)
   end
 
-  defp fragment_suffix(url) do
-    case String.split(url, "#", parts: 2) do
-      [_base, fragment] -> "#" <> fragment
-      _ -> ""
-    end
-  end
+  defp query_part(nil), do: ""
+  defp query_part(query), do: "?" <> query
 
   defp strip_trailing_slash(url) do
     {base, query} =
@@ -110,14 +134,13 @@ defmodule Crawler.URL do
     String.trim_trailing(base, "/") <> query
   end
 
-  # Drop `.` and `..` only. Percent-encoded dots stay encoded, and `...` is a
-  # normal segment.
+  # Drop `.` and `..`, including a dot that was written as `%2e`. `...` stays a
+  # segment. `%2F` is one segment, not a slash.
   defp remove_dot_segments(nil), do: nil
 
   defp remove_dot_segments(path) when is_binary(path) do
     absolute? = String.starts_with?(path, "/")
     # A final `.` or `..` names the directory, the same as a trailing slash.
-    # `...` and percent-encoded dots are ordinary segments.
     trailing? = path != "/" and (String.ends_with?(path, "/") or final_dot_segment?(path))
 
     path
@@ -207,4 +230,81 @@ defmodule Crawler.URL do
   defp drop_default_port(%URI{scheme: "http", port: 80} = uri), do: %{uri | port: nil}
   defp drop_default_port(%URI{scheme: "https", port: 443} = uri), do: %{uri | port: nil}
   defp drop_default_port(uri), do: uri
+
+  defp strip_breaks(url), do: strip_bytes(url, [?\t, ?\n, ?\r], [])
+
+  defp strip_bytes(<<byte, rest::binary>>, dropped, acc) do
+    acc = if byte in dropped, do: acc, else: [acc, byte]
+    strip_bytes(rest, dropped, acc)
+  end
+
+  defp strip_bytes(<<>>, _dropped, acc), do: IO.iodata_to_binary(acc)
+
+  defp trim_c0(url) do
+    url
+    |> trim_leading_c0()
+    |> trim_trailing_c0()
+  end
+
+  defp trim_leading_c0(<<byte, rest::binary>>) when byte <= 0x20, do: trim_leading_c0(rest)
+  defp trim_leading_c0(url), do: url
+
+  defp trim_trailing_c0(url) do
+    size = byte_size(url)
+
+    if size > 0 and :binary.at(url, size - 1) <= 0x20 do
+      url
+      |> binary_part(0, size - 1)
+      |> trim_trailing_c0()
+    else
+      url
+    end
+  end
+
+  defp http_scheme?(url) do
+    size = min(byte_size(url), 6)
+    prefix = ascii_lower(binary_part(url, 0, size))
+    String.starts_with?(prefix, "http:") or String.starts_with?(prefix, "https:")
+  end
+
+  defp ascii_lower(binary) do
+    for <<byte <- binary>>, into: <<>> do
+      if byte in ?A..?Z, do: <<byte + 32>>, else: <<byte>>
+    end
+  end
+
+  defp slash_before_query(url) do
+    {before_hash, hash} = split_piece(url, "#")
+    {before_query, query} = split_piece(before_hash, "?")
+    slashed = :binary.replace(before_query, "\\", "/", [:global])
+    reassemble(slashed, query, hash)
+  end
+
+  defp split_piece(text, separator) do
+    case :binary.split(text, separator) do
+      [left, right] -> {left, right}
+      [left] -> {left, nil}
+    end
+  end
+
+  defp reassemble(base, query, fragment) do
+    base
+    |> append_piece("?", query)
+    |> append_piece("#", fragment)
+  end
+
+  defp append_piece(url, _mark, nil), do: url
+  defp append_piece(url, mark, value), do: url <> mark <> value
+
+  defp trim_slashes(path) do
+    size = byte_size(path)
+
+    if size > 0 and :binary.at(path, size - 1) == ?/ do
+      path
+      |> binary_part(0, size - 1)
+      |> trim_slashes()
+    else
+      path
+    end
+  end
 end

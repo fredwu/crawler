@@ -742,6 +742,67 @@ defmodule Crawler.PageIdentityTest do
     assert logged(seen) == [{"ex.com", "/id/padded"}]
   end
 
+  test "a location with a tab or a break is the absolute page" do
+    scope = "page-identity-location-tab"
+    seen = new_log()
+    page = "http://ex.com/id/tabby"
+    land = "http://ex.com/land"
+
+    adapter = fn request ->
+      log(seen, {request.url.host, request.url.path})
+
+      cond do
+        request.url.path == "/id/tabby" ->
+          redirect(request, "ht\ttp://ex.com/land")
+
+        request.url.path == "/id/break" ->
+          redirect(request, "java\nscript:alert(1)")
+
+        request.url.path == "/land" ->
+          text_response(request, "LAND")
+
+        true ->
+          text_response(request, "LEAK")
+      end
+    end
+
+    assert %Store.Page{body: "LAND"} =
+             fetcher(%{
+               url: page,
+               scope: scope,
+               retries: 2,
+               url_filter: HostFilter,
+               req_options: [adapter: adapter, retry: false]
+             })
+
+    assert Store.find({land, scope}).body == "LAND"
+
+    assert logged(seen) |> Enum.frequencies() == %{
+             {"ex.com", "/id/tabby"} => 1,
+             {"ex.com", "/land"} => 1
+           }
+
+    script = "http://ex.com/id/break"
+
+    assert {:warn, message} =
+             fetcher(%{
+               url: script,
+               scope: scope,
+               retries: 2,
+               url_filter: HostFilter,
+               req_options: [adapter: adapter, retry: false]
+             })
+
+    assert message =~ "Redirect rejected"
+    refute message =~ "/javascript:"
+
+    assert logged(seen) |> Enum.frequencies() == %{
+             {"ex.com", "/id/tabby"} => 1,
+             {"ex.com", "/land"} => 1,
+             {"ex.com", "/id/break"} => 1
+           }
+  end
+
   test "a redirect hop is not a second page", %{
     site: site,
     url: url,

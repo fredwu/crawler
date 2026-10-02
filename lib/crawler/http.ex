@@ -70,8 +70,7 @@ defmodule Crawler.HTTP do
   defp first_location(response) do
     case Req.Response.get_header(response, "location") do
       [location | _] when is_binary(location) ->
-        location = String.trim(location)
-        if location == "", do: nil, else: location
+        if URL.sanitize(location) == "", do: nil, else: location
 
       _ ->
         nil
@@ -100,10 +99,10 @@ defmodule Crawler.HTTP do
   end
 
   defp next_url(%URI{} = current, location) do
-    current
-    |> URI.merge(location)
-    |> URI.to_string()
-    |> URL.normalize()
+    case URL.resolve(location, URI.to_string(current)) do
+      {:ok, url} -> url
+      :skip -> location
+    end
   rescue
     ArgumentError -> location
   end

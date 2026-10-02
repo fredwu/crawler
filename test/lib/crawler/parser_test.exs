@@ -33,4 +33,29 @@ defmodule Crawler.ParserTest do
     assert_receive {:link, {"link", "next", "href", "http://example.com/other/next"},
                     "http://example.com/other/"}
   end
+
+  test "a base href ending in a non-breaking space is not a directory" do
+    parent = self()
+
+    opts = %{
+      scraper: Crawler.Scraper,
+      html_tag: "a",
+      content_type: "text/html",
+      referrer_url: "http://example.com/dir/page",
+      url: "http://example.com/dir/page",
+      depth: 1,
+      max_depths: 3,
+      assets: []
+    }
+
+    body = "<html><head><base href=\"docs/\u00A0\"></head><a href=\"x\"></a></html>"
+
+    Parser.parse_links(body, opts, fn element, link_opts ->
+      send(parent, {:link, element, link_opts[:referrer_url]})
+      element
+    end)
+
+    assert_receive {:link, {"link", "x", "href", "http://example.com/dir/docs/x"},
+                    "http://example.com/dir/docs/\u00A0"}
+  end
 end

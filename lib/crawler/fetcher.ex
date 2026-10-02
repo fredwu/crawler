@@ -5,6 +5,7 @@ defmodule Crawler.Fetcher do
 
   require Logger
 
+  alias Crawler.Charset
   alias Crawler.Fetcher.HeaderPreparer
   alias Crawler.Fetcher.Policer
   alias Crawler.Fetcher.Recorder
@@ -69,6 +70,7 @@ defmodule Crawler.Fetcher do
 
   defp fetch_url_200(body, response, opts) do
     opts = HeaderPreparer.prepare(Req.get_headers_list(response), opts)
+    body = Charset.decode(body, opts)
 
     with {:ok, _} <- Recorder.maybe_store_page(body, opts),
          {:ok, opts} <- record_referrer_url(response, body, opts) do

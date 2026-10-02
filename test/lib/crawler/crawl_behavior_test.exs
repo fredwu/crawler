@@ -441,8 +441,8 @@ defmodule Crawler.CrawlBehaviorTest do
       assert %Store.Page{body: body} = Store.find_processed({page, "frag"})
       assert body =~ "#{page}#b"
       assert Store.ops_count("frag") == 1
-      refute Store.find({"#{page}#a", "frag"})
-      refute Store.find({"#{page}#b", "frag"})
+      assert Store.find({"#{page}#a", "frag"}).body == body
+      assert Store.find({"#{page}#b", "frag"}).body == body
     end)
   end
 

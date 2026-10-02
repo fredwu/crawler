@@ -93,9 +93,11 @@ defmodule Crawler.OfflineSnapshotTest do
       end)
     end)
 
-    refute Store.find({page <> "#section", scope})
-    refute Store.find({page <> "#top", scope})
-    refute Store.find({"#{url}/blog/icons.svg#a", scope})
+    assert Store.find({page <> "#section", scope}) == Store.find({page, scope})
+    assert Store.find({page <> "#top", scope}) == Store.find({page, scope})
+
+    assert Store.find({"#{url}/blog/icons.svg#a", scope}) ==
+             Store.find({"#{url}/blog/icons.svg", scope})
 
     html = File.read!(saved(root, page))
     assert html =~ "See postcard today"

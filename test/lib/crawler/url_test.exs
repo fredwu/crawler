@@ -1,6 +1,7 @@
 defmodule Crawler.URLTest do
   use ExUnit.Case, async: true
 
+  alias Crawler.Linker.Snapshot
   alias Crawler.URL
 
   test "folds host case, default ports, and dot segments" do
@@ -21,15 +22,23 @@ defmodule Crawler.URLTest do
     assert URL.normalize("http://host/foo/?q=1") == "http://host/foo/?q=1"
   end
 
-  test "drops the fragment from the request and keeps it on the store key" do
+  test "drops the fragment from the request and the store key" do
     assert URL.normalize("http://Example.com/a/../b#x") == "http://example.com/b"
-    assert URL.canonical("http://Example.com/a/../b#x") == "http://example.com/b#x"
+    assert URL.canonical("http://Example.com/a/../b#x") == "http://example.com/b"
+
+    assert URL.canonical("http://example.com/page#a") ==
+             URL.canonical("http://example.com/page#b")
+
     assert URL.canonical("http://example.com/page") == "http://example.com/page"
   end
 
-  test "leaves percent-encoded dots and literal triple dots alone" do
-    assert URL.normalize("http://example.com/a/%2e%2e/b") == "http://example.com/a/%2e%2e/b"
+  test "folds percent-encoded dot segments and keeps triple dots and internal slashes" do
+    assert URL.normalize("http://example.com/a/%2e%2e/b") == "http://example.com/b"
+    assert URL.normalize("http://example.com/a/%2E/%2e%2E/b") == "http://example.com/b"
+    assert URL.normalize("http://example.com/a/%2e%2e") == "http://example.com/"
+    assert URL.canonical("http://example.com/a/%2e%2e") == "http://example.com"
     assert URL.normalize("http://example.com/a/.../c") == "http://example.com/a/.../c"
+    assert URL.normalize("http://example.com/a/%2e%2e%2e/c") == "http://example.com/a/.../c"
     assert URL.canonical("http://example.com/a/.../c") == "http://example.com/a/.../c"
     assert URL.normalize("http://example.com//a") == "http://example.com//a"
     assert URL.normalize("http://example.com/a//b/") == "http://example.com/a//b/"
@@ -48,7 +57,7 @@ defmodule Crawler.URLTest do
     assert URL.normalize("url1#frag") == "url1"
     assert URL.canonical("url1") == "url1"
     assert URL.canonical("url1/") == "url1"
-    assert URL.canonical("url1#frag") == "url1#frag"
+    assert URL.canonical("url1#frag") == "url1"
   end
 
   test "keeps a directory slash after a final dot segment" do
@@ -58,7 +67,8 @@ defmodule Crawler.URLTest do
     assert URL.canonical("http://ex.com/a/b/..") == "http://ex.com/a"
     assert URL.normalize("http://ex.com/a/b/../.") == "http://ex.com/a/"
     assert URL.normalize("http://ex.com/a/...") == "http://ex.com/a/..."
-    assert URL.normalize("http://ex.com/a/%2e%2e") == "http://ex.com/a/%2e%2e"
+    assert URL.normalize("http://ex.com/a/%2e%2e") == "http://ex.com/"
+    assert URL.canonical("http://ex.com/a/%2e%2e") == "http://ex.com"
     assert URL.resolve("c", "http://ex.com/a/b/.") == {:ok, "http://ex.com/a/b/c"}
     assert URL.resolve("c", "http://ex.com/a/b/..") == {:ok, "http://ex.com/a/c"}
 
@@ -83,5 +93,140 @@ defmodule Crawler.URLTest do
              {:ok, "http://example.com/blog/post"}
 
     assert URL.resolve("mailto:a@b.c", "http://example.com/blog/post") == :skip
+  end
+
+  test "treats host spellings as one page" do
+    assert_one_page([
+      "http://éxample.com/a",
+      "http://xn--xample-9ua.com/a",
+      "http://ÉXAMPLE.COM./a",
+      "HTTP://éxample.com:80/a#section"
+    ])
+
+    assert_one_page([
+      "http://www.éxample.com/a",
+      "http://www.xn--xample-9ua.com./a"
+    ])
+
+    assert URL.normalize("http://例.com/a") == "http://xn--fsq.com/a"
+    assert URL.normalize("http://München.com/a") == "http://xn--mnchen-3ya.com/a"
+    assert URL.normalize("http://café.com/a") == "http://xn--caf-dma.com/a"
+    assert_different("http://example.com../a", "http://example.com/a")
+    assert_different("http://example.com./a", "http://example.com../a")
+    assert URL.normalize("http://./a") == "http://./a"
+    assert URL.normalize("http://example.com./a") == "http://example.com/a"
+  end
+
+  test "treats ipv6 spellings as one page" do
+    assert_one_page([
+      "http://[::1]/a",
+      "http://[0::1]/a",
+      "http://[0:0:0:0:0:0:0:1]/a",
+      "http://[::1]:80/a#section"
+    ])
+
+    assert URL.normalize("http://[2001:0db8:0000:0000:0000:0000:0000:0001]/a") ==
+             "http://[2001:db8::1]/a"
+
+    assert URL.normalize("http://[fe80:1::1]/a") == "http://[fe80:1::1]/a"
+    assert URL.normalize("http://[ff02:1::1]/a") == "http://[ff02:1::1]/a"
+    assert URL.canonical("http://[FE80:1::1]/a") == "http://[fe80:1::1]/a"
+    assert URL.normalize("http://[::ffff:192.0.2.1]/a") == "http://[::ffff:c000:201]/a"
+    assert URL.normalize("http://[::ffff:c000:201]/a") == "http://[::ffff:c000:201]/a"
+  end
+
+  test "folds percent-encoding, spaces, breaks, and path backslashes" do
+    assert_one_page([
+      "http://ex.com/a%7Eb",
+      "http://ex.com/a%7eb",
+      "http://ex.com/a~b"
+    ])
+
+    assert_one_page([
+      "http://ex.com/%41",
+      "http://ex.com/A"
+    ])
+
+    assert_one_page([
+      "http://ex.com/caf%C3%A9",
+      "http://ex.com/café"
+    ])
+
+    assert_one_page([
+      "http://ex.com/a b",
+      "http://ex.com/a%20b",
+      "http://ex.com/a%20b#top"
+    ])
+
+    assert URL.normalize("http://ex.com/a\tb") == "http://ex.com/ab"
+    assert URL.normalize("http://ex.com/a\r\nb") == "http://ex.com/ab"
+    assert URL.normalize("  http://ex.com/a  ") == "http://ex.com/a"
+    assert URL.normalize("http://ex.com/a\\b") == "http://ex.com/a/b"
+    assert URL.normalize("http:\\\\ex.com\\a") == "http://ex.com/a"
+    assert URL.normalize("http://ex.com/a?b\\c") == "http://ex.com/a?b%5cc"
+    assert URL.normalize("http://ex.com/a?b%5C") == "http://ex.com/a?b%5c"
+    assert URL.normalize("http://ex.com/a?q=%7E") == "http://ex.com/a?q=~"
+    assert URL.normalize("http://ex.com/a?q=%2E%2E") == "http://ex.com/a?q=.."
+    assert URL.normalize("http://ex.com/a?q=%41") == "http://ex.com/a?q=A"
+
+    assert Snapshot.path("http://ex.com/%7E") == "ex.com/~/__index.html"
+    refute Snapshot.path("http://ex.com/%7E") =~ "__u_"
+    refute Snapshot.path("http://ex.com/a%2Fb") =~ "__u_"
+  end
+
+  test "keeps different pages on different files" do
+    assert_different("http://ex.com/a", "https://ex.com/a")
+    assert_different("http://a:b@ex.com/a", "http://A:B@ex.com/a")
+    assert_different("http://a:b@ex.com/a", "http://ex.com/a")
+    assert_different("http://ex.com/Docs", "http://ex.com/docs")
+    assert_different("http://ex.com/a%2Fb", "http://ex.com/a/b")
+    assert_one_page(["http://ex.com/a%2Fb", "http://ex.com/a%2fb"])
+    assert_different("http://ex.com/search?", "http://ex.com/search")
+    assert_different("http://ex.com/a//b", "http://ex.com/a/b")
+    assert_different("http://ex.com/q?a=1&b=2", "http://ex.com/q?b=2&a=1")
+    assert_different("http://ex.com/q?q=a+b", "http://ex.com/q?q=a%20b")
+    assert_different("http://ex.com/a/...", "http://ex.com/a/..")
+    assert URL.normalize("http://ex.com/a?q=foo/../bar") == "http://ex.com/a?q=foo/../bar"
+    assert URL.normalize("http://ex.com/dir?q=%2e%2e") == "http://ex.com/dir?q=.."
+
+    assert Snapshot.path("http://ex.com/search?") == "ex.com/search/__index__q_.html"
+    assert Snapshot.path("http://ex.com/search") == "ex.com/search/__index.html"
+    assert Snapshot.path("https://ex.com/a") =~ "__scheme_https"
+    assert Snapshot.path("http://ex.com/a//b") =~ "__e_"
+  end
+
+  test "resolves a path backslash and an encoded dot onto the fetched page" do
+    assert URL.resolve("a\\b", "http://ex.com/dir/page") == {:ok, "http://ex.com/dir/a/b"}
+    assert URL.resolve("%2e%2e/about", "http://ex.com/dir/page") == {:ok, "http://ex.com/about"}
+    assert URL.resolve("my page", "http://ex.com/dir/") == {:ok, "http://ex.com/dir/my%20page"}
+  end
+
+  test "sanitizes a link before deciding whether it is the same page" do
+    base = "http://other.com/dir/page"
+
+    assert URL.resolve("ht\ttp://ex.com/a", base) == {:ok, "http://ex.com/a"}
+    assert URL.resolve("http:\\\\ex.com\\a", base) == {:ok, "http://ex.com/a"}
+    assert URL.resolve(<<1, "http://ex.com/a">>, base) == {:ok, "http://ex.com/a"}
+    assert URL.resolve(" \thttp://ex.com/a\r\n", base) == {:ok, "http://ex.com/a"}
+    assert URL.resolve("java\nscript:alert(1)", base) == :skip
+    assert URL.resolve("a\\b", base) == {:ok, "http://other.com/dir/a/b"}
+    refute URL.resolve("\u00A0http://ex.com/a", base) == {:ok, "http://ex.com/a"}
+  end
+
+  defp assert_one_page(spellings) do
+    [first | rest] = Enum.map(spellings, &page_identity/1)
+
+    Enum.each(rest, fn spelling ->
+      assert spelling == first
+    end)
+  end
+
+  defp page_identity(url) do
+    {URL.normalize(url), URL.canonical(url), Snapshot.path(url)}
+  end
+
+  defp assert_different(left, right) do
+    refute URL.normalize(left) == URL.normalize(right)
+    refute Snapshot.path(left) == Snapshot.path(right)
   end
 end

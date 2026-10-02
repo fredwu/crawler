@@ -350,7 +350,7 @@ defmodule Crawler.Linker.SnapshotTest do
     raw_path = Snapshot.path(raw)
     utf8_path = Snapshot.path(utf8)
 
-    assert raw_path =~ "%e9"
+    assert raw_path =~ "%25e9"
     assert raw_path != utf8_path
     refute String.downcase(raw_path) == String.downcase(utf8_path)
 

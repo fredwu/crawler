@@ -150,12 +150,14 @@ defmodule Crawler.Parser do
     if directory_ref?(href), do: slash_directory(url), else: url
   end
 
-  defp directory_ref?(href) do
-    case href |> String.trim() |> URI.parse() do
+  defp directory_ref?(href) when is_binary(href) do
+    case href |> URL.sanitize() |> URI.parse() do
       %URI{path: path} when is_binary(path) -> String.ends_with?(path, "/")
       _ -> false
     end
   end
+
+  defp directory_ref?(_href), do: false
 
   defp slash_directory(url) do
     case String.split(url, "?", parts: 2) do
