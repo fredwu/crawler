@@ -29,8 +29,27 @@ defmodule Crawler.Snapper.JavascriptMimeTest do
     end
   end
 
-  test "data types and MIME parameters keep script source bytes intact" do
-    for type <- ["text/javascript1.6", "application/json", "text/jscript; charset=utf-8"] do
+  test "JavaScript MIME parameters are rewritten with the other script sources" do
+    external = Linker.offline_link(@page, "http://example.com/dir/external.js")
+    chunk = Linker.offline_link(@page, "http://example.com/dir/chunk.js")
+
+    for type <- @javascript do
+      parameterized = type <> "; charset=utf-8"
+
+      source =
+        ~s|<script type="#{parameterized}" src="external.js" integrity="remove">import('./ignored.js');</script>| <>
+          ~s|<script type="#{parameterized}">import('./chunk.js');</script>|
+
+      expected =
+        ~s|<script type="#{parameterized}" src="#{external}">import('./ignored.js');</script>| <>
+          ~s|<script type="#{parameterized}">import('#{chunk}');</script>|
+
+      assert rewrite(source, "text/html") == expected
+    end
+  end
+
+  test "data types and non-script parameters keep script source bytes intact" do
+    for type <- ["text/javascript1.6", "application/json", "module;charset=utf-8"] do
       source =
         ~s|<script type="#{type}" language="javascript" src="external.js" integrity="keep">import('./chunk.js');</script>| <>
           ~s|<script type="#{type}">import('./chunk.js');</script>|

@@ -1,6 +1,7 @@
 defmodule Crawler.Store.State do
   @moduledoc false
 
+  alias Crawler.Cookies
   alias Crawler.Store.Budget
   alias Crawler.Store.Claims
   alias Crawler.Store.Scope
@@ -14,7 +15,9 @@ defmodule Crawler.Store.State do
             closing: MapSet.new(),
             monitors: %{},
             claims: %Claims{},
-            settlements: %Settlements{}
+            settlements: %Settlements{},
+            cookies: %{},
+            robots: %{}
 
   def new, do: %__MODULE__{incarnation: make_ref()}
 
@@ -159,7 +162,109 @@ defmodule Crawler.Store.State do
   end
 
   def drop_scope(state, scope) do
-    update_scope(state, scope, &%Scope{revision: &1.revision + 1})
+    waiters =
+      state.robots
+      |> Map.get(scope, %{})
+      |> Map.values()
+      |> Enum.flat_map(&loading_waiters/1)
+
+    state =
+      state
+      |> update_scope(scope, &%Scope{revision: &1.revision + 1})
+      |> Map.update!(:cookies, &Map.delete(&1, scope))
+      |> Map.update!(:robots, &Map.delete(&1, scope))
+
+    {waiters, state}
+  end
+
+  def save_cookies(state, nil, _url, _headers, _generation), do: state
+
+  def save_cookies(state, scope, url, headers, generation) do
+    if current?(state, scope, generation) do
+      jar = Cookies.store(Map.get(state.cookies, scope, []), url, headers)
+      %{state | cookies: Map.put(state.cookies, scope, jar)}
+    else
+      state
+    end
+  end
+
+  def cookie_header(_state, nil, _url, _generation), do: nil
+
+  def cookie_header(state, scope, url, generation) do
+    if current?(state, scope, generation) do
+      state.cookies
+      |> Map.get(scope, [])
+      |> Cookies.header(url)
+    end
+  end
+
+  def claim_robots(state, scope, origin, from, pid) do
+    case robot(state, scope, origin) do
+      {:ready, rules} ->
+        {{:reply, {:ready, rules}}, state}
+
+      {:loading, ref, owner, waiters} ->
+        entry = {:loading, ref, owner, [from | waiters]}
+        {{:noreply, :wait}, put_robot(state, scope, origin, entry)}
+
+      nil ->
+        ref = Process.monitor(pid)
+        {{:reply, :owner}, put_robot(state, scope, origin, {:loading, ref, pid, []})}
+    end
+  end
+
+  def finish_robots(state, scope, origin, rules, pid) do
+    case robot(state, scope, origin) do
+      {:loading, ref, ^pid, waiters} ->
+        Process.demonitor(ref, [:flush])
+        {waiters, put_robot(state, scope, origin, {:ready, rules})}
+
+      _ ->
+        {[], state}
+    end
+  end
+
+  def forget_robots(state, scope, origin, pid) do
+    case robot(state, scope, origin) do
+      {:loading, ref, ^pid, waiters} ->
+        Process.demonitor(ref, [:flush])
+        {waiters, delete_robot(state, scope, origin)}
+
+      _ ->
+        {[], state}
+    end
+  end
+
+  def robots_down(state, ref) do
+    Enum.find_value(state.robots, {[], state}, fn {scope, origins} ->
+      Enum.find_value(origins, fn
+        {origin, {:loading, ^ref, _pid, waiters}} ->
+          state = delete_robot(state, scope, origin)
+          {waiters, state}
+
+        _ ->
+          nil
+      end)
+    end)
+  end
+
+  defp loading_waiters({:loading, ref, _pid, waiters}) do
+    Process.demonitor(ref, [:flush])
+    waiters
+  end
+
+  defp loading_waiters(_entry), do: []
+
+  defp robot(state, scope, origin), do: get_in(state.robots, [scope, origin])
+
+  defp put_robot(state, scope, origin, entry) do
+    origins = Map.get(state.robots, scope, %{})
+    %{state | robots: Map.put(state.robots, scope, Map.put(origins, origin, entry))}
+  end
+
+  defp delete_robot(state, scope, origin) do
+    origins = state.robots |> Map.get(scope, %{}) |> Map.delete(origin)
+    %{state | robots: Map.put(state.robots, scope, origins)}
   end
 
   def attach_owner(state, feeder, owner, scope) do

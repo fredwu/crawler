@@ -12,7 +12,7 @@ defmodule Crawler.HTTPTest do
       {_, ua} = Enum.find(conn.req_headers, fn {header, _} -> header == "user-agent" end)
       Agent.update(HTTP.DefaultUA, fn _ -> ua end)
 
-      Plug.Conn.resp(conn, 200, "")
+      conn |> Plug.Conn.put_resp_header("content-type", "text/html") |> Plug.Conn.resp(200, "")
     end)
 
     start_crawl("#{url}/http/default_ua", req_options: req_options)
@@ -33,7 +33,7 @@ defmodule Crawler.HTTPTest do
 
       Agent.update(HTTP.CustomUA, fn _ -> ua end)
 
-      Plug.Conn.resp(conn, 200, "")
+      conn |> Plug.Conn.put_resp_header("content-type", "text/html") |> Plug.Conn.resp(200, "")
     end)
 
     start_crawl("#{url}/http/custom_ua", user_agent: "Hello World", req_options: req_options)

@@ -25,6 +25,7 @@ defmodule Crawler.Dispatcher do
         :headers,
         :content_type,
         :referrer_url,
+        :robots_nofollow,
         :before_publish
       ])
 

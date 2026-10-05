@@ -22,18 +22,24 @@ defmodule Crawler.CrawlLinkCollisionTest do
     assert Crawler.Linker.offline_link(page, absolute_target) == relative
 
     ReqTestSite.expect_once(site, "GET", "/index.html", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
       <a href="#{relative}">relative</a>
       <a href="#{absolute_target}">absolute</a>
       """)
     end)
 
     ReqTestSite.expect_once(site, "GET", "/#{site.path}/foo.html", fn conn ->
-      Plug.Conn.resp(conn, 200, "relative body")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "relative body")
     end)
 
     ReqTestSite.expect_once(site, "GET", "/foo.html", fn conn ->
-      Plug.Conn.resp(conn, 200, "absolute body")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "absolute body")
     end)
 
     {:ok, opts} =

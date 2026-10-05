@@ -21,11 +21,15 @@ defmodule Crawler.CrawlRawTextTest do
       literal = "<#{tag}><script> &amp; <a href=\"next.html\">literal</a></#{tag}>"
 
       ReqTestSite.expect_once(site, "GET", "/literal-text", fn conn ->
-        Plug.Conn.resp(conn, 200, literal <> ~s|<a href="next.html">next</a>|)
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "text/html")
+        |> Plug.Conn.resp(200, literal <> ~s|<a href="next.html">next</a>|)
       end)
 
       ReqTestSite.expect_once(site, "GET", "/next.html", fn conn ->
-        Plug.Conn.resp(conn, 200, "<p>next page</p>")
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "text/html")
+        |> Plug.Conn.resp(200, "<p>next page</p>")
       end)
 
       {:ok, opts} =
@@ -68,7 +72,9 @@ defmodule Crawler.CrawlRawTextTest do
     image = "#{url}/asset.png"
 
     ReqTestSite.expect_once(site, "GET", "/raw-text", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
       <div title="<script>"><!-- <style> --></div>
       <a href="next.html">next</a>
       <script type="module">import "./asset.js";</script>
@@ -77,7 +83,9 @@ defmodule Crawler.CrawlRawTextTest do
     end)
 
     ReqTestSite.expect_once(site, "GET", "/next.html", fn conn ->
-      Plug.Conn.resp(conn, 200, "<p>next page</p>")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "<p>next page</p>")
     end)
 
     ReqTestSite.expect_once(site, "GET", "/asset.js", fn conn ->

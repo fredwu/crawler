@@ -27,6 +27,7 @@ defmodule Crawler.Snapper.PublicationLifecycleTest do
           save_to: save_to,
           store: nil,
           retries: 0,
+          respect_robots: false,
           req_options: [
             adapter: fn request ->
               {request,

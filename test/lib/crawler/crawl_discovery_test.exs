@@ -51,7 +51,9 @@ defmodule Crawler.CrawlDiscoveryTest do
           "/behavior/search"
         ] do
       ReqTestSite.expect_once(site, "GET", path, fn conn ->
-        Plug.Conn.resp(conn, 200, path)
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "text/html")
+        |> Plug.Conn.resp(200, path)
       end)
     end
 

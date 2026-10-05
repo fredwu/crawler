@@ -12,12 +12,17 @@ defmodule Crawler.RunningScopeTest do
         send(observer, {queue, self()})
 
         receive do
-          :release -> Plug.Conn.resp(conn, 200, "HELD")
+          :release ->
+            conn
+            |> Plug.Conn.put_resp_header("content-type", "text/html")
+            |> Plug.Conn.resp(200, "HELD")
         end
       end)
 
       ReqTestSite.expect_once(context.site, "GET", "/status/#{queue}/queued", fn conn ->
-        Plug.Conn.resp(conn, 200, "QUEUED")
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "text/html")
+        |> Plug.Conn.resp(200, "QUEUED")
       end)
     end
 
@@ -90,19 +95,27 @@ defmodule Crawler.RunningScopeTest do
 
     ReqTestSite.expect_once(context.site, "GET", "/progress/completed", fn conn ->
       send(observer, {:completed_request, self()})
-      Plug.Conn.resp(conn, 200, "COMPLETE")
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "COMPLETE")
     end)
 
     ReqTestSite.expect_once(context.site, "GET", "/progress/held", fn conn ->
       send(observer, {:held_request, self()})
 
       receive do
-        :release -> Plug.Conn.resp(conn, 200, "HELD")
+        :release ->
+          conn
+          |> Plug.Conn.put_resp_header("content-type", "text/html")
+          |> Plug.Conn.resp(200, "HELD")
       end
     end)
 
     ReqTestSite.expect_once(context.site, "GET", "/progress/queued", fn conn ->
-      Plug.Conn.resp(conn, 200, "QUEUED")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "QUEUED")
     end)
 
     assert {:ok, completed} =

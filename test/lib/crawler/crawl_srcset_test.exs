@@ -18,7 +18,9 @@ defmodule Crawler.CrawlSrcsetTest do
     data = "data:image/png;base64,YQ=="
 
     ReqTestSite.expect_once(site, "GET", "/srcset-page", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
       <img srcset="#{data} 1x, image.png 2x">
       <link rel="preload" as="image" imagesrcset="#{data} 1x, preload.png 2x">
       """)

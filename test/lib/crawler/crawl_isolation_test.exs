@@ -15,21 +15,28 @@ defmodule Crawler.CrawlIsolationTest do
 
       receive do
         :release ->
-          Plug.Conn.resp(conn, 200, ~s(<a href="#{url}/behavior/iso/a1">1</a>))
+          conn
+          |> Plug.Conn.put_resp_header("content-type", "text/html")
+          |> Plug.Conn.resp(200, ~s(<a href="#{url}/behavior/iso/a1">1</a>))
       after
         5_000 -> Plug.Conn.resp(conn, 500, "late")
       end
     end)
 
     ReqTestSite.expect_once(site, "GET", "/behavior/iso/a1", fn conn ->
-      Plug.Conn.resp(conn, 200, ~s(<a href="#{url}/behavior/iso/a2">2</a>))
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, ~s(<a href="#{url}/behavior/iso/a2">2</a>))
     end)
 
     ReqTestSite.stub(site, "GET", "/behavior/iso/b", fn conn ->
       send(parent, {:started, :b, self()})
 
       receive do
-        :release -> Plug.Conn.resp(conn, 200, "b")
+        :release ->
+          conn
+          |> Plug.Conn.put_resp_header("content-type", "text/html")
+          |> Plug.Conn.resp(200, "b")
       after
         5_000 -> Plug.Conn.resp(conn, 500, "late")
       end
@@ -107,7 +114,10 @@ defmodule Crawler.CrawlIsolationTest do
 
     ReqTestSite.stub(site, "GET", "/behavior/shared-url", fn conn ->
       Agent.update(hits, &(&1 + 1))
-      Plug.Conn.resp(conn, 200, "shared")
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "shared")
     end)
 
     {:ok, first} = start_crawl(page, scope: "crawl-a", workers: 1, req_options: req_options)

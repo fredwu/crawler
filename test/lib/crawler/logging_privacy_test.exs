@@ -336,6 +336,7 @@ defmodule Crawler.LoggingPrivacyTest do
         private_cookie: @cookie,
         private_modifier_option: @private,
         retries: 0,
+        respect_robots: false,
         req_options: [adapter: adapter, retry: false]
       })
 

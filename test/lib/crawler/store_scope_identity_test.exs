@@ -63,7 +63,10 @@ defmodule Crawler.StoreScopeIdentityTest do
 
     ReqTestSite.expect(site, "GET", "/tuple-scope", fn conn ->
       count = Agent.get_and_update(attempts, &{&1 + 1, &1 + 1})
-      Plug.Conn.resp(conn, 200, "version #{count}")
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "version #{count}")
     end)
 
     assert {:ok, _} = Store.add(unrelated_key)

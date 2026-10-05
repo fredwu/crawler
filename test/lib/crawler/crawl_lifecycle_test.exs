@@ -21,12 +21,20 @@ defmodule Crawler.CrawlLifecycleTest do
 
       if count == 0 do
         receive do
-          :release -> Plug.Conn.resp(conn, 200, "stopped")
+          :release ->
+            conn
+            |> Plug.Conn.put_resp_header("content-type", "text/html")
+            |> Plug.Conn.resp(200, "stopped")
         after
-          10_000 -> Plug.Conn.resp(conn, 200, "late")
+          10_000 ->
+            conn
+            |> Plug.Conn.put_resp_header("content-type", "text/html")
+            |> Plug.Conn.resp(200, "late")
         end
       else
-        Plug.Conn.resp(conn, 200, "stopped")
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "text/html")
+        |> Plug.Conn.resp(200, "stopped")
       end
     end)
 
@@ -103,7 +111,9 @@ defmodule Crawler.CrawlLifecycleTest do
     supervisor_before = supervisor_links()
 
     ReqTestSite.expect_once(site, "GET", "/lifecycle/supervisor", fn conn ->
-      Plug.Conn.resp(conn, 200, "owned")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "owned")
     end)
 
     {:ok, opts} =
@@ -160,11 +170,15 @@ defmodule Crawler.CrawlLifecycleTest do
     on_exit(fn -> stop_processes(spawned) end)
 
     ReqTestSite.expect_once(site, "GET", "/lifecycle/external-kept", fn conn ->
-      Plug.Conn.resp(conn, 200, "kept")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "kept")
     end)
 
     ReqTestSite.expect_once(site, "GET", "/lifecycle/external", fn conn ->
-      Plug.Conn.resp(conn, 200, "external")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "external")
     end)
 
     {:ok, kept_opts} =
@@ -217,11 +231,11 @@ defmodule Crawler.CrawlLifecycleTest do
     second_page = "#{url}/lifecycle/same-scope-b"
 
     ReqTestSite.expect_once(site, "GET", "/lifecycle/same-scope-a", fn conn ->
-      Plug.Conn.resp(conn, 200, "a")
+      conn |> Plug.Conn.put_resp_header("content-type", "text/html") |> Plug.Conn.resp(200, "a")
     end)
 
     ReqTestSite.expect_once(site, "GET", "/lifecycle/same-scope-b", fn conn ->
-      Plug.Conn.resp(conn, 200, "b")
+      conn |> Plug.Conn.put_resp_header("content-type", "text/html") |> Plug.Conn.resp(200, "b")
     end)
 
     {:ok, creator} =

@@ -64,6 +64,7 @@ defmodule Crawler.Snapper.EncodingTest do
                  workers: 1,
                  max_depths: 2,
                  save_to: root,
+                 respect_robots: false,
                  req_options: [adapter: adapter, retry: false]
                )
 

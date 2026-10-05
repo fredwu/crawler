@@ -42,15 +42,37 @@ defmodule Crawler.Parser.JavascriptMimeTest do
     end
   end
 
-  test "script types still exclude MIME parameters and non-ASCII padding" do
-    for type <- @javascript,
-        unsupported <- [type <> "; charset=utf-8", "\u00A0" <> type <> "\u00A0"] do
+  test "JavaScript MIME parameters select external and inline script sources" do
+    for type <- @javascript do
+      parameterized = type <> "; charset=utf-8"
+
       source =
-        ~s|<script type="#{unsupported}" language="javascript" src="ignored.js">import('./ignored.js');</script>| <>
-          ~s|<script type="#{unsupported}">import('./ignored.js');</script>|
+        ~s|<script type="#{parameterized}" language="javascript" src="external.js">import('./ignored.js');</script>| <>
+          ~s|<script type="#{parameterized}">import('./chunk.js');</script>|
+
+      assert links(source, "text/html") == [
+               "http://example.com/dir/external.js",
+               "http://example.com/dir/chunk.js"
+             ]
+    end
+  end
+
+  test "non-ASCII script type padding and non-script parameters are not executable" do
+    for type <- @javascript do
+      padded = "\u00A0" <> type <> "\u00A0"
+
+      source =
+        ~s|<script type="#{padded}" language="javascript" src="ignored.js">import('./ignored.js');</script>| <>
+          ~s|<script type="#{padded}">import('./ignored.js');</script>|
 
       assert links(source, "text/html") == []
     end
+
+    source =
+      ~s|<script type="module;charset=utf-8" src="ignored.js">import('./ignored.js');</script>| <>
+        ~s|<script type="application/json" src="ignored.js">import('./ignored.js');</script>|
+
+    assert links(source, "text/html") == []
   end
 
   test "all JavaScript response aliases retain charset conversion and dependency parsing" do

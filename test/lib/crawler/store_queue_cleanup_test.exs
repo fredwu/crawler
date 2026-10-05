@@ -23,7 +23,10 @@ defmodule Crawler.StoreQueueCleanupTest do
       send(parent, {:direct_fetch_started, self()})
 
       receive do
-        :release -> Plug.Conn.resp(conn, 200, "DIRECT BODY")
+        :release ->
+          conn
+          |> Plug.Conn.put_resp_header("content-type", "text/html")
+          |> Plug.Conn.resp(200, "DIRECT BODY")
       end
     end)
 

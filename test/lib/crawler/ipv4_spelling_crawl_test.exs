@@ -49,6 +49,8 @@ defmodule Crawler.IPv4SpellingCrawlTest do
         scope: scope,
         workers: 2,
         save_to: root,
+        respect_robots: false,
+        url_filter: Crawler.AllowFilter,
         req_options: [adapter: adapter, retry: false]
       )
 

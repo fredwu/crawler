@@ -3,6 +3,12 @@ defmodule IntegrationTest do
 
   import Plug.Conn
 
+  defmodule AllowHosts do
+    @behaviour Crawler.Fetcher.UrlFilter.Spec
+
+    def filter(_url, _opts), do: {:ok, true}
+  end
+
   @utf8_bom <<0xEF, 0xBB, 0xBF>>
 
   test "integration", %{
@@ -102,6 +108,7 @@ defmodule IntegrationTest do
       save_to: tmp("integration"),
       max_depths: 4,
       assets: ["js", "css", "images"],
+      url_filter: AllowHosts,
       req_options: req_options
     )
 

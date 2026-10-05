@@ -14,11 +14,15 @@ defmodule Crawler.CrawlSharedQueueTest do
     stopped = "#{url}/lifecycle/other-stop"
 
     ReqTestSite.expect_once(site, "GET", "/lifecycle/kept", fn conn ->
-      Plug.Conn.resp(conn, 200, "kept")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "kept")
     end)
 
     ReqTestSite.expect_once(site, "GET", "/lifecycle/other-stop", fn conn ->
-      Plug.Conn.resp(conn, 200, "gone")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "gone")
     end)
 
     {:ok, kept_opts} =
@@ -72,9 +76,15 @@ defmodule Crawler.CrawlSharedQueueTest do
       send(parent, {:started, :a, self()})
 
       receive do
-        :release -> Plug.Conn.resp(conn, 200, "A")
+        :release ->
+          conn
+          |> Plug.Conn.put_resp_header("content-type", "text/html")
+          |> Plug.Conn.resp(200, "A")
       after
-        10_000 -> Plug.Conn.resp(conn, 200, "late")
+        10_000 ->
+          conn
+          |> Plug.Conn.put_resp_header("content-type", "text/html")
+          |> Plug.Conn.resp(200, "late")
       end
     end)
 
@@ -82,9 +92,15 @@ defmodule Crawler.CrawlSharedQueueTest do
       send(parent, {:started, :b, self()})
 
       receive do
-        :release -> Plug.Conn.resp(conn, 200, "B")
+        :release ->
+          conn
+          |> Plug.Conn.put_resp_header("content-type", "text/html")
+          |> Plug.Conn.resp(200, "B")
       after
-        10_000 -> Plug.Conn.resp(conn, 200, "late")
+        10_000 ->
+          conn
+          |> Plug.Conn.put_resp_header("content-type", "text/html")
+          |> Plug.Conn.resp(200, "late")
       end
     end)
 
@@ -143,11 +159,15 @@ defmodule Crawler.CrawlSharedQueueTest do
     page_b = "#{url}/lifecycle/shared-b"
 
     ReqTestSite.expect_once(site, "GET", "/lifecycle/shared-a", fn conn ->
-      Plug.Conn.resp(conn, 200, "owner")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "owner")
     end)
 
     ReqTestSite.expect_once(site, "GET", "/lifecycle/shared-b", fn conn ->
-      Plug.Conn.resp(conn, 200, "guest")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "guest")
     end)
 
     {:ok, owner} =
@@ -211,15 +231,24 @@ defmodule Crawler.CrawlSharedQueueTest do
       send(parent, {:started, self()})
 
       receive do
-        :release -> Plug.Conn.resp(conn, 200, "owner")
+        :release ->
+          conn
+          |> Plug.Conn.put_resp_header("content-type", "text/html")
+          |> Plug.Conn.resp(200, "owner")
       after
-        10_000 -> Plug.Conn.resp(conn, 200, "late")
+        10_000 ->
+          conn
+          |> Plug.Conn.put_resp_header("content-type", "text/html")
+          |> Plug.Conn.resp(200, "late")
       end
     end)
 
     ReqTestSite.stub(site, "GET", "/lifecycle/guest-b", fn conn ->
       Agent.update(hits, &(&1 + 1))
-      Plug.Conn.resp(conn, 200, "guest")
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "guest")
     end)
 
     {:ok, owner} =
@@ -300,12 +329,20 @@ defmodule Crawler.CrawlSharedQueueTest do
 
         if count <= 2 do
           receive do
-            :release -> Plug.Conn.resp(conn, 200, path)
+            :release ->
+              conn
+              |> Plug.Conn.put_resp_header("content-type", "text/html")
+              |> Plug.Conn.resp(200, path)
           after
-            10_000 -> Plug.Conn.resp(conn, 200, "late")
+            10_000 ->
+              conn
+              |> Plug.Conn.put_resp_header("content-type", "text/html")
+              |> Plug.Conn.resp(200, "late")
           end
         else
-          Plug.Conn.resp(conn, 200, path)
+          conn
+          |> Plug.Conn.put_resp_header("content-type", "text/html")
+          |> Plug.Conn.resp(200, path)
         end
       end)
     end

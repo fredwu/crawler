@@ -22,7 +22,9 @@ defmodule Crawler.CrawlCssTokensTest do
     stylesheet = opaque <> ~S|.live{background:u\72l(real.png)}|
 
     ReqTestSite.expect_once(site, "GET", "/css-hash-page", fn conn ->
-      Plug.Conn.resp(conn, 200, ~s|<link rel="stylesheet" href="/assets/hash.css">|)
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, ~s|<link rel="stylesheet" href="/assets/hash.css">|)
     end)
 
     ReqTestSite.expect_once(site, "GET", "/assets/hash.css", fn conn ->
@@ -89,7 +91,9 @@ defmodule Crawler.CrawlCssTokensTest do
       ~s|.x{background:url( /*draft*/image.png ),url("real.png"/* after */),#{invalid}}|
 
     ReqTestSite.expect_once(site, "GET", "/css-comment-page", fn conn ->
-      Plug.Conn.resp(conn, 200, ~s|<link rel="stylesheet" href="/assets/comments.css">|)
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, ~s|<link rel="stylesheet" href="/assets/comments.css">|)
     end)
 
     ReqTestSite.expect_once(site, "GET", "/assets/comments.css", fn conn ->
@@ -158,7 +162,9 @@ defmodule Crawler.CrawlCssTokensTest do
     stylesheet = literal <> ~S|.live{background:url(real.png),url(foo\)bar.png)}|
 
     ReqTestSite.expect_once(site, "GET", "/css-token-page", fn conn ->
-      Plug.Conn.resp(conn, 200, ~s|<link rel="stylesheet" href="/assets/app.css">|)
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, ~s|<link rel="stylesheet" href="/assets/app.css">|)
     end)
 
     ReqTestSite.expect_once(site, "GET", "/assets/app.css", fn conn ->

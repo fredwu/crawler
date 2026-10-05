@@ -27,11 +27,13 @@ defmodule Crawler.MediaTypeTest do
     end
   end
 
-  test "retains parameter stripping and the missing-type default" do
+  test "strips parameters and does not treat a missing type as text" do
     assert MediaType.normalize(" Text/HTML ; note=\"a;b\"") == "text/html"
     assert MediaType.normalize(nil) == "text/html"
-    assert MediaType.html?(nil)
-    assert MediaType.text?(nil)
+    refute MediaType.html?(nil)
+    refute MediaType.text?(nil)
+    refute MediaType.css?(nil)
+    refute MediaType.javascript?(nil)
     refute MediaType.xhtml?(nil)
     assert MediaType.css?(" Text/CSS ; charset=utf-8")
     assert MediaType.javascript?(" Application/JavaScript ; charset=utf-8")

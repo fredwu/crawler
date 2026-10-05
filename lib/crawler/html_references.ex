@@ -23,7 +23,11 @@ defmodule Crawler.HTMLReferences do
 
   def executable_script?(attrs) do
     type = attrs |> script_type() |> String.downcase(:ascii)
-    type == "module" or (MediaType.javascript?(type) and MediaType.normalize(type) == type)
+
+    # `normalize/1` trims Unicode spaces, so a NBSP-padded type must not match
+    # merely because its essence is JavaScript. Parameters are still accepted.
+    type == "module" or
+      (MediaType.javascript?(type) and ascii_essence(type) == MediaType.normalize(type))
   end
 
   def script_goal(attrs) do
@@ -79,18 +83,29 @@ defmodule Crawler.HTMLReferences do
     end)
   end
 
-  defp element_attributes("a", attrs, _opts, :svg), do: svg_href(attrs)
+  defp element_attributes("a", attrs, opts, :svg) do
+    if skip_link?(attrs, opts), do: [], else: svg_href(attrs)
+  end
 
   defp element_attributes(tag, attrs, opts, :svg) when tag in ["image", "use"],
     do: channel_attributes(opts, "images", svg_href(attrs))
 
   defp element_attributes(_tag, _attrs, _opts, namespace) when namespace != :html, do: []
-  defp element_attributes(tag, _attrs, _opts, :html) when tag in ["a", "area"], do: ["href"]
+
+  defp element_attributes(tag, attrs, opts, :html) when tag in ["a", "area"] do
+    if skip_link?(attrs, opts), do: [], else: ["href"]
+  end
+
   defp element_attributes(tag, _attrs, _opts, :html) when tag in ["iframe", "embed"], do: ["src"]
   defp element_attributes("object", _attrs, _opts, :html), do: ["data"]
 
-  defp element_attributes("meta", attrs, _opts, :html),
-    do: if(normalized(attrs, "http-equiv") == "refresh", do: ["content"], else: [])
+  defp element_attributes("meta", attrs, opts, :html) do
+    cond do
+      page_nofollow?(opts) -> []
+      normalized(attrs, "http-equiv") == "refresh" -> ["content"]
+      true -> []
+    end
+  end
 
   defp element_attributes("script", attrs, opts, :html) do
     if enabled?(opts, "js") and script_source(attrs) == :external, do: ["src"], else: []
@@ -161,6 +176,22 @@ defmodule Crawler.HTMLReferences do
   end
 
   defp icon_rel?(rel), do: Enum.any?(rel, &(&1 in ["icon", "apple-touch-icon", "mask-icon"]))
+
+  defp skip_link?(attrs, opts) do
+    opts[:respect_robots] != false and
+      (page_nofollow?(opts) or "nofollow" in rel_tokens(attrs))
+  end
+
+  defp page_nofollow?(opts) do
+    opts[:respect_robots] != false and opts[:robots_nofollow] == true
+  end
+
+  defp ascii_essence(type) do
+    type
+    |> String.split(";", parts: 2)
+    |> hd()
+    |> String.replace(~r/^[\t\n\f\r ]+|[\t\n\f\r ]+$/, "")
+  end
 
   defp rel_tokens(attrs),
     do:

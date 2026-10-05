@@ -67,7 +67,9 @@ defmodule Crawler.PageSpellingTest do
     root = tmp("spell-idn")
     seen = RequestLog.new()
 
-    crawl(hub, scope, root, single_target(seen, hub, page, spellings))
+    crawl(hub, scope, root, single_target(seen, hub, page, spellings),
+      url_filter: Crawler.AllowFilter
+    )
 
     assert RequestLog.frequencies(seen) == %{hub => 1, page => 1}
     assert Store.find({page, scope}).body == "PAGE #{page}"
@@ -470,15 +472,25 @@ defmodule Crawler.PageSpellingTest do
 
   defp root_page, do: ~s(<a href="/next"></a>ROOT)
 
-  defp crawl(url, scope, root, adapter, max_depths \\ 2) do
+  defp crawl(url, scope, root, adapter, extra \\ []) do
+    {max_depths, extra} =
+      if is_integer(extra), do: {extra, []}, else: {Keyword.get(extra, :max_depths, 2), extra}
+
     {:ok, opts} =
-      start_crawl(url,
-        store: Store,
-        scope: scope,
-        save_to: root,
-        workers: 1,
-        max_depths: max_depths,
-        req_options: [adapter: adapter, retry: false]
+      start_crawl(
+        url,
+        Keyword.merge(
+          [
+            store: Store,
+            scope: scope,
+            save_to: root,
+            workers: 1,
+            max_depths: max_depths,
+            respect_robots: false,
+            req_options: [adapter: adapter, retry: false]
+          ],
+          extra
+        )
       )
 
     await_idle(opts)

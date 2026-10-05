@@ -53,18 +53,24 @@ defmodule Crawler.CrawlFailureRecoveryTest do
     {:ok, hits} = Agent.start_link(fn -> 0 end)
 
     ReqTestSite.expect_once(site, "GET", "/lifecycle/missing", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
       <a href="#{entry}/a">a</a>
       <a href="#{entry}/b">b</a>
       """)
     end)
 
     ReqTestSite.expect_once(site, "GET", "/lifecycle/missing/a", fn conn ->
-      Plug.Conn.resp(conn, 200, ~s(<a href="#{entry}/gone">gone</a>))
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, ~s(<a href="#{entry}/gone">gone</a>))
     end)
 
     ReqTestSite.expect_once(site, "GET", "/lifecycle/missing/b", fn conn ->
-      Plug.Conn.resp(conn, 200, ~s(<a href="#{entry}/gone">gone</a>))
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, ~s(<a href="#{entry}/gone">gone</a>))
     end)
 
     ReqTestSite.stub(site, "GET", "/lifecycle/missing/gone", fn conn ->
@@ -112,18 +118,24 @@ defmodule Crawler.CrawlFailureRecoveryTest do
     {:ok, hits} = Agent.start_link(fn -> 0 end)
 
     ReqTestSite.expect_once(site, "GET", "/lifecycle/retry-once", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
       <a href="#{entry}/a">a</a>
       <a href="#{entry}/b">b</a>
       """)
     end)
 
     ReqTestSite.expect_once(site, "GET", "/lifecycle/retry-once/a", fn conn ->
-      Plug.Conn.resp(conn, 200, ~s(<a href="#{entry}/down">down</a>))
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, ~s(<a href="#{entry}/down">down</a>))
     end)
 
     ReqTestSite.expect_once(site, "GET", "/lifecycle/retry-once/b", fn conn ->
-      Plug.Conn.resp(conn, 200, ~s(<a href="#{entry}/down">down</a>))
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, ~s(<a href="#{entry}/down">down</a>))
     end)
 
     ReqTestSite.stub(site, "GET", "/lifecycle/retry-once/down", fn conn ->
@@ -171,7 +183,10 @@ defmodule Crawler.CrawlFailureRecoveryTest do
 
     ReqTestSite.stub(site, "GET", "/lifecycle/crash", fn conn ->
       Agent.update(hits, &(&1 + 1))
-      Plug.Conn.resp(conn, 200, "boom")
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "boom")
     end)
 
     ExUnit.CaptureLog.capture_log(fn ->

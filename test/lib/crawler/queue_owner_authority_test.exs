@@ -19,7 +19,9 @@ defmodule Crawler.QueueOwnerAuthorityTest do
     install_blocked_route(site, parent, "/authority/guest", :guest)
 
     ReqTestSite.expect_once(site, "GET", "/authority/guest-progress", fn conn ->
-      Plug.Conn.resp(conn, 200, "guest progress")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "guest progress")
     end)
 
     creator = crawl(url <> "/authority/creator", creator_scope, req_options)
@@ -96,7 +98,10 @@ defmodule Crawler.QueueOwnerAuthorityTest do
       send(parent, {:blocked, tag, self()})
 
       receive do
-        :release -> Plug.Conn.resp(conn, 200, path)
+        :release ->
+          conn
+          |> Plug.Conn.put_resp_header("content-type", "text/html")
+          |> Plug.Conn.resp(200, path)
       end
     end)
   end

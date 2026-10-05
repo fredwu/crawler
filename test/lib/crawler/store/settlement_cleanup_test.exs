@@ -58,7 +58,10 @@ defmodule Crawler.Store.SettlementCleanupTest do
 
     ReqTestSite.expect_once(context.site, "GET", "/cleanup/failed", fn conn ->
       send(observer, {:retried, self()})
-      Plug.Conn.resp(conn, 200, "RECOVERED")
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "RECOVERED")
     end)
 
     assert {:ok, retry} =

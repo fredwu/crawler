@@ -42,6 +42,7 @@ defmodule Crawler.PercentSpellingCrawlTest do
         workers: 1,
         max_depths: 2,
         max_pages: map_size(targets) + 2,
+        respect_robots: false,
         req_options: [adapter: adapter, retry: false]
       )
 

@@ -19,7 +19,9 @@ defmodule Crawler.CrawlStyleTextTest do
     requests = RequestLog.new()
 
     ReqTestSite.expect_once(site, "GET", "/style-page", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
       <base href="/assets/">
       <style>.raw { background: url("asset.png?x=1&amp;y=2") }</style>
       <div style="background:url(&quot;asset.png?x=1&amp;y=2&quot;)"></div>

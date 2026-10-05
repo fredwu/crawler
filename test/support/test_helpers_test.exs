@@ -129,6 +129,7 @@ defmodule Crawler.TestHelpersTest do
       interval: 0,
       retries: 0,
       store: Store,
+      respect_robots: false,
       req_options: [
         adapter: fn request -> {request, Req.Response.new(status: 200, body: "RAW")} end
       ]

@@ -127,6 +127,39 @@ defmodule Crawler.Store do
     GenServer.call(__MODULE__, {:drop_scope, scope})
   end
 
+  @doc false
+  def claim_robots(scope, origin) do
+    GenServer.call(__MODULE__, {:claim_robots, scope, origin}, :infinity)
+  end
+
+  @doc false
+  def finish_robots(scope, origin, rules) do
+    GenServer.call(__MODULE__, {:finish_robots, scope, origin, rules})
+  end
+
+  @doc false
+  def forget_robots(scope, origin, rules) do
+    GenServer.call(__MODULE__, {:forget_robots, scope, origin, rules})
+  end
+
+  @doc false
+  def save_cookies(scope, url, headers, generation \\ nil)
+
+  def save_cookies(nil, _url, _headers, _generation), do: :ok
+
+  def save_cookies(scope, url, headers, generation) do
+    GenServer.call(__MODULE__, {:save_cookies, scope, url, List.wrap(headers), generation})
+  end
+
+  @doc false
+  def cookie_header(scope, url, generation \\ nil)
+
+  def cookie_header(nil, _url, _generation), do: nil
+
+  def cookie_header(scope, url, generation) do
+    GenServer.call(__MODULE__, {:cookie_header, scope, url, generation})
+  end
+
   @doc """
   Returns the scope's current opaque generation token.
 

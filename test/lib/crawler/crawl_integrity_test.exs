@@ -23,7 +23,9 @@ defmodule Crawler.CrawlIntegrityTest do
     css_integrity = integrity(:sha384, css_source)
 
     ReqTestSite.expect_once(site, "GET", "/index.html", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
       <script type="module" src="app.js" integrity="#{script_integrity}"></script>
       <link rel="modulepreload" href="app.js" integrity="#{script_integrity}">
       <link rel="stylesheet" href="app.css" integrity="#{css_integrity}">

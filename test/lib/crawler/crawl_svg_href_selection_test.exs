@@ -28,7 +28,9 @@ defmodule Crawler.CrawlSVGHrefSelectionTest do
     on_exit(fn -> File.rm_rf(root) end)
 
     ReqTestSite.expect_once(site, "GET", "/index.html", fn conn ->
-      Plug.Conn.resp(conn, 200, source)
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, source)
     end)
 
     ReqTestSite.expect_once(site, "GET", "/shared.svg", fn conn ->

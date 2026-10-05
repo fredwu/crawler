@@ -3,7 +3,9 @@ defmodule Crawler.HTTP do
   Project-owned HTTP boundary.
 
   Redirect logging defaults to disabled. Set `:redirect_log_level` explicitly
-  to enable it.
+  to enable it. A redirect rebuilds `Cookie` for the next URL. The same host
+  keeps the caller's `Cookie`, `Authorization`, and other custom headers when
+  the scheme or port changes. Another host does not receive them.
   """
 
   defmodule RedirectRejected do
@@ -24,8 +26,13 @@ defmodule Crawler.HTTP do
     def message(%{url: url}), do: "invalid HTTP URL: #{url}"
   end
 
+  alias Crawler.Cookies
+  alias Crawler.HTTP.Body
   alias Crawler.HTTP.Transport
+  alias Crawler.Store
   alias Crawler.URL
+
+  @safe_redirect_headers ["user-agent", "accept", "accept-language", "accept-encoding"]
 
   @redirect_statuses [301, 302, 303, 307, 308]
 
@@ -38,17 +45,35 @@ defmodule Crawler.HTTP do
 
   defp request(url, headers, opts, allow_redirect) do
     {explicit_headers, opts} = Keyword.pop(opts, :headers, [])
+    {scope, opts} = Keyword.pop(opts, :crawler_scope)
+    {max_body, opts} = Keyword.pop(opts, :crawler_max_body)
+    {user_cookie, opts} = Keyword.pop(opts, :crawler_user_cookie)
+    {generation, opts} = Keyword.pop(opts, :crawler_generation)
 
     opts
     |> Keyword.put_new(:redirect_log_level, false)
     |> Keyword.put(:url, url)
     |> Keyword.put(:headers, headers)
     |> Req.new()
+    |> Req.Request.register_options([
+      :crawler_scope,
+      :crawler_max_body,
+      :crawler_user_cookie,
+      :crawler_generation
+    ])
+    |> Req.Request.merge_options(
+      crawler_scope: scope,
+      crawler_max_body: max_body,
+      crawler_user_cookie: user_cookie,
+      crawler_generation: generation
+    )
     |> validate_redirect_option()
     |> Req.merge(headers: explicit_headers)
     |> Req.Request.append_request_steps(crawler_transport_adapter: &Transport.install/1)
     |> Req.Request.prepend_response_steps(crawler_redirect: &guard_redirect(&1, allow_redirect))
+    |> Req.Request.prepend_response_steps(crawler_cookies: &capture_cookies/1)
     |> Req.Request.append_response_steps(crawler_final_url: &capture_final_url/1)
+    |> Req.Request.append_response_steps(crawler_body: &Body.finish/1)
     |> Req.request()
   end
 
@@ -112,6 +137,7 @@ defmodule Crawler.HTTP do
     case URL.resolve(location, URI.to_string(request.url)) do
       {:ok, next} ->
         if allow.(next) do
+          request = redirect_headers(request, next)
           {request, Req.Response.put_header(response, "location", next)}
         else
           Req.Request.halt(request, %RedirectRejected{url: next})
@@ -119,6 +145,76 @@ defmodule Crawler.HTTP do
 
       :skip ->
         Req.Request.halt(request, %RedirectRejected{url: location})
+    end
+  end
+
+  defp capture_cookies({request, %Req.Response{} = response} = result) do
+    scope = Req.Request.get_option(request, :crawler_scope)
+    generation = Req.Request.get_option(request, :crawler_generation)
+    headers = Req.Response.get_header(response, "set-cookie")
+
+    if scope && headers != [] do
+      Store.save_cookies(scope, URI.to_string(request.url), headers, generation)
+    end
+
+    result
+  end
+
+  defp capture_cookies(result), do: result
+
+  defp redirect_headers(request, next) do
+    request = if host_changed?(request.url, next), do: keep_headers(request), else: request
+    put_cookie(request, next)
+  end
+
+  defp host_changed?(%URI{host: current}, next) when is_binary(current) do
+    case URI.parse(next) do
+      %URI{host: host} when is_binary(host) ->
+        String.downcase(current) != String.downcase(host)
+
+      _ ->
+        true
+    end
+  end
+
+  defp host_changed?(_current, _next), do: true
+
+  defp keep_headers(request) do
+    names =
+      request.headers
+      |> Req.Fields.get_list()
+      |> Enum.map(fn {name, _value} -> name end)
+      |> Enum.uniq()
+
+    # Req reapplies `:auth` on the next hop. Drop it with the header so a new
+    # host does not receive the credential.
+    request = Req.Request.delete_option(request, :auth)
+
+    Enum.reduce(names, request, fn name, request ->
+      if String.downcase(to_string(name)) in @safe_redirect_headers do
+        request
+      else
+        Req.Request.delete_header(request, name)
+      end
+    end)
+  end
+
+  defp put_cookie(request, url) do
+    scope = Req.Request.get_option(request, :crawler_scope)
+    generation = Req.Request.get_option(request, :crawler_generation)
+    jar = scope && Store.cookie_header(scope, url, generation)
+
+    case Cookies.merge_header(user_cookie(request, url), jar) do
+      nil -> Req.Request.delete_header(request, "cookie")
+      header -> Req.Request.put_header(request, "cookie", header)
+    end
+  end
+
+  defp user_cookie(request, url) do
+    if host_changed?(request.url, url) do
+      nil
+    else
+      Req.Request.get_option(request, :crawler_user_cookie)
     end
   end
 end

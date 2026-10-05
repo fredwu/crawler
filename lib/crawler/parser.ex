@@ -11,6 +11,7 @@ defmodule Crawler.Parser do
   alias Crawler.Parser.HtmlParser
   alias Crawler.Parser.JsParser
   alias Crawler.Parser.LinkParser
+  alias Crawler.Robots
   alias Crawler.URL
 
   require Logger
@@ -118,11 +119,27 @@ defmodule Crawler.Parser do
   when the page cannot be parsed. This function does not call the scraper.
   """
   def parse_links(body, opts, link_handler) do
-    opts = put_base_href(body, opts)
+    opts = put_base_href(body, put_robots_nofollow(body, opts))
 
     opts
     |> Guarder.pass?()
     |> do_parse_links(body, opts, link_handler)
+  end
+
+  defp put_robots_nofollow(body, opts) do
+    cond do
+      opts[:respect_robots] == false ->
+        Map.delete(opts, :robots_nofollow)
+
+      Robots.header_nofollow?(opts[:headers], opts[:user_agent]) ->
+        Map.put(opts, :robots_nofollow, true)
+
+      html?(opts) and Robots.meta_nofollow?(body, opts[:user_agent]) ->
+        Map.put(opts, :robots_nofollow, true)
+
+      true ->
+        Map.delete(opts, :robots_nofollow)
+    end
   end
 
   defp put_base_href(body, opts) when is_binary(body) do

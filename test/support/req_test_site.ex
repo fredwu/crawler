@@ -157,9 +157,7 @@ defmodule Crawler.ReqTestSite do
   defp route(state, key, token, caller, agent) do
     case get_in(state, [:routes, key]) do
       nil ->
-        state = update_in(state, [:unexpected], &[key | &1])
-
-        {:error, state}
+        missing_route(state, key, token, caller, agent)
 
       %{type: :once, count: count} when count >= 1 ->
         message = "Expected #{format_key(key)} exactly once, got an extra request"
@@ -173,6 +171,19 @@ defmodule Crawler.ReqTestSite do
         {state, watcher} = Lifecycle.start_request(state, token, caller, agent)
 
         {{:ok, fun, watcher}, state}
+    end
+  end
+
+  defp missing_route(state, key, token, caller, agent) do
+    if robots_txt?(key) do
+      fun = fn conn -> Plug.Conn.send_resp(conn, 404, "") end
+      {state, watcher} = Lifecycle.start_request(state, token, caller, agent)
+
+      {{:ok, fun, watcher}, state}
+    else
+      state = update_in(state, [:unexpected], &[key | &1])
+
+      {:error, state}
     end
   end
 
@@ -204,6 +215,9 @@ defmodule Crawler.ReqTestSite do
       Lifecycle.finish_request(watcher)
     end
   end
+
+  defp robots_txt?({"GET", _host, _port, "/robots.txt"}), do: true
+  defp robots_txt?(_key), do: false
 
   defp route_failures(_key, %{type: :once, count: 1}), do: []
 

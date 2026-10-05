@@ -30,17 +30,23 @@ defmodule Crawler.MediaType do
 
   def normalize(_type), do: "text/html"
 
+  def html?(nil), do: false
+
   def html?(type) do
     type = normalize(type)
 
     type in ["text/html", "application/xhtml+xml"]
   end
 
+  def css?(nil), do: false
   def css?(type), do: normalize(type) == "text/css"
 
+  def javascript?(nil), do: false
   def javascript?(type), do: normalize(type) in @javascript
 
+  def text?(nil), do: false
   def text?(type), do: String.starts_with?(normalize(type), "text/")
 
+  def xhtml?(nil), do: false
   def xhtml?(type), do: normalize(type) == "application/xhtml+xml"
 end

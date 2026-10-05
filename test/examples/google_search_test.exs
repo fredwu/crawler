@@ -12,7 +12,7 @@ defmodule Crawler.Example.GoogleSearchTest do
 
     original =
       Enum.map(
-        [:scope, :queue, :timeout, :req_options],
+        [:scope, :queue, :timeout, :req_options, :respect_robots],
         &{&1, Application.fetch_env(:crawler, &1)}
       )
 
@@ -21,6 +21,7 @@ defmodule Crawler.Example.GoogleSearchTest do
     Application.put_env(:crawler, :scope, scope)
     Application.put_env(:crawler, :queue, nil)
     Application.put_env(:crawler, :timeout, :infinity)
+    Application.put_env(:crawler, :respect_robots, false)
 
     on_exit(fn ->
       Enum.each(queue_owners() -- existing_queues, &Crawler.Queue.stop/1)

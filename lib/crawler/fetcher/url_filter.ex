@@ -1,7 +1,15 @@
 defmodule Crawler.Fetcher.UrlFilter do
   @moduledoc """
-  A placeholder module that lets all URLs pass through.
+  Default URL filter.
+
+  Ordinary navigation stays on the seed site. Scripts, stylesheets, images,
+  fonts, and other subresources may be fetched from another host. A custom
+  `:url_filter` module replaces this decision.
   """
+
+  alias Crawler.Site
+
+  @navigation [nil, "a", "area", "meta"]
 
   defmodule Spec do
     @moduledoc """
@@ -27,5 +35,14 @@ defmodule Crawler.Fetcher.UrlFilter do
   - `true` for letting the url through
   - `false` for rejecting the url
   """
-  def filter(_url, _opts), do: {:ok, true}
+  def filter(url, opts) do
+    site = opts[:site]
+    tag = opts[:reference_tag]
+
+    if is_nil(site) or tag not in @navigation or Site.same_site?(site, url) do
+      {:ok, true}
+    else
+      {:ok, false}
+    end
+  end
 end

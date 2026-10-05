@@ -11,7 +11,9 @@ defmodule Crawler.CrawlBehaviorTest do
     page = "#{url}/behavior/stored"
 
     ReqTestSite.expect_once(site, "GET", "/behavior/stored", fn conn ->
-      Plug.Conn.resp(conn, 200, "<html>stored</html>")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "<html>stored</html>")
     end)
 
     {:ok, opts} =
@@ -49,7 +51,7 @@ defmodule Crawler.CrawlBehaviorTest do
     page = "#{url}/behavior/one"
 
     ReqTestSite.expect_once(site, "GET", "/behavior/one", fn conn ->
-      Plug.Conn.resp(conn, 200, "one")
+      conn |> Plug.Conn.put_resp_header("content-type", "text/html") |> Plug.Conn.resp(200, "one")
     end)
 
     {:ok, opts} = start_crawl(page, scope: "one-page", workers: 1, req_options: req_options)
@@ -72,7 +74,10 @@ defmodule Crawler.CrawlBehaviorTest do
         send(parent, {:started, path, self()})
 
         receive do
-          :release -> Plug.Conn.resp(conn, 200, path)
+          :release ->
+            conn
+            |> Plug.Conn.put_resp_header("content-type", "text/html")
+            |> Plug.Conn.resp(200, path)
         after
           5_000 -> Plug.Conn.resp(conn, 500, "late")
         end
@@ -121,7 +126,7 @@ defmodule Crawler.CrawlBehaviorTest do
     page = "#{url}/behavior/forever"
 
     ReqTestSite.expect_once(site, "GET", "/behavior/forever", fn conn ->
-      Plug.Conn.resp(conn, 200, "ok")
+      conn |> Plug.Conn.put_resp_header("content-type", "text/html") |> Plug.Conn.resp(200, "ok")
     end)
 
     {:ok, opts} =

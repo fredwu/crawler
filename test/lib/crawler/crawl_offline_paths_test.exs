@@ -65,7 +65,9 @@ defmodule Crawler.CrawlOfflinePathsTest do
     end)
 
     ReqTestSite.expect_once(site, "GET", "/dir/docs/intro", fn conn ->
-      Plug.Conn.resp(conn, 200, "INTRO")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "INTRO")
     end)
 
     {:ok, opts} =

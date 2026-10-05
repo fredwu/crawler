@@ -43,6 +43,7 @@ defmodule Crawler do
       |> Options.assign_defaults()
       |> Options.assign_scope()
       |> Options.assign_url(url)
+      |> assign_site()
 
     opts = stamp_generation(opts)
 
@@ -52,6 +53,9 @@ defmodule Crawler do
       {:ok, opts}
     end
   end
+
+  defp assign_site(%{site: site} = opts) when is_binary(site), do: opts
+  defp assign_site(opts), do: Map.put(opts, :site, opts[:url])
 
   defp stamp_generation(%{force: true, depth: 0, scope: scope} = opts) do
     Map.put(opts, :generation, Store.drop_scope(scope))

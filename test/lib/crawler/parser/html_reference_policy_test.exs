@@ -112,7 +112,8 @@ defmodule Crawler.Parser.HTMLReferencePolicyTest do
     <script type="&#160;module&#160;" src="ignored.js">import './ignored.js';</script>
     <script type="&#160;text/javascript&#160;">import './ignored.js';</script>
     <script type=" " language="javascript" src="ignored.js"></script>
-    <script type="text/javascript; charset=utf-8" src="ignored.js"></script>
+    <script type="text/javascript; charset=utf-8" src="parameter.js"></script>
+    <script type="module;charset=utf-8" src="ignored.js"></script>
     <script language=" javascript" src="ignored.js"></script>
     """
 
@@ -121,7 +122,8 @@ defmodule Crawler.Parser.HTMLReferencePolicyTest do
              {"./language.js", "http://example.com/dir/language.js", "script"},
              {"empty-type.js", "http://example.com/dir/empty-type.js", "script"},
              {"./empty-type-inline.js", "http://example.com/dir/empty-type-inline.js", "script"},
-             {"./module.js", "http://example.com/dir/module.js", "script"}
+             {"./module.js", "http://example.com/dir/module.js", "script"},
+             {"parameter.js", "http://example.com/dir/parameter.js", "script"}
            ]
   end
 

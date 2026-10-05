@@ -55,6 +55,8 @@ defmodule Crawler.HostSpellingCrawlTest do
         scope: scope,
         workers: 2,
         save_to: root,
+        respect_robots: false,
+        url_filter: Crawler.AllowFilter,
         req_options: [adapter: adapter, retry: false]
       )
 
@@ -101,6 +103,7 @@ defmodule Crawler.HostSpellingCrawlTest do
         scope: scope,
         workers: 1,
         save_to: root,
+        respect_robots: false,
         req_options: [adapter: adapter, retry: false]
       )
 

@@ -71,11 +71,16 @@ defmodule Crawler.WorkerClaimTest do
 
     ReqTestSite.expect(site, "GET", "/claim/failure", fn conn ->
       Agent.update(attempts, &(&1 + 1))
-      Plug.Conn.resp(conn, 200, "linked exit")
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "linked exit")
     end)
 
     ReqTestSite.expect_once(site, "GET", "/claim/sibling", fn conn ->
-      Plug.Conn.resp(conn, 200, "sibling")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "sibling")
     end)
 
     {:ok, owner} =

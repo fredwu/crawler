@@ -4,6 +4,7 @@ defmodule Crawler.Store.Server do
   use GenServer
 
   alias Crawler.QueueHandler
+  alias Crawler.Robots
   alias Crawler.Store.Aliases
   alias Crawler.Store.Claims
   alias Crawler.Store.DB
@@ -160,8 +161,38 @@ defmodule Crawler.Store.Server do
     unregister_scope(scope)
     state = discard_claims(state, Claims.retire_scope(state.claims, scope))
     state = Settlements.drop_scope(state, scope)
-    state = State.drop_scope(state, scope)
+    {waiters, state} = State.drop_scope(state, scope)
+    reply_robots(waiters, Robots.allow_all())
     {:reply, State.generation(state, scope), state}
+  end
+
+  def handle_call({:claim_robots, scope, origin}, from, state) do
+    {pid, _tag} = from
+
+    case State.claim_robots(state, scope, origin, from, pid) do
+      {{:reply, reply}, state} -> {:reply, reply, state}
+      {{:noreply, :wait}, state} -> {:noreply, state}
+    end
+  end
+
+  def handle_call({:finish_robots, scope, origin, rules}, {pid, _tag}, state) do
+    {waiters, state} = State.finish_robots(state, scope, origin, rules, pid)
+    reply_robots(waiters, rules)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:forget_robots, scope, origin, rules}, {pid, _tag}, state) do
+    {waiters, state} = State.forget_robots(state, scope, origin, pid)
+    reply_robots(waiters, rules)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:save_cookies, scope, url, headers, generation}, _from, state) do
+    {:reply, :ok, State.save_cookies(state, scope, url, headers, generation)}
+  end
+
+  def handle_call({:cookie_header, scope, url, generation}, _from, state) do
+    {:reply, State.cookie_header(state, scope, url, generation), state}
   end
 
   def handle_call({:generation, scope}, _from, state) do
@@ -306,12 +337,23 @@ defmodule Crawler.Store.Server do
 
   @impl true
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
-    if state.monitors[pid] == ref do
-      state = retire_queue(state, pid)
-      {:noreply, %{state | monitors: Map.delete(state.monitors, pid)}}
-    else
-      {:noreply, release_claim(state, ref, pid)}
+    case State.robots_down(state, ref) do
+      {waiters, state} when waiters != [] ->
+        reply_robots(waiters, Robots.allow_all())
+        {:noreply, state}
+
+      {[], state} ->
+        if state.monitors[pid] == ref do
+          state = retire_queue(state, pid)
+          {:noreply, %{state | monitors: Map.delete(state.monitors, pid)}}
+        else
+          {:noreply, release_claim(state, ref, pid)}
+        end
     end
+  end
+
+  defp reply_robots(waiters, rules) do
+    Enum.each(waiters, &GenServer.reply(&1, {:ready, rules}))
   end
 
   defp release_claim(state, token, worker) do

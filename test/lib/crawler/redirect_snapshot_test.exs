@@ -186,7 +186,9 @@ defmodule Crawler.RedirectSnapshotTest do
     end)
 
     ReqTestSite.expect_once(site, "GET", "/id/slash/", fn conn ->
-      Plug.Conn.resp(conn, 200, "SLASH")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "SLASH")
     end)
 
     opts = crawl(page, scope: scope, workers: 1, save_to: root, req_options: req_options)

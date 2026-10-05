@@ -29,7 +29,9 @@ defmodule Crawler.FetcherTest do
     url = "#{url}/fetcher/200"
 
     ReqTestSite.expect_once(site, "GET", "/fetcher/200", fn conn ->
-      Plug.Conn.resp(conn, 200, "<html>200</html>")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "<html>200</html>")
     end)
 
     @defaults
@@ -50,7 +52,9 @@ defmodule Crawler.FetcherTest do
     end)
 
     ReqTestSite.expect_once(site, "GET", "/fetcher/301_200", fn conn ->
-      Plug.Conn.resp(conn, 200, "<html>301_200</html>")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "<html>301_200</html>")
     end)
 
     url = "#{url}/fetcher/301"
@@ -135,7 +139,9 @@ defmodule Crawler.FetcherTest do
     url = "#{url}/fetcher/fail.html"
 
     ReqTestSite.expect_once(site, "GET", "/fetcher/fail.html", fn conn ->
-      Plug.Conn.resp(conn, 200, "<html>200</html>")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "<html>200</html>")
     end)
 
     fetcher =
@@ -155,7 +161,9 @@ defmodule Crawler.FetcherTest do
     url = "#{url}/fetcher/page.html"
 
     ReqTestSite.expect_once(site, "GET", "/fetcher/page.html", fn conn ->
-      Plug.Conn.resp(conn, 200, "<html>200</html>")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "<html>200</html>")
     end)
 
     @defaults

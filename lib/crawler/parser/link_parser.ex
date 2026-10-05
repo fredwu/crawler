@@ -54,7 +54,7 @@ defmodule Crawler.Parser.LinkParser do
       |> Enum.reject(&match?({_role, _goal, nil}, &1))
       |> Enum.uniq_by(fn {role, goal, element} -> {role, goal, raw_link(element)} end)
       |> Enum.map(fn {role, goal, element} ->
-        handler.(element, handler_opts(opts, role, goal))
+        handler.(element, handler_opts(opts, role, goal, tag))
       end)
 
     case results do
@@ -139,8 +139,13 @@ defmodule Crawler.Parser.LinkParser do
     end
   end
 
-  defp handler_opts(opts, role, goal) do
-    opts = opts |> Map.delete(:javascript_goal) |> Map.put(:html_tag, role)
+  defp handler_opts(opts, role, goal, tag) do
+    opts =
+      opts
+      |> Map.delete(:javascript_goal)
+      |> Map.put(:html_tag, role)
+      |> Map.put(:reference_tag, tag)
+
     if goal, do: Map.put(opts, :javascript_goal, goal), else: opts
   end
 

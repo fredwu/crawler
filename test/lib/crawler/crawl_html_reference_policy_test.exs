@@ -19,7 +19,11 @@ defmodule Crawler.CrawlHTMLReferencePolicyTest do
       ~s|<a href="asset.png" style="background:url(asset.png)">A</a>| <>
         ~s|<a href="asset.png">B</a><a href="./asset.png">C</a>|
 
-    ReqTestSite.expect_once(site, "GET", "/page", fn conn -> Plug.Conn.resp(conn, 200, source) end)
+    ReqTestSite.expect_once(site, "GET", "/page", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, source)
+    end)
 
     ReqTestSite.expect_once(site, "GET", "/asset.png", fn conn ->
       conn
@@ -68,7 +72,11 @@ defmodule Crawler.CrawlHTMLReferencePolicyTest do
       ~s|<script type="application/ld+json" src="ignored.json">import './ignored.js';</script>| <>
         ~s|<script type="module" src="app.js">import './ignored.js';</script>|
 
-    ReqTestSite.expect_once(site, "GET", "/page", fn conn -> Plug.Conn.resp(conn, 200, source) end)
+    ReqTestSite.expect_once(site, "GET", "/page", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, source)
+    end)
 
     ReqTestSite.expect_once(site, "GET", "/app.js", fn conn ->
       conn

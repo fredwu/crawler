@@ -11,7 +11,10 @@ defmodule Crawler.CrawlRefreshTest do
 
     ReqTestSite.stub(site, "GET", "/behavior/refresh", fn conn ->
       Agent.update(hits, &(&1 + 1))
-      Plug.Conn.resp(conn, 200, "fresh")
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "fresh")
     end)
 
     {:ok, first} =
@@ -58,7 +61,7 @@ defmodule Crawler.CrawlRefreshTest do
         end
 
       send(parent, {:finished, body})
-      Plug.Conn.resp(conn, 200, body)
+      conn |> Plug.Conn.put_resp_header("content-type", "text/html") |> Plug.Conn.resp(200, body)
     end)
 
     {:ok, first} =

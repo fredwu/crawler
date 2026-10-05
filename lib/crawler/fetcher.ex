@@ -13,6 +13,7 @@ defmodule Crawler.Fetcher do
   alias Crawler.Fetcher.Requester
   alias Crawler.HTTP
   alias Crawler.Linker.Snapshot
+  alias Crawler.Robots
   alias Crawler.Snapper
   alias Crawler.Store
   alias Crawler.Store.Page
@@ -22,14 +23,26 @@ defmodule Crawler.Fetcher do
   Fetches a URL by:
 
   - verifying whether the URL needs fetching through `Crawler.Fetcher.Policer.police/1`
+  - honouring `robots.txt` when `:respect_robots` is enabled
   - recording data for internal use through `Crawler.Fetcher.Recorder.record/1`
   - fetching the URL
   - performing retries upon failed fetches through `Crawler.Fetcher.Retrier.perform/2`
   """
   def fetch(opts) do
     with {:ok, opts} <- Policer.police(opts),
+         :ok <- permit_robots(opts),
          {:ok, opts} <- Recorder.record(opts) do
       opts[:retrier].perform(fn -> fetch_url(opts) end, opts)
+    end
+  end
+
+  defp permit_robots(opts) do
+    if Robots.permitted?(opts) do
+      :ok
+    else
+      msg = "Blocked by robots.txt for #{Diagnostics.url(opts[:url])}"
+      Logger.debug(msg)
+      {:warn, msg}
     end
   end
 
@@ -45,8 +58,14 @@ defmodule Crawler.Fetcher do
 
   defp request(opts) do
     case Requester.make(opts) do
-      {:ok, %Req.Response{status: 200, body: body} = response} ->
-        fetch_url_200(body, response, opts)
+      {:ok, %Req.Response{status: status, body: body} = response} when status in [200, 203] ->
+        fetch_url_200(body || <<>>, response, opts)
+
+      {:error, %HTTP.BodyTooLarge{} = exception} ->
+        fetch_url_warn(exception, opts)
+
+      {:error, %HTTP.UnsupportedEncoding{} = exception} ->
+        fetch_url_warn(exception, opts)
 
       {:ok, %Req.Response{status: status_code}}
       when status_code in [408, 429] or status_code >= 500 ->
@@ -103,6 +122,14 @@ defmodule Crawler.Fetcher do
 
   defp fetch_url_non_200(status_code, opts) do
     msg = "Failed to fetch #{Diagnostics.url(opts[:url])}, status code: #{status_code}"
+
+    Logger.debug(msg)
+
+    {:warn, msg}
+  end
+
+  defp fetch_url_warn(exception, opts) do
+    msg = "Failed to fetch #{Diagnostics.url(opts[:url])}, #{Exception.message(exception)}"
 
     Logger.debug(msg)
 

@@ -23,22 +23,22 @@ defmodule Crawler.Snapper do
 
   ## Examples
 
-      iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://hello-world.local"})
+      iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://hello-world.local", content_type: "text/html"})
       iex> File.read(tmp("snapper/hello-world.local", "__index.html"))
       {:ok, <<0xEF, 0xBB, 0xBF, "hello">>}
 
-      iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://snapper.local/index.html"})
+      iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://snapper.local/index.html", content_type: "text/html"})
       iex> File.read(tmp("snapper/snapper.local", "index.html"))
       {:ok, <<0xEF, 0xBB, 0xBF, "hello">>}
 
       iex> Snapper.snap("hello", %{save_to: "nope", url: "http://snapper.local/index.html"})
       {:error, {:snapshot, :write, :enoent}}
 
-      iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://snapper.local/hello"})
+      iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://snapper.local/hello", content_type: "text/html"})
       iex> File.read(tmp("snapper/snapper.local/hello", "__index.html"))
       {:ok, <<0xEF, 0xBB, 0xBF, "hello">>}
 
-      iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://snapper.local/hello1/"})
+      iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://snapper.local/hello1/", content_type: "text/html"})
       iex> File.read(tmp("snapper/snapper.local/hello1", "__index.html"))
       {:ok, <<0xEF, 0xBB, 0xBF, "hello">>}
 

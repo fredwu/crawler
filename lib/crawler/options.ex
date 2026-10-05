@@ -27,6 +27,8 @@ defmodule Crawler.Options do
   @parser Crawler.Parser
   @encode_uri false
   @queue nil
+  @respect_robots true
+  @max_body 10_485_760
 
   @doc """
   Assigns default option values.
@@ -41,6 +43,12 @@ defmodule Crawler.Options do
 
       iex> Options.assign_defaults(%{max_depths: 4}) |> Map.get(:max_depths)
       4
+
+      iex> Options.assign_defaults(%{}) |> Map.get(:respect_robots)
+      true
+
+      iex> Options.assign_defaults(%{}) |> Map.get(:max_body)
+      10_485_760
   """
   def assign_defaults(opts) do
     Map.merge(
@@ -67,7 +75,9 @@ defmodule Crawler.Options do
         scraper: scraper(),
         parser: parser(),
         encode_uri: encode_uri(),
-        queue: queue()
+        queue: queue(),
+        respect_robots: respect_robots(),
+        max_body: max_body()
       },
       opts
     )
@@ -128,4 +138,6 @@ defmodule Crawler.Options do
   defp parser, do: Application.get_env(:crawler, :parser, @parser)
   defp encode_uri, do: Application.get_env(:crawler, :encode_uri, @encode_uri)
   defp queue, do: Application.get_env(:crawler, :queue, @queue)
+  defp respect_robots, do: Application.get_env(:crawler, :respect_robots, @respect_robots)
+  defp max_body, do: Application.get_env(:crawler, :max_body, @max_body)
 end

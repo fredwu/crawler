@@ -38,6 +38,7 @@ defmodule Crawler.Snapper.ComponentPublicationTest do
                store: Store,
                workers: 1,
                before_publish: before_publish,
+               respect_robots: false,
                req_options: [adapter: adapter, retry: false]
              )
 
@@ -77,6 +78,7 @@ defmodule Crawler.Snapper.ComponentPublicationTest do
                  save_to: root,
                  store: Store,
                  workers: 1,
+                 respect_robots: false,
                  req_options: [adapter: adapter, retry: false]
                )
 

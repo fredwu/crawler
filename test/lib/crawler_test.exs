@@ -15,26 +15,34 @@ defmodule CrawlerTest do
     linked_url4 = "#{url}/link4"
 
     ReqTestSite.expect_once(site, "GET", "/crawler", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
         <html><a href="#{linked_url1}">1</a></html>
         <html><a href="#{linked_url2}">2</a></html>
       """)
     end)
 
     ReqTestSite.expect_once(site, "GET", "/crawler/link1", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
         <html><a href="#{linked_url2}">2</a></html>
       """)
     end)
 
     ReqTestSite.expect_once(site, "GET", "/crawler/link2", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
         <html><a href="#{linked_url3}">3</a></html>
       """)
     end)
 
     ReqTestSite.expect_once(site, "GET", "/crawler/link3", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
         <html><a href="#{linked_url4}">4</a></html>
       """)
     end)
@@ -92,7 +100,7 @@ defmodule CrawlerTest do
     url = "#{url}/crawler_without_store"
 
     ReqTestSite.expect_once(site, "GET", "/crawler_without_store", fn conn ->
-      Plug.Conn.resp(conn, 200, "200")
+      conn |> Plug.Conn.put_resp_header("content-type", "text/html") |> Plug.Conn.resp(200, "200")
     end)
 
     {:ok, opts} =
@@ -125,25 +133,33 @@ defmodule CrawlerTest do
     linked_url5 = "#{url}/link5"
 
     ReqTestSite.expect_once(site, "GET", "/crawler_with_max_pages", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
         <html><a href="#{linked_url1}">1</a></html>
       """)
     end)
 
     ReqTestSite.expect_once(site, "GET", "/crawler_with_max_pages/link1", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
         <html><a href="#{linked_url2}">2</a></html>
       """)
     end)
 
     ReqTestSite.expect_once(site, "GET", "/crawler_with_max_pages/link2", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
         <html><a href="#{linked_url3}">3</a></html>
       """)
     end)
 
     ReqTestSite.expect_once(site, "GET", "/crawler_with_max_pages/link3", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
         <html><a href="#{linked_url4}">4</a></html>
         <html><a href="#{linked_url5}">5</a></html>
       """)
@@ -187,19 +203,25 @@ defmodule CrawlerTest do
     linked_url4 = "#{url}/link4"
 
     ReqTestSite.expect_once(site, "GET", "/crawler_with_queue/link1", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
         <html><a href="#{linked_url2}">2</a></html>
       """)
     end)
 
     ReqTestSite.expect_once(site, "GET", "/crawler_with_queue/link2", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
         <html><a href="#{linked_url3}">3</a></html>
       """)
     end)
 
     ReqTestSite.expect_once(site, "GET", "/crawler_with_queue/link3", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
         <html>ok</html>
       """)
     end)
@@ -254,20 +276,26 @@ defmodule CrawlerTest do
     linked_url2 = "#{url}/link2"
 
     ReqTestSite.expect(site, "GET", "/crawler_forced", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
         <html><a href="#{linked_url1}">1</a></html>
         <html><a href="#{linked_url1}">1</a></html>
       """)
     end)
 
     ReqTestSite.expect(site, "GET", "/crawler_forced/link1", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
         <html><a href="#{linked_url2}">2</a></html>
       """)
     end)
 
     ReqTestSite.expect(site, "GET", "/crawler_forced/link2", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
         <html>ok</html>
       """)
     end)
@@ -305,7 +333,10 @@ defmodule CrawlerTest do
       send(parent, {:root_requested, self()})
 
       receive do
-        :release -> Plug.Conn.resp(conn, 200, ~s(<a href="#{linked_url}">1</a>))
+        :release ->
+          conn
+          |> Plug.Conn.put_resp_header("content-type", "text/html")
+          |> Plug.Conn.resp(200, ~s(<a href="#{linked_url}">1</a>))
       after
         2_000 -> raise "Root request was not released"
       end

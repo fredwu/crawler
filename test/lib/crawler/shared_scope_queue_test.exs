@@ -57,12 +57,17 @@ defmodule Crawler.SharedScopeQueueTest do
     on_exit(fn -> Store.drop_scope(scope) end)
 
     ReqTestSite.expect_once(site, "GET", "/named-queue", fn conn ->
-      Plug.Conn.resp(conn, 200, "named")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "named")
     end)
 
     ReqTestSite.expect_once(site, "GET", "/named-queue/resumed", fn conn ->
       send(parent, :resumed_fetch)
-      Plug.Conn.resp(conn, 200, "resumed")
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "resumed")
     end)
 
     opts = start_crawl(url <> "/named-queue", scope, req_options, queue: name)
@@ -123,20 +128,25 @@ defmodule Crawler.SharedScopeQueueTest do
     on_exit(fn -> Store.drop_scope(replacement_scope) end)
 
     ReqTestSite.expect_once(site, "GET", "/rebound/initial", fn conn ->
-      Plug.Conn.resp(conn, 200, "initial")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "initial")
     end)
 
     ReqTestSite.expect_once(site, "GET", "/rebound/old", fn conn ->
       send(parent, {:old_queue_fetch, self()})
 
       receive do
-        :release -> Plug.Conn.resp(conn, 200, "old")
+        :release ->
+          conn
+          |> Plug.Conn.put_resp_header("content-type", "text/html")
+          |> Plug.Conn.resp(200, "old")
       end
     end)
 
     ReqTestSite.expect_once(site, "GET", "/rebound/new", fn conn ->
       send(parent, :new_queue_fetch)
-      Plug.Conn.resp(conn, 200, "new")
+      conn |> Plug.Conn.put_resp_header("content-type", "text/html") |> Plug.Conn.resp(200, "new")
     end)
 
     old = start_crawl(url <> "/rebound/initial", scope, req_options, queue: name)
@@ -300,10 +310,13 @@ defmodule Crawler.SharedScopeQueueTest do
       send(parent, {:blocked, blocked, self()})
 
       receive do
-        :release -> Plug.Conn.resp(conn, 200, path)
+        :release ->
+          conn
+          |> Plug.Conn.put_resp_header("content-type", "text/html")
+          |> Plug.Conn.resp(200, path)
       end
     else
-      Plug.Conn.resp(conn, 200, path)
+      conn |> Plug.Conn.put_resp_header("content-type", "text/html") |> Plug.Conn.resp(200, path)
     end
   end
 

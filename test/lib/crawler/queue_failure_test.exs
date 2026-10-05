@@ -21,7 +21,9 @@ defmodule Crawler.QueueFailureTest do
     end)
 
     ReqTestSite.expect_once(site, "GET", "/queue-crash/kept", fn conn ->
-      Plug.Conn.resp(conn, 200, "kept")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "kept")
     end)
 
     ReqTestSite.expect(site, "GET", "/queue-crash/guest", fn conn ->
@@ -30,7 +32,9 @@ defmodule Crawler.QueueFailureTest do
       if count == 0 do
         block_request(conn, parent, :guest)
       else
-        Plug.Conn.resp(conn, 200, "recovered")
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "text/html")
+        |> Plug.Conn.resp(200, "recovered")
       end
     end)
 
@@ -134,7 +138,10 @@ defmodule Crawler.QueueFailureTest do
     send(parent, {:blocked, scope, self()})
 
     receive do
-      :release -> Plug.Conn.resp(conn, 200, "released")
+      :release ->
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "text/html")
+        |> Plug.Conn.resp(200, "released")
     end
   end
 end

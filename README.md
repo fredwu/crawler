@@ -76,8 +76,10 @@ Page identity normalizes browser-equivalent domain and IPv4 spellings. Raw bytes
 | `:store`      | module  | `nil`                       | Module for storing the crawled page data and crawling metadata. You can set it to `Crawler.Store` or use your own module, see `Crawler.Store.add_page_data/3` for implementation details. |
 | `:force`      | boolean | `false`                     | Reset the scope before a root crawl, removing its pages and counters and invalidating its previous workers. Use an explicit `:scope` to refresh an existing crawl.                       |
 | `:scope`      | term    | unique per crawl            | Seen URLs and `:max_pages` belong to one scope. Each crawl gets its own scope unless you pass one. Pass the same scope to share them.                                                      |
-| `:user_agent` | string  | `Crawler/x.x.x (...)`       | User-Agent value sent by the fetch requests.                                                                                                                                              |
-| `:url_filter` | module  | `Crawler.Fetcher.UrlFilter` | Custom URL filter, useful for restricting crawlable domains, paths or content types.                                                                                                      |
+| `:user_agent` | string  | `Crawler/x.x.x (...)`       | User-Agent value sent by the fetch requests. The product token selects the matching `robots.txt` group.                                                                                   |
+| `:respect_robots` | boolean | `true`                 | Honour `robots.txt`, `nofollow`, meta robots, and `X-Robots-Tag`. A missing robots file allows the crawl. A server error blocks that fetch, and the file is requested again. Set `false` to follow disallowed paths and nofollow links without requesting the file. |
+| `:max_body`   | integer | `10485760`                  | Maximum decoded response size in bytes. A larger response is discarded and is not retried.                                                                                                |
+| `:url_filter` | module  | `Crawler.Fetcher.UrlFilter` | Custom URL filter. The default keeps ordinary links on the seed site. A custom module replaces that decision.                                                                             |
 | `:retrier`    | module  | `Crawler.Fetcher.Retrier`   | Custom fetch retrier, useful for retrying failed crawls, nullifies the `:retries` option.                                                                                                 |
 | `:modifier`   | module  | `Crawler.Fetcher.Modifier`  | Custom modifier, useful for adding custom request headers or options.                                                                                                                     |
 | `:req_options` | keyword | `[]`                        | Advanced [`Req` request options](https://hexdocs.pm/req/Req.html#new/1-options) forwarded to the HTTP client.                                                                            |
@@ -109,6 +111,10 @@ end
 See [`Crawler.Fetcher.UrlFilter`](lib/crawler/fetcher/url_filter.ex).
 
 Implement `filter(url, opts)` and return `{:ok, true}` to allow the URL, `{:ok, false}` to reject it, or `{:error, reason}` when filtering fails. For an initial URL, the error is returned unchanged without a request or retry; the default parser logs a fixed error message without the reason. Redirect targets are followed only when the filter returns `{:ok, true}`.
+
+The default filter keeps links, image maps, and meta refresh on the seed site. One leading `www` label is ignored. `http` on port 80 and `https` on port 443 match each other. Every other pair must use the same port. Scripts, stylesheets, images, and fonts may still be fetched from another host, including a CDN. A custom filter replaces this decision. Local servers stay reachable.
+
+Cookies are stored for the crawl scope. A redirect rebuilds `Cookie` for the next URL, so a secure, path-scoped, or deleted cookie is not sent again. The same host keeps the caller's `Cookie`, `Authorization`, and other custom headers when the scheme or port changes. A redirect that changes host drops them. The next host receives only cookies that belong to it. Resetting the scope clears the jar, and a response from the previous crawl does not restore it. A missing content type is not treated as HTML. Gzip and deflate responses are read as the decoded page, up to `:max_body`.
 
 ```elixir
 defmodule CustomUrlFilter do

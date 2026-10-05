@@ -23,7 +23,7 @@ defmodule Crawler.RedirectHelpers do
   def count(counter), do: :counters.get(counter, 1)
 
   def crawl(url, opts) do
-    opts = Keyword.merge([store: Store], opts)
+    opts = Keyword.merge([store: Store, respect_robots: false], opts)
     {:ok, opts} = Crawler.TestHelpers.start_crawl(url, opts)
     opts
   end
@@ -36,7 +36,8 @@ defmodule Crawler.RedirectHelpers do
       modifier: Modifier,
       retrier: Retrier,
       store: Store,
-      html_tag: "a"
+      html_tag: "a",
+      respect_robots: false
     }
 
     defaults
@@ -54,7 +55,9 @@ defmodule Crawler.RedirectHelpers do
 
   def text(site, path, body) do
     ReqTestSite.expect_once(site, "GET", path, fn conn ->
-      Plug.Conn.resp(conn, 200, body)
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/plain")
+      |> Plug.Conn.resp(200, body)
     end)
   end
 

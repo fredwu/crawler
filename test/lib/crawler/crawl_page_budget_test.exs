@@ -20,12 +20,18 @@ defmodule Crawler.CrawlPageBudgetTest do
 
     ReqTestSite.stub(site, "GET", "/budget/small", fn conn ->
       send(parent, :small_fetched)
-      Plug.Conn.resp(conn, 200, "small")
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "small")
     end)
 
     ReqTestSite.expect_once(site, "GET", "/budget/large", fn conn ->
       send(parent, :large_fetched)
-      Plug.Conn.resp(conn, 200, "large")
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "large")
     end)
 
     owner = crawl(url <> "/budget/root", scope, req_options, workers: 2, max_pages: 3)
@@ -64,7 +70,9 @@ defmodule Crawler.CrawlPageBudgetTest do
     blocked_route(site, "/budget/lost", parent, 404)
 
     ReqTestSite.expect_once(site, "GET", "/budget/live", fn conn ->
-      Plug.Conn.resp(conn, 200, "live")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "live")
     end)
 
     lost = crawl(url <> "/budget/lost", scope, req_options, max_pages: 1)
@@ -98,12 +106,17 @@ defmodule Crawler.CrawlPageBudgetTest do
     blocked_route(site, "/budget/blocked-reset", parent, 404)
 
     ReqTestSite.expect_once(site, "GET", "/budget/kept-reset", fn conn ->
-      Plug.Conn.resp(conn, 200, "kept")
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "kept")
     end)
 
     ReqTestSite.expect_once(site, "GET", "/budget/resumed-reset", fn conn ->
       send(parent, :resumed_after_reset)
-      Plug.Conn.resp(conn, 200, "resumed")
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "resumed")
     end)
 
     owner = crawl(url <> "/budget/kept-reset", scope, req_options, workers: 2, max_pages: 3)
@@ -157,7 +170,10 @@ defmodule Crawler.CrawlPageBudgetTest do
 
     ReqTestSite.stub(site, "GET", "/budget/exhausted-parked", fn conn ->
       send(parent, :exhausted_fetched)
-      Plug.Conn.resp(conn, 200, "parked")
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "parked")
     end)
 
     other = crawl(url <> "/budget/completed-other", scope, req_options, max_pages: 1)
@@ -217,14 +233,19 @@ defmodule Crawler.CrawlPageBudgetTest do
     blocked_route(site, "/budget/failure", parent, status)
 
     ReqTestSite.expect_once(site, "GET", "/budget/root", fn conn ->
-      Plug.Conn.resp(conn, 200, """
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, """
       <a href="#{url}/budget/failure">failed child</a>
       """)
     end)
 
     ReqTestSite.expect_once(site, "GET", "/budget/success", fn conn ->
       send(parent, :success_fetched)
-      Plug.Conn.resp(conn, 200, "success")
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, "success")
     end)
 
     owner = crawl(url <> "/budget/root", scope, req_options, workers: 2, max_pages: 2)
@@ -264,7 +285,10 @@ defmodule Crawler.CrawlPageBudgetTest do
 
   defp failure_response(conn, parent, _attempt) do
     send(parent, :retried_fetch)
-    Plug.Conn.resp(conn, 200, "retried")
+
+    conn
+    |> Plug.Conn.put_resp_header("content-type", "text/html")
+    |> Plug.Conn.resp(200, "retried")
   end
 
   defp blocked_route(site, path, parent, status) do

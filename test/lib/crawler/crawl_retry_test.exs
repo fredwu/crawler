@@ -55,6 +55,7 @@ defmodule Crawler.CrawlRetryTest do
         timeout: 1_000,
         workers: 1,
         store: Store,
+        respect_robots: false,
         req_options: req_options
       )
 
@@ -70,6 +71,7 @@ defmodule Crawler.CrawlRetryTest do
         retries: 2,
         workers: 1,
         queue: status_opts[:queue],
+        respect_robots: false,
         req_options: req_options
       )
 
@@ -87,6 +89,7 @@ defmodule Crawler.CrawlRetryTest do
         workers: 1,
         queue: status_opts[:queue],
         store: Store,
+        respect_robots: false,
         req_options: req_options
       )
 
