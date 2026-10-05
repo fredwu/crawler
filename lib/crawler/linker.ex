@@ -4,10 +4,10 @@ defmodule Crawler.Linker do
   """
 
   alias Crawler.Linker.PathBuilder
-  alias Crawler.Linker.PathFinder
   alias Crawler.Linker.PathPrefixer
   alias Crawler.Linker.Snapshot
   alias Crawler.URL
+  alias Crawler.URL.Percent
 
   @doc """
   Given the `current_link`, it works out what the offline URL should be for
@@ -128,14 +128,17 @@ defmodule Crawler.Linker do
   def offline_link(_current_url, link), do: link
 
   defp fragment_suffix(link) do
-    case String.split(link, "#", parts: 2) do
-      [_base, fragment] -> "#" <> fragment
+    case String.split(URL.sanitize(link), "#", parts: 2) do
+      [_base, fragment] -> "#" <> Percent.encode(fragment, :fragment)
       _ -> ""
     end
   end
 
   @doc """
-  Given the `current_link`, it works out what the URL should be for `link`.
+  Resolves `link` against `current_url` and returns its normalized HTTP or HTTPS URL.
+  Absolute targets keep their scheme. Relative and scheme-relative targets use
+  the scheme of `current_url`.
+  Returns unsupported or unresolved links unchanged.
 
   ## Examples
 
@@ -150,12 +153,15 @@ defmodule Crawler.Linker do
       iex>   "dir/page2"
       iex> )
       "http://another.domain:8888/parent/dir/page2"
+
+      iex> Linker.url("http://another.domain/page", "https://other.domain/file")
+      "https://other.domain/file"
   """
   def url(current_url, link) do
-    Path.join(
-      PathFinder.find_scheme(current_url),
-      PathBuilder.build_path(current_url, link, false)
-    )
+    case URL.resolve(link, current_url) do
+      {:ok, target} -> target
+      :skip -> link
+    end
   end
 
   @doc """

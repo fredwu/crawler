@@ -108,6 +108,81 @@ defmodule Crawler.Snapper.OfflineLink.JsTest do
     assert_points(body, @page, "http://example.com/blog/kept.js")
   end
 
+  test "rewrites imports after ASI and switch declarations while preserving regex and comment bytes" do
+    for terminator <- ["\n", "\r", "\r\n", <<0x2028::utf8>>, <<0x2029::utf8>>],
+        declaration <- ["function f() {}", "async function f() {}", "class Named {}"],
+        prefix <- [
+          "const n = 1#{terminator}",
+          "const n = 1/* café#{terminator} */",
+          "switch (n) { case condition ? 1 : 2: "
+        ] do
+      closing = if String.starts_with?(prefix, "switch"), do: " }", else: ""
+
+      source =
+        prefix <>
+          declaration <>
+          terminator <>
+          ~S|/["']/.test(text); import("./real.js"); const hidden = /import(".\/hidden.js")/;| <>
+          closing
+
+      assert_rewritten_module(source)
+    end
+  end
+
+  test "rewrites top-level imports after return line boundaries without changing block regexes" do
+    for terminator <- ["\n", "\r", "\r\n", <<0x2028::utf8>>, <<0x2029::utf8>>],
+        separator <- [terminator, "/* café" <> terminator <> " */", ";" <> terminator] do
+      source =
+        "function f() { return" <>
+          separator <>
+          ~S|{} /["']/.test(text); } import("./real.js");|
+
+      assert_rewritten_module(source)
+    end
+
+    for {opening, closing} <- [{" ", ""}, {"/* café */", ""}, {" (\n", ")"}] do
+      source =
+        "function f() { return#{opening}{}#{closing} / 2; }" <>
+          ~S|import("./real.js"); const r = /x/;|
+
+      assert_rewritten_module(source)
+    end
+  end
+
+  test "rewrites outside imports after labelled blocks while preserving block regex bytes" do
+    for label <- ["label:", "outer: inner:", "πlabel /* café */ :", "label\n:"],
+        prefix <- ["", "const n = 1\n", "return\n"] do
+      source =
+        "function f() { #{prefix}#{label}" <>
+          ~S| {} /["']/.test(text); } import("./real.js");|
+
+      assert_rewritten_module(source)
+    end
+
+    for expression <- [
+          "const n = { label: {} / 2 }",
+          "const n = { child: { label: {} / 2 } }",
+          "const n = ready ? obj?.label : {} / 2",
+          "const n = ready ? {} : {} / 2"
+        ] do
+      assert_rewritten_module(expression <> ~S|; import("./real.js"); const r = /x/;|)
+    end
+  end
+
+  test "rewrites imports after multiline expression division without rewriting regex decoys" do
+    for expression <- [
+          "const n =\nfunction() {}",
+          "const n =\nasync function() {}",
+          "const n =\nclass {}",
+          "const n = obj.\nfunction()"
+        ] do
+      source =
+        expression <> ~S| / 2; import("./real.js"); const hidden = /import(".\/hidden.js")/;|
+
+      assert_rewritten_module(source)
+    end
+  end
+
   for expression <- ["n++", "n--", "++n", "--n"] do
     test "rewrites an import after division with #{expression} and preserves regular expressions" do
       source =
@@ -275,5 +350,30 @@ defmodule Crawler.Snapper.OfflineLink.JsTest do
     assert_points(body, app, "http://example.com/blog/tick.js")
     assert_points(body, app, "http://example.com/blog/gap.js")
     assert_points(body, app, "https://cdn.example/lib.js")
+  end
+
+  test "rewrites real imports after property division and keeps identifier calls intact" do
+    for access <- [".", "?./* café */"], word <- ["return", "catch()"] do
+      source =
+        "const n = obj#{access}#{word} / 2;" <>
+          ~S|$import("./fake.js"); πimport("./fake.js"); importπ("./fake.js"); a\u0061import("./fake.js"); import("./real.js"); const r = /x/;|
+
+      assert_rewritten_module(source)
+    end
+  end
+
+  defp assert_rewritten_module(source) do
+    target = "http://example.com/blog/real.js"
+    app = "http://example.com/blog/app.js"
+    js = rewrite(source, app, "application/javascript", "script")
+    js_import = ~s|import("#{Linker.offline_link(app, target)}")|
+    assert js == String.replace(source, ~s|import("./real.js")|, js_import)
+    assert_points(js, app, target)
+
+    html = rewrite(~s|<script type="module">#{source}</script>|, @page)
+    html_import = ~s|import("#{Linker.offline_link(@page, target)}")|
+    expected = String.replace(source, ~s|import("./real.js")|, html_import)
+    assert html == ~s|<script type="module">#{expected}</script>|
+    assert_points(html, @page, target)
   end
 end

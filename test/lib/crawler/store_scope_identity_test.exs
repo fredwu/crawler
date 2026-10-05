@@ -17,6 +17,8 @@ defmodule Crawler.StoreScopeIdentityTest do
     on_exit(fn -> Store.drop_scope(integer) end)
     on_exit(fn -> Store.drop_scope(float) end)
     store = Process.whereis(Store)
+    integer_generation = Store.generation(integer)
+    float_generation = Store.generation(float)
 
     assert {:ok, _} = Store.add(integer_key)
     assert {:ok, _} = Store.add(float_key)
@@ -24,16 +26,19 @@ defmodule Crawler.StoreScopeIdentityTest do
     assert {_, _} = Store.add_page_data(float_key, "FLOAT", %{})
     assert :ok = Store.ops_inc(integer)
     assert :ok = Store.ops_inc(float)
-    assert :ok = Store.note_enqueued(float, 0, nil)
-    assert {:ok, float_claim} = Store.start_work(%{scope: float, generation: 0, max_pages: 2})
+    assert :ok = Store.note_enqueued(float, float_generation, nil)
 
-    assert Store.drop_scope(integer) == 1
+    assert {:ok, float_claim} =
+             Store.start_work(%{scope: float, generation: float_generation, max_pages: 2})
+
+    retired_integer = Store.drop_scope(integer)
+    refute retired_integer == integer_generation
     refute Store.find(integer_key)
     assert Store.find(float_key).body == "FLOAT"
     assert Store.ops_count(integer) == 0
     assert Store.ops_count(float) == 1
-    assert Store.generation(integer) == 1
-    assert Store.generation(float) == 0
+    assert Store.generation(integer) == retired_integer
+    assert Store.generation(float) == float_generation
     assert Process.whereis(Store) == store
     assert Store.pending_count(float) == 1
     assert Store.inflight_count(float) == 1
@@ -42,7 +47,7 @@ defmodule Crawler.StoreScopeIdentityTest do
     assert Store.inflight_count(float) == 0
     assert Store.find(float_key).body == "FLOAT"
 
-    assert Store.drop_scope(float) == 1
+    refute Store.drop_scope(float) == float_generation
     refute Store.find(float_key)
     assert Process.whereis(Store) == store
   end
@@ -65,6 +70,7 @@ defmodule Crawler.StoreScopeIdentityTest do
     assert {_, _} = Store.add_page_data(unrelated_key, "UNRELATED", %{})
     assert :ok = Store.ops_inc(unrelated)
     unrelated_page = Store.find(unrelated_key)
+    unrelated_generation = Store.generation(unrelated)
 
     assert {:ok, opts} =
              Crawler.crawl(elem(key, 0),
@@ -85,7 +91,7 @@ defmodule Crawler.StoreScopeIdentityTest do
     assert Process.alive?(store)
     assert Store.find(unrelated_key) == unrelated_page
     assert Store.ops_count(unrelated) == 1
-    assert Store.generation(unrelated) == 0
+    assert Store.generation(unrelated) == unrelated_generation
   end
 
   defp exercise_action(:stop, opts, key, attempts) do
@@ -102,7 +108,9 @@ defmodule Crawler.StoreScopeIdentityTest do
     assert {:ok, forced} = Crawler.crawl(elem(key, 0), Map.put(opts, :force, true))
     await_idle(forced)
     assert forced[:queue] == opts[:queue]
-    assert forced[:generation] == opts[:generation] + 1
+    refute forced[:generation] == opts[:generation]
+    refute Store.current?(opts[:scope], opts[:generation])
+    assert Store.current?(forced[:scope], forced[:generation], forced[:queue])
     assert Store.find_processed(key).body == "version 2"
     assert Store.ops_count(opts[:scope]) == 1
     assert Store.pending_count(opts[:scope]) == 0

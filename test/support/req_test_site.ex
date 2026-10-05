@@ -5,10 +5,13 @@ defmodule Crawler.ReqTestSite do
 
   @type t :: %__MODULE__{}
 
-  @settle_timeout 5_000
+  @handler_timeout 5_000
+
+  alias Crawler.ReqTestSite.Lifecycle
 
   def open(opts \\ []) do
     host_count = Keyword.get(opts, :hosts, 1)
+    handler_timeout = Keyword.get(opts, :handler_timeout, @handler_timeout)
     {:ok, agent} = Agent.start(fn -> initial_state() end)
 
     sites =
@@ -22,7 +25,10 @@ defmodule Crawler.ReqTestSite do
           port: port,
           url: url,
           path: "localhost__port_#{port}",
-          req_options: [plug: {__MODULE__, agent: agent}, retry: false]
+          req_options: [
+            plug: {__MODULE__, agent: agent, handler_timeout: handler_timeout},
+            retry: false
+          ]
         }
       end
 
@@ -50,22 +56,24 @@ defmodule Crawler.ReqTestSite do
   def req_options(%__MODULE__{req_options: req_options}), do: req_options
   def req_options(%{site: site}), do: req_options(site)
 
-  def track_crawl(%{queue: queue} = opts) when is_pid(queue) do
+  def track_crawl(opts, tracking_opts \\ [])
+
+  def track_crawl(%{queue: queue} = opts, tracking_opts) when is_pid(queue) do
     case Keyword.get(opts[:req_options] || [], :plug) do
       {__MODULE__, plug_opts} ->
         agent = Keyword.fetch!(plug_opts, :agent)
-        work = {opts[:scope], opts[:generation], opts[:queue]}
-        Agent.update(agent, &%{&1 | crawls: MapSet.put(&1.crawls, work)})
+        Lifecycle.track_crawl(agent, opts, tracking_opts)
 
       _ ->
+        Lifecycle.cleanup_on_exit(opts)
         :ok
     end
   end
 
-  def track_crawl(_opts), do: :ok
+  def track_crawl(_opts, _tracking_opts), do: :ok
 
   def close(site_or_context) do
-    stop_agent(site_or_context)
+    cleanup(site_or_context)
   end
 
   def verify_on_exit!(site_or_context) do
@@ -73,7 +81,7 @@ defmodule Crawler.ReqTestSite do
       try do
         verify!(site_or_context)
       after
-        stop_agent(site_or_context)
+        cleanup(site_or_context)
       end
     end)
 
@@ -83,7 +91,7 @@ defmodule Crawler.ReqTestSite do
   def verify!(site_or_context) do
     agent = agent(site_or_context)
 
-    wait_until_settled(agent)
+    Lifecycle.wait_until_settled(agent)
 
     %{routes: routes, unexpected: unexpected, failures: failures} = Agent.get(agent, & &1)
 
@@ -106,15 +114,21 @@ defmodule Crawler.ReqTestSite do
     agent = Keyword.fetch!(opts, :agent)
     key = {conn.method, conn.host, conn.port, conn.request_path}
 
-    case route(agent, key) do
-      {:ok, fun} ->
-        call_route(agent, key, fun, conn)
+    token = make_ref()
+
+    case route(agent, key, token) do
+      {:ok, fun, watcher} ->
+        timeout = Keyword.fetch!(opts, :handler_timeout)
+        call_route(agent, key, fun, conn, watcher, timeout)
 
       :error ->
         Plug.Conn.send_resp(conn, 500, "No ReqTestSite route for #{format_key(key)}")
 
       {:too_many, message} ->
         Plug.Conn.send_resp(conn, 500, message)
+
+      :closed ->
+        Plug.Conn.send_resp(conn, 500, "ReqTestSite is closed")
     end
   end
 
@@ -128,48 +142,53 @@ defmodule Crawler.ReqTestSite do
     site
   end
 
-  defp route(agent, key) do
+  defp route(agent, key, token) do
+    caller = self()
+
     Agent.get_and_update(agent, fn state ->
-      case get_in(state, [:routes, key]) do
-        nil ->
-          state = update_in(state, [:unexpected], &[key | &1])
-
-          {:error, state}
-
-        %{type: :once, count: count} when count >= 1 ->
-          message = "Expected #{format_key(key)} exactly once, got an extra request"
-          state = update_in(state, [:failures], &[message | &1])
-
-          {{:too_many, message}, state}
-
-        route ->
-          fun = route.fun
-          state = put_in(state, [:routes, key, :count], route.count + 1)
-          state = update_in(state, [:active], &(&1 + 1))
-
-          {{:ok, fun}, state}
+      if state.closing? do
+        {:closed, state}
+      else
+        route(state, key, token, caller, agent)
       end
     end)
   end
 
-  defp call_route(agent, key, fun, conn) do
-    token = make_ref()
-    # An exit signal does not run `after`. The watcher counts this route
-    # finished when the request process dies first.
-    watch_request(agent, token)
+  defp route(state, key, token, caller, agent) do
+    case get_in(state, [:routes, key]) do
+      nil ->
+        state = update_in(state, [:unexpected], &[key | &1])
 
-    task =
-      Task.async(fn ->
+        {:error, state}
+
+      %{type: :once, count: count} when count >= 1 ->
+        message = "Expected #{format_key(key)} exactly once, got an extra request"
+        state = update_in(state, [:failures], &[message | &1])
+
+        {{:too_many, message}, state}
+
+      route ->
+        fun = route.fun
+        state = put_in(state, [:routes, key, :count], route.count + 1)
+        {state, watcher} = Lifecycle.start_request(state, token, caller, agent)
+
+        {{:ok, fun, watcher}, state}
+    end
+  end
+
+  defp call_route(agent, key, fun, conn, watcher, timeout) do
+    callback =
+      fn ->
         try do
           {:ok, fun.(conn)}
         catch
           kind, reason ->
             {:error, Exception.format(kind, reason, __STACKTRACE__)}
         end
-      end)
+      end
 
     try do
-      case Task.await(task) do
+      case Lifecycle.handler_result(watcher, callback, timeout) do
         {:ok, conn} ->
           conn
 
@@ -182,25 +201,8 @@ defmodule Crawler.ReqTestSite do
         record_failure(agent, "Handler for #{format_key(key)} exited: #{inspect(reason)}")
         Plug.Conn.send_resp(conn, 500, "ReqTestSite handler failed for #{format_key(key)}")
     after
-      finish_route(agent, token)
+      Lifecycle.finish_request(watcher)
     end
-  end
-
-  defp watch_request(agent, token) do
-    request = self()
-
-    spawn(fn ->
-      ref = Process.monitor(request)
-
-      receive do
-        {:DOWN, ^ref, _, _, _} ->
-          try do
-            finish_route(agent, token)
-          catch
-            :exit, _ -> :ok
-          end
-      end
-    end)
   end
 
   defp route_failures(_key, %{type: :once, count: 1}), do: []
@@ -222,128 +224,13 @@ defmodule Crawler.ReqTestSite do
   end
 
   defp initial_state do
-    %{
-      routes: %{},
-      unexpected: [],
-      failures: [],
-      active: 0,
-      waiters: [],
-      finished: MapSet.new(),
-      crawls: MapSet.new()
-    }
+    Map.merge(%{routes: %{}, unexpected: [], failures: []}, Lifecycle.initial_state())
   end
 
   defp record_failure(agent, message) do
     Agent.update(agent, fn state ->
       update_in(state, [:failures], &[message | &1])
     end)
-  end
-
-  defp finish_route(agent, token) do
-    Agent.update(agent, fn state ->
-      if MapSet.member?(state.finished, token) do
-        %{state | finished: MapSet.delete(state.finished, token)}
-      else
-        release_waiters(%{state | finished: MapSet.put(state.finished, token)})
-      end
-    end)
-  end
-
-  defp release_waiters(state) do
-    active = max(state.active - 1, 0)
-    notify_waiters(%{state | active: active})
-  end
-
-  defp notify_waiters(%{active: 0} = state) do
-    Enum.each(state.waiters, &notify_waiter/1)
-    %{state | waiters: []}
-  end
-
-  defp notify_waiters(state), do: state
-
-  defp notify_waiter({pid, ref}), do: send(pid, {:req_test_site_idle, ref})
-
-  defp wait_until_settled(agent) do
-    wait_until_settled(agent, deadline())
-  end
-
-  defp wait_until_settled(agent, deadline) do
-    wait_for_crawls(agent, deadline)
-    wait_until_idle(agent, deadline)
-
-    unless crawls_idle?(agent) do
-      wait_until_settled(agent, deadline)
-    end
-  end
-
-  defp wait_until_idle(agent, deadline) do
-    ref = make_ref()
-
-    case register_idle_waiter(agent, ref) do
-      :idle ->
-        :ok
-
-      :waiting ->
-        receive do
-          {:req_test_site_idle, ^ref} ->
-            :ok
-        after
-          remaining_timeout(deadline) ->
-            raise ExUnit.AssertionError,
-              message: "Timed out waiting for ReqTestSite requests to finish"
-        end
-    end
-  end
-
-  defp register_idle_waiter(agent, ref) do
-    caller = self()
-
-    Agent.get_and_update(agent, fn state ->
-      if state.active == 0 do
-        {:idle, state}
-      else
-        {:waiting, update_in(state, [:waiters], &[{caller, ref} | &1])}
-      end
-    end)
-  end
-
-  defp wait_for_crawls(agent, deadline) do
-    if crawls_idle?(agent) do
-      :ok
-    else
-      wait_for_timeout(10, deadline)
-      wait_for_crawls(agent, deadline)
-    end
-  end
-
-  defp crawls_idle?(agent) do
-    agent
-    |> Agent.get(& &1.crawls)
-    |> Enum.all?(fn {scope, generation, queue} ->
-      not Crawler.Store.work_pending?(scope, generation, queue)
-    end)
-  end
-
-  defp deadline do
-    System.monotonic_time(:millisecond) + @settle_timeout
-  end
-
-  defp wait_for_timeout(timeout, deadline) do
-    timeout = min(timeout, remaining_timeout(deadline))
-
-    if timeout <= 0 do
-      raise ExUnit.AssertionError,
-        message: "Timed out waiting for ReqTestSite requests to settle"
-    end
-
-    receive do
-    after
-      timeout -> :ok
-    end
-  end
-
-  defp remaining_timeout(deadline) do
-    max(deadline - System.monotonic_time(:millisecond), 0)
   end
 
   defp context([site]),
@@ -381,11 +268,20 @@ defmodule Crawler.ReqTestSite do
   defp agent(%__MODULE__{agent: agent}), do: agent
   defp agent(%{site: site}), do: agent(site)
 
-  defp stop_agent(site_or_context) do
+  defp cleanup(site_or_context) do
     agent = agent(site_or_context)
 
-    if Process.alive?(agent) do
-      Agent.stop(agent)
+    {pid, ref} =
+      spawn_monitor(fn ->
+        if Process.alive?(agent) do
+          Lifecycle.cleanup(agent)
+          Agent.stop(agent)
+        end
+      end)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, :normal} -> :ok
+      {:DOWN, ^ref, :process, ^pid, reason} -> exit(reason)
     end
   end
 end

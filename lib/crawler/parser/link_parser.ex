@@ -3,13 +3,13 @@ defmodule Crawler.Parser.LinkParser do
   Parses links and transforms them if necessary.
   """
 
+  alias Crawler.HTMLReferences
+  alias Crawler.HTMLRefresh
   alias Crawler.MediaType
   alias Crawler.Parser.CssParser
   alias Crawler.Parser.JsParser
   alias Crawler.Parser.LinkParser.LinkExpander
   alias Crawler.Parser.Srcset
-
-  @media_tags ["img", "source", "video", "audio", "script"]
 
   @doc """
   Parses links and transforms them if necessary.
@@ -30,216 +30,120 @@ defmodule Crawler.Parser.LinkParser do
       iex> )
       "{\\\"src\\\", \\\"http://hello.world\\\"}"
   """
-  def parse({tag, attrs, children}, opts, link_handler) do
-    case emit(tag, attrs, children, opts, link_handler) do
+  def parse(
+        %{name: tag, attributes: attrs, children: children, namespace: namespace},
+        opts,
+        handler
+      ) do
+    emit(tag, attrs, children, opts, handler, namespace)
+  end
+
+  def parse({tag, attrs, children}, opts, handler) do
+    emit(tag, attrs, children, opts, handler, :html)
+  end
+
+  defp emit(tag, attrs, children, opts, handler, namespace) do
+    results =
+      tag
+      |> links(attrs, children, opts, namespace)
+      |> Enum.map(fn {attr, link} ->
+        role = HTMLReferences.role(tag, attr, attrs)
+        goal = reference_goal(tag, attr, attrs, opts)
+        {role, goal, LinkExpander.expand({attr_name(attr), link}, opts)}
+      end)
+      |> Enum.reject(&match?({_role, _goal, nil}, &1))
+      |> Enum.uniq_by(fn {role, goal, element} -> {role, goal, raw_link(element)} end)
+      |> Enum.map(fn {role, goal, element} ->
+        handler.(element, handler_opts(opts, role, goal))
+      end)
+
+    case results do
       [] -> nil
       [result] -> result
       results -> results
     end
   end
 
-  defp emit(tag, attrs, children, opts, link_handler) do
-    tag
-    |> links(attrs, children, opts)
-    |> Enum.map(fn {attr, link} ->
-      {attr, LinkExpander.expand({attr_name(attr), link}, opts)}
-    end)
-    |> Enum.reject(&match?({_attr, nil}, &1))
-    |> Enum.uniq_by(fn {_attr, element} -> raw_link(element) end)
-    |> Enum.map(fn {attr, element} ->
-      link_handler.(element, handler_opts(opts, tag, attr, attrs))
-    end)
+  defp links(tag, attrs, children, opts, namespace) do
+    attributes =
+      tag
+      |> HTMLReferences.attributes(attrs, opts, namespace)
+      |> Enum.flat_map(fn name -> attribute_links(name, HTMLReferences.attribute(attrs, name)) end)
+
+    attributes ++ source_links(tag, attrs, children, opts, namespace)
   end
 
-  defp links("style", _attrs, children, opts) do
-    if enabled?(opts, "css"), do: children |> raw_text() |> style_links(), else: []
+  defp source_links("style", _attrs, children, opts, :html) do
+    if HTMLReferences.enabled?(opts, "css"),
+      do: children |> raw_text() |> style_links("style_text"),
+      else: []
   end
 
-  defp links("script", attrs, children, opts) do
-    if enabled?(opts, "js") do
-      script_src(attrs) ++ script_imports(attrs, children)
-    else
-      []
-    end
-  end
-
-  defp links(tag, attrs, _children, opts) do
-    tag
-    |> attributes(attrs, opts)
-    |> Enum.flat_map(fn name ->
-      case attribute(attrs, name) do
-        nil -> []
-        value -> Enum.map(values(name, value), &{name, &1})
-      end
-    end)
-    |> Kernel.++(style_attribute_links(attrs, opts))
-  end
-
-  defp attributes("a", _attrs, _opts), do: ["href"]
-  defp attributes("area", _attrs, _opts), do: ["href"]
-  defp attributes("iframe", _attrs, _opts), do: ["src"]
-  defp attributes("object", _attrs, _opts), do: ["data"]
-  defp attributes("embed", _attrs, _opts), do: ["src"]
-
-  defp attributes("meta", attrs, _opts) do
-    if refresh?(attrs), do: ["content"], else: []
-  end
-
-  defp attributes("link", attrs, opts) do
-    cond do
-      document_links?(opts) -> ["href"]
-      true -> link_attributes(attrs, opts)
-    end
-  end
-
-  defp attributes("img", _attrs, opts),
-    do: media_attributes(opts, ["src", "srcset", "imagesrcset"])
-
-  defp attributes("source", _attrs, opts),
-    do: media_attributes(opts, ["src", "srcset", "imagesrcset"])
-
-  defp attributes("video", _attrs, opts), do: media_attributes(opts, ["src", "poster"])
-  defp attributes("audio", _attrs, opts), do: media_attributes(opts, ["src"])
-  defp attributes("track", _attrs, opts), do: media_attributes(opts, ["src"])
-  defp attributes("image", _attrs, opts), do: media_attributes(opts, ["href", "xlink:href"])
-  defp attributes("use", _attrs, opts), do: media_attributes(opts, ["href", "xlink:href"])
-  defp attributes(_tag, _attrs, _opts), do: []
-
-  defp follow_link?(attrs, opts) do
-    rel = rel_tokens(attrs)
-    as = attrs |> attribute("as") |> to_string() |> String.downcase()
-
-    cond do
-      "stylesheet" in rel -> enabled?(opts, "css")
-      "preload" in rel and as == "style" -> enabled?(opts, "css")
-      "preload" in rel and as == "font" -> enabled?(opts, "css")
-      "preload" in rel and as == "script" -> enabled?(opts, "js")
-      "preload" in rel and as == "image" -> enabled?(opts, "images")
-      icon_rel?(rel) -> enabled?(opts, "images")
-      true -> false
-    end
-  end
-
-  defp icon_rel?(rel) do
-    "icon" in rel or "apple-touch-icon" in rel or "mask-icon" in rel
-  end
-
-  defp rel_tokens(attrs) do
-    attrs
-    |> attribute("rel")
-    |> to_string()
-    |> String.downcase()
-    |> String.split(~r/\s+/, trim: true)
-  end
-
-  defp media_attributes(opts, names) do
-    if enabled?(opts, "images"), do: names, else: []
-  end
-
-  defp style_attribute_links(attrs, opts) do
-    if enabled?(opts, "css"), do: style_links(attribute(attrs, "style")), else: []
-  end
-
-  defp enabled?(opts, asset), do: asset in List.wrap(opts[:assets])
-
-  defp document_links?(opts) do
-    MediaType.css?(opts[:content_type]) or MediaType.javascript?(opts[:content_type])
-  end
-
-  defp link_attributes(attrs, opts) do
-    hrefs = if follow_link?(attrs, opts), do: ["href"], else: []
-    images = if imagesrcset?(attrs, opts), do: ["imagesrcset"], else: []
-    hrefs ++ images
-  end
-
-  defp imagesrcset?(attrs, opts) do
-    enabled?(opts, "images") and is_binary(attribute(attrs, "imagesrcset"))
-  end
-
-  defp refresh?(attrs) do
-    attrs
-    |> attribute_ci("http-equiv")
-    |> to_string()
-    |> String.trim()
-    |> String.downcase() == "refresh"
-  end
-
-  defp script_src(attrs) do
-    case attribute(attrs, "src") do
-      value when is_binary(value) and value != "" -> [{"src", value}]
-      _ -> []
-    end
-  end
-
-  defp script_imports(attrs, children) do
-    if script_source?(attrs) do
+  defp source_links("script", attrs, children, opts, :html) do
+    if HTMLReferences.enabled?(opts, "js") and HTMLReferences.script_source(attrs) == :inline do
       children
       |> raw_text()
-      |> JsParser.specs()
+      |> JsParser.specs(HTMLReferences.script_goal(attrs))
       |> Enum.map(&{"href", &1})
     else
       []
     end
   end
 
-  defp script_source?(attrs) do
-    type =
-      attrs
-      |> attribute("type")
-      |> to_string()
-      |> String.trim()
-      |> String.downcase()
+  defp source_links(_tag, _attrs, _children, _opts, _namespace), do: []
 
-    type in ["", "module"] or MediaType.javascript?(type)
+  defp attribute_links(_name, nil), do: []
+  defp attribute_links("style", value), do: style_links(value, "style")
+
+  defp attribute_links(name, value) when name in ["srcset", "imagesrcset"] do
+    value
+    |> Srcset.urls()
+    |> Enum.reject(&String.match?(&1, ~r/^data:/i))
+    |> Enum.map(&{name, &1})
   end
 
-  defp values("srcset", value) do
-    value |> Srcset.urls() |> Enum.reject(&data_url?/1)
-  end
-
-  defp values("imagesrcset", value), do: values("srcset", value)
-
-  defp values("content", value), do: refresh_targets(value)
-
-  defp values(_name, value), do: [value]
-
-  defp refresh_targets(value) do
-    case Regex.run(~r/url\s*=\s*(.*)$/is, value, capture: :all_but_first) do
-      [target] -> refresh_target(target)
-      _ -> []
+  defp attribute_links("content", value) do
+    case HTMLRefresh.target(value) do
+      %{url: url} -> [{"content", url}]
+      nil -> []
     end
   end
 
-  defp refresh_target(<<quote, rest::binary>>) when quote in [?", ?'] do
-    case :binary.split(rest, <<quote>>) do
-      [url, _remaining] -> present(url)
-      _ -> []
-    end
-  end
+  defp attribute_links(name, value), do: [{name, value}]
 
-  defp refresh_target(target), do: present(target)
+  defp style_links(nil, _attr), do: []
+  defp style_links("", _attr), do: []
 
-  defp present(url) when is_binary(url) do
-    # Keep the original text, spaces included, so the saved tag can be
-    # rewritten. Resolution trims before the request.
-    if String.trim(url) == "", do: [], else: [url]
-  end
-
-  defp present(_url), do: []
-
-  defp data_url?(url), do: String.match?(url, ~r/^data:/i)
-
-  defp style_links(nil), do: []
-  defp style_links(""), do: []
-
-  defp style_links(css) when is_binary(css) do
+  defp style_links(css, attr) do
     css
     |> CssParser.parse()
-    |> Enum.map(fn {"link", [{"href", url}], _} -> {"style", url} end)
+    |> Enum.map(fn {"link", [{"href", url}], _} -> {attr, url} end)
   end
 
-  # Script and style text are raw data. HTML decodes entities in attributes,
-  # but their text must retain URL query strings and JavaScript quotes.
+  defp reference_goal(tag, attr, attrs, opts) do
+    cond do
+      MediaType.javascript?(opts[:content_type]) ->
+        :module
+
+      tag == "script" and attr == "href" ->
+        :module
+
+      tag == "script" and attr == "src" ->
+        HTMLReferences.script_goal(attrs)
+
+      tag == "link" and attr == "href" and HTMLReferences.role(tag, attr, attrs) == "script" ->
+        HTMLReferences.preload_goal(attrs)
+
+      true ->
+        nil
+    end
+  end
+
+  defp handler_opts(opts, role, goal) do
+    opts = opts |> Map.delete(:javascript_goal) |> Map.put(:html_tag, role)
+    if goal, do: Map.put(opts, :javascript_goal, goal), else: opts
+  end
+
   defp raw_text(children) do
     Enum.map_join(children, fn
       text when is_binary(text) -> text
@@ -248,62 +152,8 @@ defmodule Crawler.Parser.LinkParser do
     end)
   end
 
-  defp attribute(attrs, name) do
-    Enum.find_value(attrs, fn
-      {^name, value} -> value
-      _ -> nil
-    end)
-  end
-
-  defp attribute_ci(attrs, name) do
-    Enum.find_value(attrs, fn
-      {key, value} ->
-        if String.downcase(to_string(key)) == name, do: value
-
-      _ ->
-        nil
-    end)
-  end
-
-  defp attr_name("style"), do: "href"
+  defp attr_name(name) when name in ["style", "style_text"], do: "href"
   defp attr_name(name), do: name
-
-  defp handler_opts(opts, tag, "href", _attrs) when tag in ["a", "area"],
-    do: Map.put(opts, :html_tag, "a")
-
-  defp handler_opts(opts, "iframe", "src", _attrs), do: Map.put(opts, :html_tag, "a")
-
-  defp handler_opts(opts, tag, _attr, _attrs) when tag in ["object", "embed", "meta"],
-    do: Map.put(opts, :html_tag, "a")
-
-  defp handler_opts(opts, "track", _attr, _attrs), do: Map.put(opts, :html_tag, "track")
-  defp handler_opts(opts, "script", _attr, _attrs), do: Map.put(opts, :html_tag, "script")
-
-  defp handler_opts(opts, tag, _attr, _attrs) when tag in ["image", "use"],
-    do: Map.put(opts, :html_tag, "img")
-
-  defp handler_opts(opts, "link", "imagesrcset", _attrs), do: Map.put(opts, :html_tag, "img")
-  defp handler_opts(opts, "link", "href", attrs), do: Map.put(opts, :html_tag, link_tag(attrs))
-
-  defp handler_opts(opts, tag, attr, _attrs)
-       when attr in ["src", "srcset", "imagesrcset", "poster"] and tag in @media_tags do
-    Map.put(opts, :html_tag, tag)
-  end
-
-  defp handler_opts(opts, _tag, _attr, _attrs), do: Map.put(opts, :html_tag, "link")
-
-  defp link_tag(attrs) do
-    rel = rel_tokens(attrs)
-    as = attrs |> attribute("as") |> to_string() |> String.downcase()
-
-    cond do
-      "preload" in rel and as == "script" -> "script"
-      "preload" in rel and as == "font" -> "font"
-      "preload" in rel and as == "image" -> "img"
-      icon_rel?(rel) -> "img"
-      true -> "link"
-    end
-  end
 
   defp raw_link({_src, link}), do: link
   defp raw_link({_tag, link, _src, _url}), do: link

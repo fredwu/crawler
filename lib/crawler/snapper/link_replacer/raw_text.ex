@@ -1,89 +1,59 @@
 defmodule Crawler.Snapper.LinkReplacer.RawText do
   @moduledoc false
 
+  alias Crawler.HTMLReferences
+  alias Crawler.HTMLSpans
   alias Crawler.MediaType
-  alias Crawler.Snapper.LinkReplacer.Javascript
-
-  @tag_contents ~S{(?:[^>"']|"[^"]*"|'[^']*')*}
-  @markup Regex.compile!("<!--.*?(?:-->|$)|<(?=[!?]|/?[A-Za-z])#{@tag_contents}>", "s")
-  @text_elements ~w(script style textarea title xmp iframe noembed noframes plaintext)
-  @raw_opening Regex.compile!(
-                 "^<(#{Enum.join(@text_elements, "|")})(?=[\\t\\n\\f\\r />])(.*)>$",
-                 "is"
-               )
+  alias Crawler.Snapper.LinkReplacer.Tokens
 
   def protect(body, opts) do
     if MediaType.css?(opts[:content_type]) or MediaType.javascript?(opts[:content_type]) do
       {body, []}
     else
+      prefix = Tokens.prefix([body], "R")
+
       body
-      |> regions(0, [])
+      |> HTMLSpans.tags()
+      |> Enum.filter(& &1.content_span)
+      |> Enum.reverse()
       |> Enum.with_index()
-      |> Enum.reduce({body, []}, &protect_region(&1, &2, opts))
+      |> Enum.reduce({body, []}, &protect_region(&1, &2, opts, prefix))
     end
   end
 
   def restore(body, saved, rewrite) do
-    Enum.reduce(saved, body, fn {token, source, type}, body ->
-      source = if type, do: rewrite.(source, type), else: source
+    Enum.reduce(saved, body, fn {token, source, source_opts}, body ->
+      source = if source_opts, do: rewrite.(source, source_opts), else: source
       String.replace(body, token, source)
     end)
   end
 
-  defp regions(body, offset, acc) do
-    case Regex.run(@markup, body, return: :index) do
-      [{start, length}] ->
-        tag = binary_part(body, start, length)
-        consumed = start + length
-        scan_tag(tag, remaining(body, consumed), offset + consumed, acc)
-
-      nil ->
-        acc
-    end
-  end
-
-  defp scan_tag(tag, body, offset, acc) do
-    case Regex.run(@raw_opening, tag, capture: :all_but_first) do
-      [name, attrs] ->
-        name = String.downcase(name)
-        {length, consumed} = raw_end(body, name)
-        region = {offset, length, name, attrs}
-        regions(remaining(body, consumed), offset + consumed, [region | acc])
-
-      nil ->
-        regions(body, offset, acc)
-    end
-  end
-
-  defp raw_end(body, "plaintext"), do: {byte_size(body), byte_size(body)}
-
-  defp raw_end(body, name) do
-    case Regex.run(~r/<\/#{name}(?=[\t\n\f\r \/>])#{@tag_contents}>/is, body, return: :index) do
-      [{start, length}] -> {start, start + length}
-      nil -> {byte_size(body), byte_size(body)}
-    end
-  end
-
-  defp remaining(body, consumed), do: binary_part(body, consumed, byte_size(body) - consumed)
-
-  defp protect_region({{start, length, name, attrs}, index}, {body, saved}, opts) do
+  defp protect_region({tag, index}, {body, saved}, opts, prefix) do
+    {start, length} = tag.content_span
     source = binary_part(body, start, length)
-    type = content_type(name, attrs, opts)
-    token = <<0>> <> "R#{index}" <> <<0>>
+    source_opts = source_options(tag, opts)
+    token = Tokens.at(prefix, index)
     head = binary_part(body, 0, start)
     tail = binary_part(body, start + length, byte_size(body) - start - length)
 
-    {head <> token <> tail, [{token, source, type} | saved]}
+    {head <> token <> tail, [{token, source, source_opts} | saved]}
   end
 
-  defp content_type(tag, attrs, opts) do
-    cond do
-      tag == "style" and "css" in List.wrap(opts[:assets]) ->
-        "text/css"
+  defp source_options(%{in_template?: true}, _opts), do: nil
 
-      tag == "script" and "js" in List.wrap(opts[:assets]) and
-          Javascript.source?(attrs) ->
-        "application/javascript"
+  defp source_options(tag, opts) do
+    attrs = Enum.map(tag.attributes, &{&1.name, &1.decoded})
+
+    cond do
+      tag.name == "style" and HTMLReferences.enabled?(opts, "css") ->
+        %{content_type: "text/css"}
+
+      tag.name == "script" and HTMLReferences.enabled?(opts, "js") and
+          HTMLReferences.script_source(attrs) == :inline ->
+        %{
+          content_type: "application/javascript",
+          javascript_goal: HTMLReferences.script_goal(attrs)
+        }
 
       true ->
         nil

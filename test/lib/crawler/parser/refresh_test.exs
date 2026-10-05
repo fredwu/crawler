@@ -25,23 +25,34 @@ defmodule Crawler.Parser.RefreshTest do
   end
 
   test "keeps the opposite quote inside each quoted target" do
-    for {quote, target} <- [{"\"", "/next?name=O'Reilly"}, {"'", ~s|/next?name="Reilly"|}] do
+    for {quote, target, expected} <- [
+          {"\"", "/next?name=O'Reilly", "/next?name=O%27Reilly"},
+          {"'", ~s|/next?name="Reilly"|, "/next?name=%22Reilly%22"}
+        ] do
       assert {"link", ^target, "content", url} = parse("0; url=#{quote}#{target}#{quote}")
-      assert url == "http://example.com#{target}"
+      assert url == "http://example.com#{expected}"
+      assert URI.decode(URI.parse(url).query) == URI.parse(target).query
     end
   end
 
-  test "skips missing, empty, and unclosed targets" do
+  test "keeps quoted targets through EOF when their matching quote is absent" do
+    for {content, target, expected} <- [
+          {"0; url='/next", "/next", "http://example.com/next"},
+          {"0; url=\"/next", "/next", "http://example.com/next"},
+          {"0; url='/next\"", "/next\"", "http://example.com/next%22"},
+          {"0; url=\"/next'", "/next'", "http://example.com/next'"}
+        ] do
+      assert {"link", ^target, "content", ^expected} = parse(content)
+    end
+  end
+
+  test "skips missing and empty targets" do
     for content <- [
           "0",
           "0; url=",
           "0; url=   ",
           "0; url=''",
-          "0; url=\"\"",
-          "0; url='/next",
-          "0; url=\"/next",
-          "0; url='/next\"",
-          "0; url=\"/next'"
+          "0; url=\"\""
         ] do
       assert parse(content) == nil
     end

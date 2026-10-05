@@ -3,8 +3,7 @@ defmodule Crawler.Fetcher.Policer do
   Checks a series of conditions to determine whether it is okay to continue.
   """
 
-  require Logger
-
+  alias Crawler.Diagnostics
   alias Crawler.Store
 
   @uri_schemes ["http", "https"]
@@ -19,9 +18,10 @@ defmodule Crawler.Fetcher.Policer do
          {_, true} <- within_fetch_depth?(opts),
          {_, true} <- acceptable_uri_scheme?(opts),
          {_, true} <- not_fetched_yet?(opts),
-         {_, true} <- perform_url_filtering(opts) do
+         {:perform_url_filtering, true} <- perform_url_filtering(opts) do
       {:ok, opts}
     else
+      {:error, _} = error -> error
       {fail_type, _} -> police_warn(fail_type, opts)
     end
   end
@@ -64,14 +64,18 @@ defmodule Crawler.Fetcher.Policer do
   defp not_fetched_yet?(_opts), do: {:not_fetched_yet?, true}
 
   defp perform_url_filtering(%{url_filter: url_filter, url: url} = opts) do
-    {:ok, pass_through?} = url_filter.filter(url, opts)
+    case url_filter.filter(url, opts) do
+      {:ok, pass_through?} when is_boolean(pass_through?) ->
+        {:perform_url_filtering, pass_through?}
 
-    {:perform_url_filtering, pass_through?}
+      {:error, _} = error ->
+        error
+    end
   end
 
   defp perform_url_filtering(_opts), do: {:perform_url_filtering, true}
 
   defp police_warn(fail_type, opts) do
-    {:warn, "Fetch failed check '#{fail_type}', with opts: #{Kernel.inspect(opts)}."}
+    {:warn, "Fetch failed check '#{fail_type}', crawl: #{Diagnostics.crawl(opts)}."}
   end
 end

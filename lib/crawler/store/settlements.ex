@@ -2,7 +2,6 @@ defmodule Crawler.Store.Settlements do
   @moduledoc false
 
   alias Crawler.Fetcher.AliasSettlement
-  alias Crawler.QueueHandler
   alias Crawler.Store.Claims
   alias Crawler.Store.DB
   alias Crawler.Store.Page
@@ -108,27 +107,32 @@ defmodule Crawler.Store.Settlements do
     end)
   end
 
-  def schedule(state, scope) do
+  def prune(state, scope) do
     Enum.reduce(state.settlements.candidates, state, fn
       {ref, %Candidate{key: {_, ^scope}, status: status} = candidate}, state
       when status in [:waiting, :queued] ->
-        cond do
-          processed?(candidate.key) ->
-            drop(state, ref)
-
-          State.page_owner(state, candidate.key) == {:owned, nil} ->
-            drop(state, ref)
-
-          status == :waiting && candidate.source_done? && eligible?(state, candidate) ->
-            QueueHandler.requeue(%AliasSettlement{ref: ref, queue: candidate.queue})
-            put(state, ref, %{candidate | status: :queued})
-
-          true ->
-            state
-        end
+        if processed?(candidate.key) or State.page_owner(state, candidate.key) == {:owned, nil},
+          do: drop(state, ref),
+          else: state
 
       _, state ->
         state
+    end)
+  end
+
+  def schedule(state, scope) do
+    Enum.reduce(state.settlements.candidates, {[], state}, fn
+      {ref, %Candidate{key: {_, ^scope}, status: :waiting, source_done?: true} = candidate},
+      {jobs, state} ->
+        if eligible?(state, candidate) do
+          job = %AliasSettlement{ref: ref, queue: candidate.queue}
+          {[job | jobs], put(state, ref, %{candidate | status: :queued})}
+        else
+          {jobs, state}
+        end
+
+      _, result ->
+        result
     end)
   end
 
@@ -137,7 +141,7 @@ defmodule Crawler.Store.Settlements do
       %Candidate{status: :queued} = candidate ->
         cond do
           processed?(candidate.key) or not current?(state, candidate) ->
-            {:skip, drop(state, ref)}
+            {:skip, elem(candidate.key, 1), drop(state, ref)}
 
           not eligible?(state, candidate) ->
             {:skip, put(state, ref, %{candidate | status: :waiting})}

@@ -43,6 +43,7 @@ defmodule Crawler.ReqTestSiteTest do
 
   test "start_crawl preserves rejected and budget-denied results without tracking work" do
     site = ReqTestSite.open(verify_on_exit: false)
+    on_exit(fn -> ReqTestSite.close(site) end)
     scope = unique_scope("fixture-not-started")
     opts = [scope: scope, req_options: ReqTestSite.req_options(site)]
     missing = Keyword.put(opts, :queue, :crawler_fixture_unavailable_queue)
@@ -61,12 +62,12 @@ defmodule Crawler.ReqTestSiteTest do
       assert :ok = ReqTestSite.verify!(site)
     after
       Crawler.Store.drop_scope(scope)
-      ReqTestSite.close(site)
     end
   end
 
   test "verify! waits across a real crawl retry after its handler returns" do
     site = ReqTestSite.open(verify_on_exit: false)
+    on_exit(fn -> ReqTestSite.close(site) end)
 
     ReqTestSite.expect_once(site.site, "GET", "/retry", fn conn ->
       Plug.Conn.send_resp(conn, 500, "retry")
@@ -96,12 +97,12 @@ defmodule Crawler.ReqTestSiteTest do
     after
       send(worker, :continue_retry)
       Crawler.stop(crawl)
-      ReqTestSite.close(site)
     end
   end
 
   test "verify! reports a linked unexpected request after its parent handler returns" do
     site = ReqTestSite.open(verify_on_exit: false)
+    on_exit(fn -> ReqTestSite.close(site) end)
 
     ReqTestSite.expect_once(site.site, "GET", "/parent", fn conn ->
       conn
@@ -132,12 +133,12 @@ defmodule Crawler.ReqTestSiteTest do
     after
       send(worker, :continue_parse)
       Crawler.stop(crawl)
-      ReqTestSite.close(site)
     end
   end
 
   test "verify! waits for tracked work before its first HTTP request" do
     site = ReqTestSite.open(verify_on_exit: false)
+    on_exit(fn -> ReqTestSite.close(site) end)
     scope = unique_scope("fixture-queued")
     queue = paused_queue(scope)
 
@@ -159,13 +160,14 @@ defmodule Crawler.ReqTestSiteTest do
       assert :ok = Task.await(verifier)
     after
       Crawler.stop(crawl)
-      ReqTestSite.close(site)
     end
   end
 
   test "verify! ignores another fixture's paused queue in the same scope" do
     site = ReqTestSite.open(verify_on_exit: false)
+    on_exit(fn -> ReqTestSite.close(site) end)
     other = ReqTestSite.open(verify_on_exit: false)
+    on_exit(fn -> ReqTestSite.close(other) end)
     scope = unique_scope("fixture-isolated")
 
     ReqTestSite.expect_once(site.site, "GET", "/done", fn conn ->
@@ -193,13 +195,12 @@ defmodule Crawler.ReqTestSiteTest do
     after
       Crawler.stop(paused)
       Crawler.stop(completed)
-      ReqTestSite.close(site)
-      ReqTestSite.close(other)
     end
   end
 
   test "verify! treats a tracked crawl's stopped generation as settled" do
     site = ReqTestSite.open(verify_on_exit: false)
+    on_exit(fn -> ReqTestSite.close(site) end)
     scope = unique_scope("fixture-stopped")
     queue = paused_queue(scope)
 
@@ -217,12 +218,12 @@ defmodule Crawler.ReqTestSiteTest do
       assert :ok = Task.await(verifier)
     after
       Crawler.stop(crawl)
-      ReqTestSite.close(site)
     end
   end
 
   test "verify! reports missing expected calls" do
     site = ReqTestSite.open(hosts: 1, verify_on_exit: false)
+    on_exit(fn -> ReqTestSite.close(site) end)
 
     ReqTestSite.expect_once(site.site, "GET", "/missing", fn conn ->
       Plug.Conn.send_resp(conn, 200, "ok")
@@ -231,12 +232,11 @@ defmodule Crawler.ReqTestSiteTest do
     assert_raise ExUnit.AssertionError, ~r/exactly once, got 0 calls/, fn ->
       ReqTestSite.verify!(site)
     end
-
-    ReqTestSite.close(site)
   end
 
   test "verify! reports unexpected requests" do
     site = ReqTestSite.open(hosts: 1, verify_on_exit: false)
+    on_exit(fn -> ReqTestSite.close(site) end)
 
     assert {:ok, %Req.Response{status: 500}} =
              Req.get(site.url <> "/unexpected", ReqTestSite.req_options(site))
@@ -244,12 +244,11 @@ defmodule Crawler.ReqTestSiteTest do
     assert_raise ExUnit.AssertionError, ~r/Unexpected request/, fn ->
       ReqTestSite.verify!(site)
     end
-
-    ReqTestSite.close(site)
   end
 
   test "verify! reports an unexpected request that arrives while another is in flight" do
     site = ReqTestSite.open(hosts: 1, verify_on_exit: false)
+    on_exit(fn -> ReqTestSite.close(site) end)
     test_pid = self()
 
     ReqTestSite.expect_once(site.site, "GET", "/hold", fn conn ->
@@ -293,12 +292,11 @@ defmodule Crawler.ReqTestSiteTest do
     assert %ExUnit.AssertionError{message: message} = Task.await(verifier)
     assert message =~ "Unexpected request"
     assert {:ok, %Req.Response{status: 200}} = Task.await(hold)
-
-    ReqTestSite.close(site)
   end
 
   test "expect_once rejects extra calls without running the route handler again" do
     site = ReqTestSite.open(hosts: 1, verify_on_exit: false)
+    on_exit(fn -> ReqTestSite.close(site) end)
     {:ok, counter} = Agent.start_link(fn -> 0 end)
 
     ReqTestSite.expect_once(site.site, "GET", "/once", fn conn ->
@@ -317,12 +315,11 @@ defmodule Crawler.ReqTestSiteTest do
     assert_raise ExUnit.AssertionError, ~r/extra request/, fn ->
       ReqTestSite.verify!(site)
     end
-
-    ReqTestSite.close(site)
   end
 
   test "verify! reports route handler failures" do
     site = ReqTestSite.open(hosts: 1, verify_on_exit: false)
+    on_exit(fn -> ReqTestSite.close(site) end)
 
     ReqTestSite.expect_once(site.site, "GET", "/boom", fn _conn ->
       raise "boom"
@@ -334,12 +331,11 @@ defmodule Crawler.ReqTestSiteTest do
     assert_raise ExUnit.AssertionError, ~r/boom/, fn ->
       ReqTestSite.verify!(site)
     end
-
-    ReqTestSite.close(site)
   end
 
   test "verify! waits for in-flight route handlers" do
     site = ReqTestSite.open(hosts: 1, verify_on_exit: false)
+    on_exit(fn -> ReqTestSite.close(site) end)
     test_pid = self()
 
     ReqTestSite.expect_once(site.site, "GET", "/slow", fn conn ->
@@ -370,8 +366,6 @@ defmodule Crawler.ReqTestSiteTest do
 
     assert :ok = Task.await(verifier)
     assert {:ok, %Req.Response{status: 200}} = Task.await(request)
-
-    ReqTestSite.close(site)
   end
 
   defp verify_result(site) do

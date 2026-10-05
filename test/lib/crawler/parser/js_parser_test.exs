@@ -2,6 +2,296 @@ defmodule Crawler.Parser.JsParserTest do
   use ExUnit.Case, async: true
 
   alias Crawler.Parser.JsParser
+  alias Crawler.Parser.JsParser.Scanner
+
+  test "property keywords preserve division instead of starting regexes or statement headers" do
+    for word <-
+          ~w(return yield await case default else finally try catch if while for with switch function class export from import),
+        access <- [".", "?.", "./* café */", "?.\n/* café */"],
+        call <- ["", "()"] do
+      source =
+        "const n = obj#{access}#{word}#{call} / 2;" <>
+          ~S|import("./real.js"); const r = /import(".\/hidden.js")/;|
+
+      assert JsParser.specs(source) == ["./real.js"], source
+    end
+  end
+
+  test "real return and control keywords still permit regular expressions" do
+    for {prefix, suffix} <- [
+          {"function f() { return ", "}"},
+          {"function* f() { yield ", "}"},
+          {"try {} catch (error) ", ""},
+          {"if (ready) ", ""},
+          {"while (ready) ", ""},
+          {"for (;;) ", ""}
+        ] do
+      source = prefix <> ~S|/import(".\/hidden.js")/.test(text); import("./real.js");| <> suffix
+      assert JsParser.specs(source) == ["./real.js"], prefix
+    end
+  end
+
+  test "import is a complete identifier token rather than part of another identifier" do
+    for identifier <- [
+          "$import",
+          "_import",
+          "πimport",
+          "importπ",
+          "a\u0301import",
+          "a\u200Cimport",
+          "a\u00B7import",
+          "a\u30FBimport",
+          "\u1885import",
+          ~S|\u{61}import|,
+          ~S|import\u0061|
+        ] do
+      source = identifier <> ~S|("./fake.js"); import("./real.js");|
+
+      assert JsParser.specs(source) == ["./real.js"], identifier
+      assert [{start, length, "./real.js"}] = JsParser.spans(source)
+      assert binary_part(source, start, length) == "./real.js"
+      {masked, _strings} = Scanner.scan(source)
+      assert byte_size(masked) == byte_size(source)
+    end
+
+    source = ~S|$export("./fake.js"); πimport("./fake.js"); import value from "./real.js";|
+    assert JsParser.specs(source) == ["./real.js"]
+  end
+
+  test "distinguishes division after object expressions from regular expressions after blocks" do
+    source =
+      ~S|const n = {} / 2; import("./chunk.js"); const r = /x/;| <>
+        ~S|const nested = {child: {}} / 2; import("./nested.js");| <>
+        ~S|if (ready) {} /import\("\.\/hidden.js"\)/.test(text); import("./block.js");|
+
+    assert JsParser.specs(source) == ["./chunk.js", "./nested.js", "./block.js"]
+    {masked, _strings} = Scanner.scan(source)
+    assert byte_size(masked) == byte_size(source)
+    assert masked =~ "{} / 2;"
+    assert masked =~ "{}} / 2;"
+    refute masked =~ "hidden.js"
+  end
+
+  test "division after function and class expressions does not hide later imports" do
+    for expression <- [
+          "function() {}",
+          "function named() {}",
+          "async function() {}",
+          "function* named() {}",
+          "function(value = function() {}) {}",
+          "class {}",
+          "class Named {}",
+          "class extends Factory({}) {}",
+          "class extends (class {}) {}"
+        ] do
+      source =
+        "const n = #{expression} / 2;" <>
+          ~S|import("./chunk.js"); const r = /import(".\/hidden.js")/;|
+
+      assert JsParser.specs(source) == ["./chunk.js"], expression
+      {masked, _strings} = Scanner.scan(source)
+      assert masked =~ " / 2;"
+      refute masked =~ "hidden.js"
+    end
+  end
+
+  test "declaration bodies and nested function blocks allow regular expressions" do
+    for declaration <- [
+          "function named() {}",
+          "async function named() {}",
+          "function* named() {}",
+          "class Named {}",
+          "export function named() {}",
+          "export default async function named() {}",
+          "export default class {}"
+        ] do
+      source =
+        declaration <>
+          ~S| /import(".\/hidden.js")/.test(text); import("./real.js");|
+
+      assert JsParser.specs(source) == ["./real.js"], declaration
+    end
+
+    for header <- ["const fn = () =>", "const fn = function()", "const fn = async function()"] do
+      source =
+        header <>
+          ~S| { {} /import(".\/hidden.js")/.test(text); return import("./body.js"); }; import("./after.js");|
+
+      assert JsParser.specs(source) == ["./body.js", "./after.js"], header
+    end
+  end
+
+  test "line terminators and multiline comments permit function and class declarations after ASI" do
+    for terminator <- ["\n", "\r", "\r\n", <<0x2028::utf8>>, <<0x2029::utf8>>],
+        separator <- [terminator, "/* café" <> terminator <> " */", "// café" <> terminator],
+        declaration <- ["function f() {}", "async function f() {}", "class Named {}"] do
+      source =
+        "const n = 1" <>
+          separator <>
+          declaration <>
+          terminator <>
+          ~S|/["']/.test(text); import("./real.js"); const hidden = /import(".\/hidden.js")/;|
+
+      assert JsParser.specs(source) == ["./real.js"]
+      assert [{start, length, "./real.js"}] = JsParser.spans(source)
+      assert binary_part(source, start, length) == "./real.js"
+    end
+  end
+
+  test "return line boundaries start statement blocks and keep later top-level imports visible" do
+    for terminator <- ["\n", "\r", "\r\n", <<0x2028::utf8>>, <<0x2029::utf8>>],
+        separator <- [terminator, "/* café" <> terminator <> " */", ";" <> terminator] do
+      source =
+        "function f() { return" <>
+          separator <>
+          ~S|{} /["']/.test(text); } import("./real.js");|
+
+      assert JsParser.specs(source) == ["./real.js"]
+      assert [{start, length, "./real.js"}] = JsParser.spans(source)
+      assert binary_part(source, start, length) == "./real.js"
+    end
+
+    for {opening, closing} <- [{" ", ""}, {"/* café */", ""}, {" (\n", ")"}] do
+      source =
+        "function f() { return#{opening}{}#{closing} / 2; }" <>
+          ~S|import("./real.js"); const r = /x/;|
+
+      assert JsParser.specs(source) == ["./real.js"]
+    end
+  end
+
+  test "ordinary statement labels allow block regexes and keep outside imports visible" do
+    for label <- ["label:", "outer: inner:", "πlabel /* café */ :", "label\n:"],
+        prefix <- ["", "const n = 1\n", "return\n"] do
+      source =
+        "function f() { #{prefix}#{label}" <>
+          ~S| {} /["']/.test(text); } import("./real.js");|
+
+      assert JsParser.specs(source) == ["./real.js"]
+      assert [{start, length, "./real.js"}] = JsParser.spans(source)
+      assert binary_part(source, start, length) == "./real.js"
+    end
+
+    for expression <- [
+          "const n = { label: {} / 2 }",
+          "const n = { child: { label: {} / 2 } }",
+          "const n = ready ? obj?.label : {} / 2",
+          "const n = ready ? {} : {} / 2"
+        ] do
+      source = expression <> ~S|; import("./real.js"); const r = /x/;|
+      assert JsParser.specs(source) == ["./real.js"]
+    end
+  end
+
+  test "switch labels start statement lists without treating conditional or object colons as labels" do
+    for label <- [
+          "case 1",
+          "case condition ? 1 : 2",
+          "case condition ? left ?? 1 : obj?.value",
+          "default"
+        ],
+        declaration <- ["function f() {}", "async function f() {}", "class Named {}"] do
+      source =
+        "switch (value) { #{label}: #{declaration}" <>
+          ~S| /["']/.test(text); import("./real.js"); break; }| <>
+          ~S|const object = { case: function() {} / 2 }; import("./after.js"); const r = /x/;|
+
+      assert JsParser.specs(source) == ["./real.js", "./after.js"]
+    end
+  end
+
+  test "line breaks keep expression bodies and property keywords in expression context" do
+    for terminator <- ["\n", "\r", "\r\n", <<0x2028::utf8>>, <<0x2029::utf8>>],
+        expression <- [
+          "const n = #{terminator}function() {}",
+          "const n = #{terminator}async function() {}",
+          "const n = #{terminator}class {}",
+          "const n = class extends #{terminator}function() {} {}",
+          "const n = obj.#{terminator}function()",
+          "const n = obj?.#{terminator}class()"
+        ] do
+      source = expression <> ~S| / 2; import("./real.js"); const r = /import(".\/hidden.js")/;|
+      assert JsParser.specs(source) == ["./real.js"]
+    end
+
+    source =
+      ~S|function outer() { return| <>
+        "\n" <>
+        ~S|function inner() {} /["']/.test(text); import("./return.js"); }|
+
+    assert JsParser.specs(source) == ["./return.js"]
+  end
+
+  test "quoted binding names do not hide the actual from specifier" do
+    source = ~S|
+    import { "name" as name } from "./dep.js";
+    export { name as "name" } from "./dep.js";
+    import { 'from' as local } from './user\u0020file.js';
+    export { local as "name's" } from "./user's.js";
+    const text = 'export { name as "name" } from "./fake.js"';
+    // import { "name" as name } from "./fake.js";
+    |
+
+    assert JsParser.specs(source) == ["./dep.js", "./user file.js", "./user's.js"]
+    assert length(JsParser.spans(source)) == 4
+
+    for {start, length, cooked} <- JsParser.spans(source) do
+      raw = binary_part(source, start, length)
+      assert {:ok, ^cooked} = Crawler.Parser.JsParser.StringLiteral.decode(raw)
+    end
+  end
+
+  test "uses matching delimiters and cooks escaped specifiers while keeping raw byte spans" do
+    literals = [
+      {~S|"./user's.js"|, "./user's.js"},
+      {~S|'./say"hi.js'|, ~s|./say"hi.js|},
+      {~S|"./user\u0020file.js"|, "./user file.js"},
+      {~S|'./\x63hunk.js'|, "./chunk.js"},
+      {~S|"./caf\u00e9.js"|, "./café.js"},
+      {~S|`./\u{1F680}.js`|, "./🚀.js"},
+      {~S|"./\uD83D\uDE80.js"|, "./🚀.js"},
+      {~S|'./user\'s.js'|, "./user's.js"},
+      {~S|"./literal${name}.js"|, "./literal${name}.js"},
+      {~S|`./literal\${name}.js`|, "./literal${name}.js"},
+      {"\"./long\\\r\nname.js\"", "./longname.js"}
+    ]
+
+    for {literal, cooked} <- literals,
+        statement <- [
+          "import #{literal};",
+          "export { value } from #{literal};",
+          "import(#{literal});"
+        ] do
+      source = ~s|const label = "café";\n| <> statement
+
+      assert JsParser.specs(source) == [cooked]
+      assert [{start, length, ^cooked}] = JsParser.spans(source)
+      assert binary_part(source, start, length) == binary_part(literal, 1, byte_size(literal) - 2)
+    end
+  end
+
+  test "keeps escaped strings, regexes, comments, computed imports and package imports out of specs" do
+    source =
+      ~S|const note = "import(\"./fake.js\")";| <>
+        ~S|const pattern = /import\("\.\/fake.js"\)/;| <>
+        ~S|/* import("./fake.js"); */| <>
+        ~S|import("./user\u0020file.js" + name); import(`./${name}.js`);| <>
+        ~S|import("re\u0061ct"); import("./bad\uXYZW.js"); import("./bad\uD800.js");| <>
+        ~S|import("./real.js");|
+
+    assert JsParser.specs(source) == ["./real.js"]
+  end
+
+  test "all JavaScript line terminators end a line comment and start a statement" do
+    for terminator <- ["\n", "\r", "\r\n", <<0x2028::utf8>>, <<0x2029::utf8>>],
+        prefix <- [~s|// import "./hidden.js"|, ~s|const note = "café"|] do
+      source = prefix <> terminator <> ~s|import "./real.js";|
+
+      assert JsParser.specs(source) == ["./real.js"]
+      assert [{start, length, "./real.js"}] = JsParser.spans(source)
+      assert binary_part(source, start, length) == "./real.js"
+    end
+  end
 
   test "follows relative, root, and remote specifiers" do
     source = """

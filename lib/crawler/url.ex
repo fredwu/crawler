@@ -1,7 +1,7 @@
 defmodule Crawler.URL do
   @moduledoc false
 
-  alias Crawler.URL.Host
+  alias Crawler.URL.Authority
   alias Crawler.URL.Percent
 
   @schemes ["http", "https"]
@@ -10,6 +10,7 @@ defmodule Crawler.URL do
     case prepare(url) do
       {:http, uri} -> uri |> fold_uri() |> URI.to_string()
       {:plain, plain} -> plain_normalize(plain)
+      {:invalid, invalid} -> invalid |> split_piece("#") |> elem(0)
     end
   end
 
@@ -24,39 +25,34 @@ defmodule Crawler.URL do
         |> URI.to_string()
         |> strip_trailing_slash()
 
-      {:plain, plain} ->
+      {kind, plain} when kind in [:plain, :invalid] ->
         plain_canonical(plain)
     end
   end
 
   def resolve(link, base) when is_binary(link) do
-    # Scheme checks must see the same spelling normalize/1 fetches. A tab,
-    # break, or path backslash is removed before this link is classified.
     link = sanitize(link)
 
-    cond do
-      link == "" ->
-        :skip
+    link =
+      if is_binary(base) and http_scheme?(sanitize(base)),
+        do: slash_before_query(link),
+        else: link
 
-      disallowed?(link) ->
-        :skip
-
-      true ->
-        link
-        |> merge(base)
-        |> crawlable()
+    with false <- link == "",
+         {:ok, reference} <- reference(link),
+         {:ok, merged} <- merge(reference, base) do
+      crawlable(merged)
+    else
+      _ -> :skip
     end
   end
 
   def resolve(_link, _base), do: :skip
 
   defp http_uri(url) do
-    uri = URI.parse(url)
-
-    if uri.scheme in @schemes and is_binary(uri.host) and uri.host != "" do
-      {:ok, uri}
-    else
-      :plain
+    case URI.parse(url) do
+      %URI{scheme: scheme} = uri when scheme in @schemes -> Authority.parse(url, uri)
+      _ -> :error
     end
   end
 
@@ -66,7 +62,7 @@ defmodule Crawler.URL do
     if http_scheme?(trimmed) do
       case http_uri(slash_before_query(trimmed)) do
         {:ok, uri} -> {:http, uri}
-        :plain -> {:plain, trimmed}
+        :error -> {:invalid, trimmed}
       end
     else
       {:plain, trimmed}
@@ -84,7 +80,6 @@ defmodule Crawler.URL do
       uri
       | scheme: String.downcase(uri.scheme),
         userinfo: fold_userinfo(uri.userinfo),
-        host: Host.fold(uri.host),
         path: fold_path(uri.path),
         query: fold_query(uri.query),
         fragment: nil
@@ -98,14 +93,19 @@ defmodule Crawler.URL do
   defp fold_path(nil), do: nil
 
   defp fold_path(path) do
+    path |> canonicalize_path() |> remove_dot_segments()
+  end
+
+  defp canonicalize_path(nil), do: nil
+
+  defp canonicalize_path(path) do
     path
     |> :binary.replace("\\", "/", [:global])
-    |> Percent.canonicalize()
-    |> remove_dot_segments()
+    |> Percent.canonicalize(:path)
   end
 
   defp fold_query(nil), do: nil
-  defp fold_query(query), do: Percent.canonicalize(query)
+  defp fold_query(query), do: Percent.canonicalize(query, :query)
 
   defp plain_normalize(url) do
     url
@@ -171,45 +171,35 @@ defmodule Crawler.URL do
     if absolute?, do: "/" <> body, else: body
   end
 
-  defp disallowed?(link) do
-    case URI.parse(link) do
-      %URI{scheme: scheme} when is_binary(scheme) and scheme not in @schemes -> true
-      _ -> false
-    end
-  end
+  defp reference(link) do
+    uri = URI.parse(link)
 
-  defp merge(link, base) do
     cond do
-      scheme_absolute?(link) ->
-        URI.parse(link)
-
-      is_binary(base) and base != "" ->
-        # Fold a dot segment in the base before merging. Elixir otherwise
-        # leaves a "+" when the base path ends in `.` or `..`.
-        URI.merge(merge_base(base), link)
-
-      true ->
-        URI.parse(link)
+      is_binary(uri.scheme) and uri.scheme not in @schemes -> :error
+      uri.scheme in @schemes or String.starts_with?(link, "//") -> Authority.parse(link, uri)
+      true -> {:ok, uri}
     end
   end
 
-  defp merge_base(base) do
-    case http_uri(base) do
-      {:ok, _uri} -> normalize(base)
-      :plain -> base
+  defp merge(%URI{scheme: scheme} = reference, _base) when scheme in @schemes do
+    {:ok, reference}
+  end
+
+  defp merge(reference, base) when is_binary(base) and base != "" do
+    case prepare(base) do
+      {:http, uri} ->
+        reference = %{reference | path: canonicalize_path(reference.path)}
+        {:ok, uri |> fold_uri() |> URI.merge(reference)}
+
+      _ ->
+        :error
     end
   end
 
-  defp scheme_absolute?(link) do
-    case URI.parse(link) do
-      %URI{scheme: scheme, host: host} when scheme in @schemes and is_binary(host) -> true
-      _ -> false
-    end
-  end
+  defp merge(reference, _base), do: {:ok, reference}
 
-  defp crawlable(%URI{scheme: scheme, host: host} = uri)
-       when scheme in @schemes and is_binary(host) do
-    {:ok, normalize(URI.to_string(%{uri | fragment: nil}))}
+  defp crawlable(%URI{scheme: scheme} = uri) when scheme in @schemes do
+    {:ok, uri |> fold_uri() |> URI.to_string()}
   end
 
   defp crawlable(_uri), do: :skip

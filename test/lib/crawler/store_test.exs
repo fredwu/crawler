@@ -3,52 +3,16 @@ defmodule Crawler.StoreTest do
 
   alias Crawler.Store
 
-  test "a save that raises leaves the store running" do
-    scope = scope("save-boom")
-    assert {:error, "disk"} = Store.commit(scope, nil, fn -> raise "disk" end)
-
-    assert Store.ops_count(scope) == 0
-  end
-
-  test "a slow save does not block another scope" do
-    parent = self()
-    scope = scope("slow-commit")
-    other = scope("other-commit")
-
-    task =
-      Task.async(fn ->
-        Store.commit(scope, nil, fn ->
-          send(parent, :entered)
-
-          receive do
-            :release -> :ok
-          end
-        end)
-      end)
-
-    assert_receive :entered, 1_000
-
-    claim = Task.async(fn -> Store.try_claim(other, 5, nil) end)
-
-    try do
-      assert :ok = Task.await(claim, 1_000)
-    after
-      send(task.pid, :release)
-    end
-
-    assert :ok = Task.await(task)
-    assert :ok = Store.inflight_dec(other)
-  end
-
-  test "a dropped scope keeps its generation" do
+  test "a dropped scope keeps its new generation token" do
     scope = scope("generation")
 
-    assert Store.generation(scope) == 0
-    assert Store.drop_scope(scope) == 1
-    assert Store.generation(scope) == 1
-    assert Store.try_claim(scope, 1, 0) == :stale
-    assert Store.try_claim(scope, 1, 1) == :ok
-    assert :ok = Store.finish_work(scope, 1, true)
+    stale = Store.generation(scope)
+    generation = Store.drop_scope(scope)
+    refute generation == stale
+    assert Store.generation(scope) == generation
+    assert Store.try_claim(scope, 1, stale) == :stale
+    assert Store.try_claim(scope, 1, generation) == :ok
+    assert :ok = Store.finish_work(scope, generation, true)
     assert Store.inflight_count(scope) == 0
   end
 
@@ -64,9 +28,10 @@ defmodule Crawler.StoreTest do
     File.write!(new_temp, "NEW")
     File.write!(old_temp, "OLD")
 
+    stale = Store.generation(scope)
     new_gen = Store.drop_scope(scope)
     assert :ok = Store.publish_file(scope, new_gen, dest, new_temp)
-    assert {:error, :stale} = Store.publish_file(scope, new_gen - 1, dest, old_temp)
+    assert {:error, :stale} = Store.publish_file(scope, stale, dest, old_temp)
 
     assert File.read!(dest) == "NEW"
     refute File.exists?(old_temp)
@@ -119,8 +84,8 @@ defmodule Crawler.StoreTest do
 
   test "stale workers cannot change a newer scope's pages or counters" do
     scope = scope("stale-work")
+    stale = Store.generation(scope)
     generation = Store.drop_scope(scope)
-    stale = generation - 1
     key = {"http://kept.example/stale-work", scope}
 
     assert {:ok, _} = Store.add(key, generation)
@@ -184,15 +149,16 @@ defmodule Crawler.StoreTest do
 
     assert Store.queue_record(queue) == nil
     assert Store.queue_scopes(queue) == []
-    assert Store.generation(scope) == generation + 1
+    refute Store.generation(scope) == generation
     assert Store.inflight_count(scope) == 0
     assert Store.pending_count(scope) == 0
     assert Store.ops_count(scope) == 1
     assert Store.find_processed(kept)
     refute Store.find(open)
 
+    retired_generation = Store.generation(scope)
     assert :ok = Store.release_queue(queue)
-    assert Store.generation(scope) == generation + 1
+    assert Store.generation(scope) == retired_generation
   end
 
   test "releasing one queue retires only its work in a shared scope" do
@@ -246,7 +212,7 @@ defmodule Crawler.StoreTest do
     assert Store.find(lost)
 
     assert :ok = Store.release_queue(other_queue)
-    assert Store.generation(scope) == generation + 1
+    refute Store.generation(scope) == generation
     assert Store.inflight_count(scope) == 0
     assert Store.pending_count(scope) == 0
     refute Store.find(lost)

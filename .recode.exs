@@ -3,7 +3,7 @@
   autocorrect: true,
   dry: false,
   verbose: false,
-  inputs: ["{mix,.formatter}.exs", "{apps,config,lib,test}/**/*.{ex,exs}"],
+  inputs: ["{mix,.formatter}.exs", "{apps,config,examples,lib,test}/**/*.{ex,exs}"],
   formatter: {Recode.Formatter, []},
   tasks: [
     {Recode.Task.AliasExpansion, []},

@@ -5,9 +5,11 @@ defmodule Crawler.Snapper do
 
   require Logger
 
+  alias Crawler.Diagnostics
   alias Crawler.MediaType
   alias Crawler.Snapper.DirMaker
   alias Crawler.Snapper.LinkReplacer
+  alias Crawler.Snapper.Staging
   alias Crawler.Store
 
   @utf8_bom <<0xEF, 0xBB, 0xBF>>
@@ -30,7 +32,7 @@ defmodule Crawler.Snapper do
       {:ok, <<0xEF, 0xBB, 0xBF, "hello">>}
 
       iex> Snapper.snap("hello", %{save_to: "nope", url: "http://snapper.local/index.html"})
-      {:error, "Cannot write to file nope/snapper.local/index.html, reason: enoent"}
+      {:error, {:snapshot, :write, :enoent}}
 
       iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://snapper.local/hello"})
       iex> File.read(tmp("snapper/snapper.local/hello", "__index.html"))
@@ -90,33 +92,25 @@ defmodule Crawler.Snapper do
   end
 
   defp publish?(opts) do
-    is_integer(opts[:generation]) and not is_nil(opts[:scope])
+    not is_nil(opts[:generation]) and not is_nil(opts[:scope])
   end
 
   defp publish(body, file_path, opts) do
-    temp =
-      Path.join(
-        Path.dirname(file_path),
-        ".crawler-#{System.unique_integer([:positive])}.tmp"
-      )
+    temp = Path.join(Path.dirname(file_path), Staging.filename())
 
-    # An external exit skips `rescue` and `after`, so this process removes the
-    # temp file when the worker dies.
-    watch_temp(temp)
+    watcher = watch_temp(temp)
 
-    case File.write(temp, body) do
-      :ok ->
-        try do
+    try do
+      case File.write(temp, body) do
+        :ok ->
           before_publish(opts)
           publish_temp(temp, file_path, opts)
-        rescue
-          exception ->
-            File.rm(temp)
-            reraise exception, __STACKTRACE__
-        end
 
-      {:error, reason} ->
-        write_error(file_path, reason)
+        {:error, reason} ->
+          write_error(:write, reason, opts)
+      end
+    after
+      finish_temp(watcher)
     end
   end
 
@@ -126,13 +120,25 @@ defmodule Crawler.Snapper do
   defp watch_temp(temp) do
     worker = self()
 
-    spawn(fn ->
+    # A killed caller skips `after`; its monitor still triggers staging cleanup.
+    spawn_monitor(fn ->
       ref = Process.monitor(worker)
 
       receive do
-        {:DOWN, ^ref, _, _, _} -> File.rm(temp)
+        {:finished, ^worker} -> :ok
+        {:DOWN, ^ref, :process, ^worker, _} -> :ok
       end
+
+      File.rm(temp)
     end)
+  end
+
+  defp finish_temp({watcher, ref}) do
+    send(watcher, {:finished, self()})
+
+    receive do
+      {:DOWN, ^ref, :process, ^watcher, _} -> :ok
+    end
   end
 
   defp publish_temp(temp, file_path, opts) do
@@ -141,26 +147,22 @@ defmodule Crawler.Snapper do
         {:ok, opts}
 
       {:error, :stale} = error ->
-        File.rm(temp)
         error
 
-      {:error, message} = error ->
-        File.rm(temp)
-        Logger.error(message)
-        error
+      {:error, {:snapshot, operation, reason}} ->
+        write_error(operation, reason, opts)
     end
   end
 
   defp write_file(file_path, body, opts) do
     case File.write(file_path, body) do
       :ok -> {:ok, opts}
-      {:error, reason} -> write_error(file_path, reason)
+      {:error, reason} -> write_error(:write, reason, opts)
     end
   end
 
-  defp write_error(file_path, reason) do
-    message = "Cannot write to file #{file_path}, reason: #{reason}"
-    Logger.error(message)
-    {:error, message}
+  defp write_error(operation, reason, opts) do
+    Logger.error("Snapshot #{operation} failed for #{Diagnostics.url(opts[:url])}: #{reason}")
+    {:error, {:snapshot, operation, reason}}
   end
 end

@@ -16,6 +16,10 @@ defmodule Crawler.Fetcher.Requester do
   @doc """
   Makes HTTP requests via `Crawler.HTTP`.
 
+  Header names are case-insensitive. Default headers are overridden by
+  modifier headers, modifier options, and `:req_options` headers, in that order.
+  Use `:redirect` to control redirects; `:follow_redirects` is not supported.
+
   ## Examples
 
       iex> adapter = fn request ->
@@ -32,17 +36,27 @@ defmodule Crawler.Fetcher.Requester do
       200
   """
   def make(opts) do
-    HTTP.get(opts[:url], fetch_headers(opts), fetch_opts(opts), &allow_redirect?(&1, opts))
+    modifier_opts = opts[:modifier].opts(opts)
+
+    HTTP.get(
+      opts[:url],
+      fetch_headers(opts, modifier_opts),
+      fetch_opts(opts, modifier_opts),
+      &allow_redirect?(&1, opts)
+    )
   end
 
-  defp fetch_headers(opts) do
-    [{"User-Agent", opts[:user_agent]}] ++ opts[:modifier].headers(opts)
+  defp fetch_headers(opts, modifier_opts) do
+    Req.new(headers: [{"User-Agent", opts[:user_agent]}])
+    |> Req.merge(headers: opts[:modifier].headers(opts))
+    |> Req.merge(headers: Keyword.get(modifier_opts, :headers, []))
+    |> Map.fetch!(:headers)
   end
 
-  defp fetch_opts(opts) do
+  defp fetch_opts(opts, modifier_opts) do
     @fetch_opts
     |> Keyword.merge(timeout_opts(opts[:timeout]))
-    |> Keyword.merge(opts[:modifier].opts(opts))
+    |> Keyword.merge(Keyword.delete(modifier_opts, :headers))
     |> Keyword.merge(opts[:req_options] || [])
   end
 

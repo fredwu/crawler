@@ -12,7 +12,8 @@ defmodule Crawler.Snapper.LinkReplacerCollisionTest do
         {"quoted attributes", "text/html", ~s|<a href="FIRST">one</a><a href="SECOND">two</a>|},
         {"unquoted attributes", "text/html", "<a href=FIRST>one</a><a href=SECOND>two</a>"},
         {"srcset", "text/html", ~s|<img srcset="FIRST 1x, SECOND 2x">|},
-        {"imagesrcset", "text/html", ~s|<link imagesrcset="FIRST 1x, SECOND 2x">|},
+        {"imagesrcset", "text/html",
+         ~s|<link rel="preload" as="image" imagesrcset="FIRST 1x, SECOND 2x">|},
         {"refresh", "text/html",
          ~s|<meta http-equiv="refresh" content="0; url=FIRST"><meta http-equiv="refresh" content="0; url=SECOND">|},
         {"style attributes", "text/html",
@@ -51,6 +52,43 @@ defmodule Crawler.Snapper.LinkReplacerCollisionTest do
                literal <>
                " -->" <>
                ~s|<a href="#{Linker.offline_link(@page, @absolute)}">one</a>|
+  end
+
+  test "preserves raw text protection tokens in markup and raw text" do
+    literal = <<0>> <> "R0" <> <<0>> <> " " <> <<0>> <> "RR0" <> <<0>>
+
+    source =
+      "<p>" <>
+        literal <>
+        "</p>" <>
+        ~s|<style>.x{background:url("a.png")}/* | <>
+        literal <>
+        " */</style>" <>
+        "<textarea>" <> literal <> "</textarea>"
+
+    assert {:ok, body} = LinkReplacer.replace_links(source, opts("text/html"))
+
+    assert body ==
+             String.replace(
+               source,
+               ~s|url("a.png")|,
+               ~s|url("#{Linker.offline_link(@page, "a.png")}")|
+             )
+  end
+
+  test "preserves data protection tokens in CSS and in data URLs" do
+    literal = <<0>> <> "D0" <> <<0>> <> " " <> <<0>> <> "DD0" <> <<0>>
+    data = ~s|"data:image/svg+xml,<svg>#{literal}a.png</svg>"|
+    source = ~s|.x{background:url(#{data}),url("a.png")}/* #{literal} */|
+
+    assert {:ok, body} = LinkReplacer.replace_links(source, opts("text/css"))
+
+    assert body ==
+             String.replace(
+               source,
+               ~s|url("a.png")|,
+               ~s|url("#{Linker.offline_link(@page, "a.png")}")|
+             )
   end
 
   defp render(template, first, second) do

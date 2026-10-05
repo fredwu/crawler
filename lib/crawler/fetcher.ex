@@ -6,6 +6,7 @@ defmodule Crawler.Fetcher do
   require Logger
 
   alias Crawler.Charset
+  alias Crawler.Diagnostics
   alias Crawler.Fetcher.HeaderPreparer
   alias Crawler.Fetcher.Policer
   alias Crawler.Fetcher.Recorder
@@ -36,7 +37,7 @@ defmodule Crawler.Fetcher do
     if stale?(opts), do: {:warn, :stale}, else: request(opts)
   end
 
-  defp stale?(%{generation: generation, scope: scope} = opts) when is_integer(generation) do
+  defp stale?(%{generation: generation, scope: scope} = opts) when not is_nil(generation) do
     not Store.current?(scope, generation, opts[:queue])
   end
 
@@ -58,10 +59,13 @@ defmodule Crawler.Fetcher do
         fetch_url_rejected(rejected, opts)
 
       {:error, %Req.TransportError{reason: reason}} ->
-        fetch_url_failed(reason, opts)
+        fetch_url_failed(transport_reason(reason), opts)
+
+      {:error, %Req.TooManyRedirectsError{} = exception} ->
+        fetch_url_failed(Exception.message(exception), opts)
 
       {:error, %{__exception__: true} = exception} ->
-        fetch_url_failed(Exception.message(exception), opts)
+        fetch_url_failed(exception.__struct__, opts)
     end
   end
 
@@ -73,7 +77,7 @@ defmodule Crawler.Fetcher do
          {:ok, opts} <- record_referrer_url(response, body, opts) do
       case snap_page(body, opts) do
         {:ok, _} ->
-          Logger.debug("Fetched #{opts[:url]}")
+          Logger.debug(fn -> "Fetched #{Diagnostics.url(opts[:url])}" end)
           %Page{url: opts[:url], body: body, opts: opts}
 
         {:error, :stale} ->
@@ -90,7 +94,7 @@ defmodule Crawler.Fetcher do
   end
 
   defp fetch_url_retryable(status_code, opts) do
-    msg = "Failed to fetch #{opts[:url]}, status code: #{status_code}"
+    msg = "Failed to fetch #{Diagnostics.url(opts[:url])}, status code: #{status_code}"
 
     Logger.debug(msg)
 
@@ -98,7 +102,7 @@ defmodule Crawler.Fetcher do
   end
 
   defp fetch_url_non_200(status_code, opts) do
-    msg = "Failed to fetch #{opts[:url]}, status code: #{status_code}"
+    msg = "Failed to fetch #{Diagnostics.url(opts[:url])}, status code: #{status_code}"
 
     Logger.debug(msg)
 
@@ -106,7 +110,7 @@ defmodule Crawler.Fetcher do
   end
 
   defp fetch_url_failed(reason, opts) do
-    msg = "Failed to fetch #{opts[:url]}, reason: #{format_reason(reason)}"
+    msg = "Failed to fetch #{Diagnostics.url(opts[:url])}, reason: #{format_reason(reason)}"
 
     Logger.debug(msg)
 
@@ -114,7 +118,7 @@ defmodule Crawler.Fetcher do
   end
 
   defp fetch_url_rejected(%HTTP.RedirectRejected{url: next}, opts) do
-    msg = "Redirect rejected for #{opts[:url]} to #{next}"
+    msg = "Redirect rejected for #{Diagnostics.url(opts[:url])} to #{Diagnostics.url(next)}"
 
     Logger.debug(msg)
 
@@ -123,6 +127,9 @@ defmodule Crawler.Fetcher do
 
   defp format_reason(reason) when is_binary(reason), do: reason
   defp format_reason(reason), do: inspect(reason)
+
+  defp transport_reason(reason) when is_atom(reason), do: reason
+  defp transport_reason(_reason), do: :transport_error
 
   defp record_referrer_url(response, body, opts) do
     final = final_url(response, opts[:url])
@@ -186,15 +193,11 @@ defmodule Crawler.Fetcher do
     end
   end
 
-  # The response body belongs to the landing page. Links to that address need
-  # their own file, with relatives computed from where that file sits. The
-  # requested address keeps a copy too, so a link to the old address still
-  # opens the page that was fetched.
-  defp snap_distinct_landing(_body, %{alias_candidate: _ref} = opts), do: {:ok, opts}
-
-  defp snap_distinct_landing(body, %{url: url, referrer_url: final} = opts)
+  # Publishing the landing file requires the alias acquired for this fetch.
+  # Processed pages keep their copy; retained fallbacks publish after settlement.
+  defp snap_distinct_landing(body, %{url: url, alias_url: final} = opts)
        when is_binary(final) do
-    if final == url or Snapshot.path(final) == Snapshot.path(url) do
+    if Snapshot.path(final) == Snapshot.path(url) do
       {:ok, opts}
     else
       case Snapper.snap(body, %{opts | url: final}) do

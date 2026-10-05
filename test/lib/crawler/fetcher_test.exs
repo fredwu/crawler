@@ -131,7 +131,7 @@ defmodule Crawler.FetcherTest do
     end)
   end
 
-  test "failure: unable to write", %{site: site, url: url, path: path, req_options: req_options} do
+  test "failure: unable to write", %{site: site, url: url, req_options: req_options} do
     url = "#{url}/fetcher/fail.html"
 
     ReqTestSite.expect_once(site, "GET", "/fetcher/fail.html", fn conn ->
@@ -143,8 +143,7 @@ defmodule Crawler.FetcherTest do
       |> Map.merge(%{url: url, save_to: "nope", req_options: req_options})
       |> Fetcher.fetch()
 
-    assert {:error, "Cannot write to file nope/#{path}/fetcher/fail.html, reason: enoent"} ==
-             fetcher
+    assert {:error, {:snapshot, :write, :enoent}} == fetcher
   end
 
   test "snap /fetcher/page.html", %{

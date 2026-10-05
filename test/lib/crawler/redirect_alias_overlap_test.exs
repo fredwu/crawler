@@ -262,7 +262,8 @@ defmodule Crawler.RedirectAliasOverlapTest do
     await_idle(fresh)
     send(rig.direct, :release)
     assert %Page{body: "RETRY"} = Store.find_processed({rig.landing, rig.scope})
-    assert Store.generation(rig.scope) == rig.opts.generation + 1
+    assert Store.generation(rig.scope) == fresh.generation
+    refute Store.current?(rig.scope, rig.opts.generation)
     assert Store.ops_count(rig.scope) == 1
     assert_settled(rig.scope)
   end

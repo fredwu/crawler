@@ -132,7 +132,7 @@ defmodule Crawler.RedirectAliasRecoveryTest do
                req_options: context.req_options
              })
 
-    assert Store.generation(scope) == generation + 1
+    refute Store.generation(scope) == generation
     refute Store.find({landing, scope})
     refute Store.find({"#{context.url}/reused/old", scope})
   end

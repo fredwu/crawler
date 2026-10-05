@@ -7,14 +7,18 @@ defmodule Crawler.Store.State do
   alias Crawler.Store.Settlements
   alias Crawler.Store.Work
 
-  defstruct scopes: %{},
+  @enforce_keys [:incarnation]
+  defstruct incarnation: nil,
+            scopes: %{},
             owners: %{},
             closing: MapSet.new(),
             monitors: %{},
             claims: %Claims{},
             settlements: %Settlements{}
 
-  def generation(state, scope), do: get_scope(state, scope).generation
+  def new, do: %__MODULE__{incarnation: make_ref()}
+
+  def generation(state, scope), do: {state.incarnation, get_scope(state, scope).revision}
 
   def current?(_state, _scope, nil), do: true
   def current?(state, scope, generation), do: generation(state, scope) == generation
@@ -155,7 +159,7 @@ defmodule Crawler.Store.State do
   end
 
   def drop_scope(state, scope) do
-    update_scope(state, scope, &%Scope{generation: &1.generation + 1})
+    update_scope(state, scope, &%Scope{revision: &1.revision + 1})
   end
 
   def attach_owner(state, feeder, owner, scope) do
@@ -191,8 +195,8 @@ defmodule Crawler.Store.State do
         {scope, MapSet.new()}
 
       {removed, work} ->
-        generation = if map_size(work) == 0, do: scope.generation + 1, else: scope.generation
-        {%{scope | work: work, generation: generation}, removed.pages}
+        revision = if map_size(work) == 0, do: scope.revision + 1, else: scope.revision
+        {%{scope | work: work, revision: revision}, removed.pages}
     end
   end
 

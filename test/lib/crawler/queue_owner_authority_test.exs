@@ -41,8 +41,9 @@ defmodule Crawler.QueueOwnerAuthorityTest do
     assert Process.alive?(other[:queue])
     assert Process.alive?(other[:queue_owner])
     assert guest[:queue_owner] == nil
-    assert Store.generation(creator_scope) == 0
-    assert Store.generation(guest_scope) == 1
+    assert Store.generation(creator_scope) == creator[:generation]
+    refute Store.generation(guest_scope) == guest[:generation]
+    refute Store.current?(guest_scope, guest[:generation])
     assert Store.inflight_count(creator_scope) == 1
     assert Store.inflight_count(other_scope) == 1
     assert Store.find({url <> "/authority/creator", creator_scope})

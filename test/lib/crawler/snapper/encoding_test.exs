@@ -26,6 +26,8 @@ defmodule Crawler.Snapper.EncodingTest do
       root = tmp(scope)
       page = "http://ex.com/#{encoding}/page"
       target = "http://ex.com/#{encoding}/café"
+      wire_target = "http://ex.com/#{encoding}/caf%c3%a9"
+      owner = self()
       decoded = ~s(<p>café</p><a href="café">café</a>)
       {source, type} = source(decoded, encoding)
 
@@ -35,12 +37,15 @@ defmodule Crawler.Snapper.EncodingTest do
              }) == decoded
 
       adapter = fn request ->
-        case URI.to_string(request.url) do
+        requested = URI.to_string(request.url)
+        send(owner, {:requested, requested})
+
+        case requested do
           ^page ->
             {request,
              Req.Response.new(status: 200, headers: [{"content-type", type}], body: source)}
 
-          ^target ->
+          ^wire_target ->
             {request,
              Req.Response.new(
                status: 200,
@@ -67,6 +72,11 @@ defmodule Crawler.Snapper.EncodingTest do
 
       assert Store.find_processed({page, scope}).body == decoded
       assert_receive {:scraped, ^page, ^decoded}
+      assert_received {:requested, ^page}
+      assert_received {:requested, ^wire_target}
+      refute_received {:requested, _}
+      assert Store.find_processed({target, scope}).url == target
+      assert_receive {:scraped, ^target, "<p>TARGET</p>"}
 
       expected = ~s(<p>café</p><a href="#{Linker.offline_link(page, target)}">café</a>)
       assert File.read!(saved(root, page)) == @utf8_bom <> expected

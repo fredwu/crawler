@@ -135,7 +135,7 @@ defmodule Crawler.RedirectStorageTest do
                req_options: context.req_options
              })
 
-    assert Store.generation(scope) == generation + 1
+    refute Store.generation(scope) == generation
     refute Store.find({context.requested, scope})
     refute Store.find({context.landing, scope})
   end

@@ -5,6 +5,16 @@ defmodule Crawler.Parser.AssetDiscoveryTest do
 
   @page "http://example.com/blog/post"
 
+  test "follows a modulepreload without another reference to its module" do
+    html = ~s|<link rel="alternate ModulePreload" href="only.js">|
+    opts = %{url: @page, html_tag: "a", content_type: "text/html", assets: ["js"]}
+
+    assert Parser.parse_links(html, opts, fn element, opts -> {element, opts[:html_tag]} end) ==
+             [{{"link", "only.js", "href", "http://example.com/blog/only.js"}, "script"}]
+
+    assert Parser.parse_links(html, %{opts | assets: []}, fn element, _opts -> element end) == []
+  end
+
   test "reads html and css links when the content type is not plain lowercase" do
     html = ~s(<a href="other.html"></a>)
 

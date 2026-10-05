@@ -1,6 +1,9 @@
 defmodule Crawler.HTTP do
   @moduledoc """
   Project-owned HTTP boundary.
+
+  Redirect logging defaults to disabled. Set `:redirect_log_level` explicitly
+  to enable it.
   """
 
   defmodule RedirectRejected do
@@ -12,25 +15,53 @@ defmodule Crawler.HTTP do
     def message(%{url: url}), do: "redirect rejected: #{url}"
   end
 
+  defmodule InvalidURL do
+    @moduledoc false
+
+    defexception [:url]
+
+    @impl true
+    def message(%{url: url}), do: "invalid HTTP URL: #{url}"
+  end
+
+  alias Crawler.HTTP.Transport
   alias Crawler.URL
 
   @redirect_statuses [301, 302, 303, 307, 308]
 
   def get(url, headers, opts, allow_redirect \\ fn _url -> true end) do
+    case URL.resolve(url, nil) do
+      {:ok, target} -> request(target, headers, opts, allow_redirect)
+      :skip -> {:error, %InvalidURL{url: url}}
+    end
+  end
+
+  defp request(url, headers, opts, allow_redirect) do
+    {explicit_headers, opts} = Keyword.pop(opts, :headers, [])
+
     opts
+    |> Keyword.put_new(:redirect_log_level, false)
     |> Keyword.put(:url, url)
     |> Keyword.put(:headers, headers)
     |> Req.new()
+    |> validate_redirect_option()
+    |> Req.merge(headers: explicit_headers)
+    |> Req.Request.append_request_steps(crawler_transport_adapter: &Transport.install/1)
     |> Req.Request.prepend_response_steps(crawler_redirect: &guard_redirect(&1, allow_redirect))
     |> Req.Request.append_response_steps(crawler_final_url: &capture_final_url/1)
     |> Req.request()
   end
 
+  defp validate_redirect_option(request) do
+    if Map.has_key?(request.options, :follow_redirects) do
+      raise ArgumentError, ":follow_redirects is not supported; use :redirect instead"
+    end
+
+    request
+  end
+
   defp capture_final_url({request, %Req.Response{} = response}) do
-    url =
-      request.url
-      |> drop_default_port()
-      |> URI.to_string()
+    url = URI.to_string(request.url)
 
     {request, Req.Response.put_private(response, :crawler_url, url)}
   end
@@ -78,36 +109,16 @@ defmodule Crawler.HTTP do
   end
 
   defp review_redirect(request, response, location, allow) do
-    next = next_url(request.url, location)
+    case URL.resolve(location, URI.to_string(request.url)) do
+      {:ok, next} ->
+        if allow.(next) do
+          {request, Req.Response.put_header(response, "location", next)}
+        else
+          Req.Request.halt(request, %RedirectRejected{url: next})
+        end
 
-    if allowed_target?(next, allow) do
-      {request, Req.Response.put_header(response, "location", next)}
-    else
-      Req.Request.halt(request, %RedirectRejected{url: next})
+      :skip ->
+        Req.Request.halt(request, %RedirectRejected{url: location})
     end
   end
-
-  defp allowed_target?(url, allow) when is_function(allow, 1) do
-    case URI.parse(url) do
-      %URI{scheme: scheme, host: host}
-      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
-        allow.(url)
-
-      _ ->
-        false
-    end
-  end
-
-  defp next_url(%URI{} = current, location) do
-    case URL.resolve(location, URI.to_string(current)) do
-      {:ok, url} -> url
-      :skip -> location
-    end
-  rescue
-    ArgumentError -> location
-  end
-
-  defp drop_default_port(%URI{scheme: "http", port: 80} = uri), do: %{uri | port: nil}
-  defp drop_default_port(%URI{scheme: "https", port: 443} = uri), do: %{uri | port: nil}
-  defp drop_default_port(uri), do: uri
 end

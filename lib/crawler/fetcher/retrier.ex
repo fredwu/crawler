@@ -1,6 +1,6 @@
 defmodule Crawler.Fetcher.Retrier do
   @moduledoc """
-  Handles retries for failed crawls.
+  Retries failed fetch results. Callback exceptions propagate to the worker.
   """
 
   defmodule Spec do
@@ -22,12 +22,9 @@ defmodule Crawler.Fetcher.Retrier do
   More information: [https://github.com/safwank/ElixirRetry](https://github.com/safwank/ElixirRetry)
   """
   def perform(fetch_url, opts) do
-    retry with: exponential_backoff() |> cap(1_000) |> Stream.take(retry_count(opts)) do
+    retry with: exponential_backoff() |> cap(1_000) |> Stream.take(retry_count(opts)),
+          rescue_only: [] do
       fetch_url.()
-    after
-      result -> result
-    else
-      error -> error
     end
   end
 

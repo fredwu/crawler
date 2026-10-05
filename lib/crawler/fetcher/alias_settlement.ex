@@ -1,6 +1,9 @@
 defmodule Crawler.Fetcher.AliasSettlement do
   @moduledoc false
 
+  require Logger
+
+  alias Crawler.Diagnostics
   alias Crawler.Fetcher.Recorder
   alias Crawler.Snapper
   alias Crawler.Store
@@ -15,6 +18,14 @@ defmodule Crawler.Fetcher.AliasSettlement do
                {:ok, _} <- save(body, opts) do
             Store.complete_settlement(ref, token)
           end
+        catch
+          kind, reason ->
+            Logger.error(
+              "Alias settlement failed for #{Diagnostics.url(opts[:url])}: " <>
+                Diagnostics.failure(kind, reason, __STACKTRACE__)
+            )
+
+            {:error, {kind, reason}}
         after
           Store.finish_claim(token)
         end

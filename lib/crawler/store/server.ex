@@ -13,9 +13,10 @@ defmodule Crawler.Store.Server do
 
   @impl true
   def init(_opts) do
+    await_registry_shutdown()
     {:ok, _} = Registry.start_link(keys: :unique, name: DB)
 
-    {:ok, %State{}}
+    {:ok, State.new()}
   end
 
   @impl true
@@ -64,6 +65,9 @@ defmodule Crawler.Store.Server do
         claims = Claims.track(state.claims, token, worker, opts, false)
         state = Settlements.started(%{state | claims: claims}, ref, token)
         {:reply, {:ok, token, candidate.body, candidate.opts}, state}
+
+      {:skip, scope, state} ->
+        {:reply, :skip, settle_scope_work(state, scope)}
 
       {:skip, state} ->
         {:reply, :skip, state}
@@ -273,7 +277,7 @@ defmodule Crawler.Store.Server do
       if current_work?(state, scope, generation, queue) do
         case File.rename(temp, dest) do
           :ok -> :ok
-          {:error, reason} -> {:error, "Cannot write to file #{dest}, reason: #{reason}"}
+          {:error, reason} -> {:error, {:snapshot, :rename, reason}}
         end
       else
         File.rm(temp)
@@ -363,9 +367,12 @@ defmodule Crawler.Store.Server do
 
   defp settle_scope_work(state, scope) do
     state = if State.deferred?(state, scope), do: requeue_deferred(state, scope), else: state
+    state = Settlements.prune(state, scope)
     {pages, state} = State.take_idle_pages(state, scope)
     Enum.each(pages, &Registry.unregister(DB, &1))
-    Settlements.schedule(state, scope)
+    {jobs, state} = Settlements.schedule(state, scope)
+    Enum.each(jobs, &QueueHandler.requeue/1)
+    state
   end
 
   defp requeue_deferred(state, scope) do
@@ -400,6 +407,21 @@ defmodule Crawler.Store.Server do
   end
 
   defp queue_available?(_state, _queue), do: false
+
+  defp await_registry_shutdown do
+    case Process.whereis(DB) do
+      nil ->
+        :ok
+
+      registry ->
+        # A killed Store exits before its linked Registry completes shutdown.
+        ref = Process.monitor(registry)
+
+        receive do
+          {:DOWN, ^ref, :process, ^registry, _reason} -> :ok
+        end
+    end
+  end
 
   defp unregister_scope(scope) do
     DB

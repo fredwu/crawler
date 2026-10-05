@@ -5,7 +5,7 @@ defmodule Crawler.Example.GoogleSearch do
 
   Example output:
 
-      Agent.get(Data, & &1) #=> %{
+      Crawler.Example.GoogleSearch.run() #=> %{
         "crawler" => %{
           desc: "A high performance web crawler / scraper in Elixir.",
           url: "https://github.com/fredwu/crawler"
@@ -33,10 +33,16 @@ defmodule Crawler.Example.GoogleSearch do
   @search_term "github web scrapers in Elixir"
 
   def run do
-    Agent.start_link(fn -> %{} end, name: Data)
+    {:ok, data} = Agent.start_link(fn -> %{} end, name: Data)
 
-    # Do not crawl Google too fast, or you will get blocked
+    try do
+      crawl(data)
+    after
+      Agent.stop(data)
+    end
+  end
 
+  defp crawl(data) do
     {:ok, opts} =
       Crawler.crawl(
         search_url(),
@@ -49,29 +55,32 @@ defmodule Crawler.Example.GoogleSearch do
         url_filter: UrlFilter
       )
 
-    wait(fn ->
-      false = Crawler.running?(opts)
-
-      # give the scraper time to finish
-      Process.sleep(2_000)
-
-      dbg(Agent.get(Data, & &1))
-    end)
+    try do
+      wait(opts, System.monotonic_time(:millisecond) + 5_000)
+      results = Agent.get(data, & &1)
+      IO.puts(inspect(results))
+      results
+    after
+      Crawler.stop(opts)
+    end
   end
 
   defp search_url do
     @site_url <> URI.encode_query(%{"q" => @search_term})
   end
 
-  defp wait(fun), do: wait(5_000, fun)
+  defp wait(opts, deadline) do
+    if Crawler.running?(opts) do
+      remaining = deadline - System.monotonic_time(:millisecond)
 
-  defp wait(timeout, fun) do
-    try do
-      fun.()
-    rescue
-      _ ->
-        :timer.sleep(500)
-        wait(max(0, timeout - 500), fun)
+      if remaining <= 0 do
+        raise "Google search crawl did not finish within 5 seconds"
+      end
+
+      Process.sleep(min(remaining, 500))
+      wait(opts, deadline)
+    else
+      :ok
     end
   end
 end

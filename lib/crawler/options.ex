@@ -7,6 +7,7 @@ defmodule Crawler.Options do
   alias Crawler.URL
 
   @assets []
+  @javascript_goal :module
   @save_to nil
   @workers 10
   @interval 0
@@ -46,6 +47,7 @@ defmodule Crawler.Options do
       %{
         depth: 0,
         html_tag: "a",
+        javascript_goal: javascript_goal(),
         assets: assets(),
         save_to: save_to(),
         workers: workers(),
@@ -106,6 +108,7 @@ defmodule Crawler.Options do
   def assign_scope(opts), do: opts
 
   defp assets, do: Application.get_env(:crawler, :assets, @assets)
+  defp javascript_goal, do: Application.get_env(:crawler, :javascript_goal, @javascript_goal)
   defp save_to, do: Application.get_env(:crawler, :save_to, @save_to)
   defp workers, do: Application.get_env(:crawler, :workers, @workers)
   defp interval, do: Application.get_env(:crawler, :interval, @interval)

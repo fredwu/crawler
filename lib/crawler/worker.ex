@@ -5,6 +5,7 @@ defmodule Crawler.Worker do
 
   require Logger
 
+  alias Crawler.Diagnostics
   alias Crawler.Fetcher
   alias Crawler.Fetcher.AliasSettlement
   alias Crawler.Store
@@ -16,7 +17,7 @@ defmodule Crawler.Worker do
   def run(%AliasSettlement{} = job), do: AliasSettlement.run(job)
 
   def run(opts) do
-    Logger.debug("Running worker with opts: #{inspect(opts)}")
+    Logger.debug(fn -> "Running worker #{Diagnostics.crawl(opts)}" end)
 
     case Store.start_work(opts) do
       {:ok, claim} ->
@@ -30,7 +31,11 @@ defmodule Crawler.Worker do
           fetch
         catch
           kind, reason ->
-            Logger.error(Exception.format(kind, reason, __STACKTRACE__))
+            Logger.error(
+              "Worker failed for #{Diagnostics.url(opts[:url])}: " <>
+                Diagnostics.failure(kind, reason, __STACKTRACE__)
+            )
+
             {:error, {kind, reason}}
         after
           Store.finish_claim(claim)

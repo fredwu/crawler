@@ -174,8 +174,15 @@ defmodule Crawler.Linker.SnapshotTest do
       assert href == Linker.offline_link(page, url <> fragment)
       assert URI.parse(href).query == nil
 
-      assert URI.parse(href).fragment ==
-               if(fragment == "", do: nil, else: String.trim_leading(fragment, "#"))
+      if fragment == "" do
+        assert URI.parse(href).fragment == nil
+      else
+        original_fragment = String.trim_leading(fragment, "#")
+        expected_fragment = if fragment == "#café", do: "caf%c3%a9", else: original_fragment
+        actual_fragment = URI.parse(href).fragment
+        assert actual_fragment == expected_fragment
+        assert URI.decode(actual_fragment) == URI.decode(original_fragment)
+      end
 
       opened = Path.expand(link_path(href), Path.dirname(file(root, page)))
       assert opened == Path.expand(file(root, url))
@@ -455,7 +462,9 @@ defmodule Crawler.Linker.SnapshotTest do
       {"http://ex.com/docs", "docs"},
       {"http://ex.com/Docs", "Docs"},
       {nfc, "nfc"},
-      {nfd, "nfd"}
+      {nfd, "nfd"},
+      {"http://ex.com/" <> <<0x03AC::utf8>>, "tonos"},
+      {"http://ex.com/" <> <<0x1F71::utf8>>, "oxia"}
     ]
 
     Enum.each(pairs, fn {url, body} -> snap(body, url, root) end)

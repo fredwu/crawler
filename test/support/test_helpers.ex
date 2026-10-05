@@ -1,4 +1,3 @@
-# Credit: https://gist.github.com/cblavier/5e15791387a6e22b98d8
 defmodule Crawler.TestHelpers do
   import ExUnit.Assertions, only: [refute: 1]
 
@@ -6,24 +5,39 @@ defmodule Crawler.TestHelpers do
     result = Crawler.crawl(url, opts)
 
     case result do
-      {:ok, crawl} -> Crawler.ReqTestSite.track_crawl(crawl)
-      _ -> :ok
-    end
+      {:ok, crawl} ->
+        owned_queue? = is_nil(Enum.into(opts, %{})[:queue])
 
-    result
+        case Crawler.ReqTestSite.track_crawl(crawl, owned_queue?: owned_queue?) do
+          :ok -> result
+          {:error, _} = error -> error
+        end
+
+      _ ->
+        result
+    end
   end
 
   def wait(fun), do: wait(500, fun)
-  def wait(0, fun), do: fun.()
 
-  def wait(timeout, fun) do
-    try do
-      fun.()
-    rescue
-      _ ->
-        :timer.sleep(10)
-        wait(max(0, timeout - 10), fun)
-    end
+  def wait(timeout, fun) when is_integer(timeout) and timeout >= 0 do
+    wait_until(System.monotonic_time(:millisecond) + timeout, fun)
+  end
+
+  defp wait_until(deadline, fun) do
+    fun.()
+  rescue
+    error in ExUnit.AssertionError ->
+      remaining = deadline - System.monotonic_time(:millisecond)
+
+      if remaining <= 0 do
+        reraise error, __STACKTRACE__
+      end
+
+      receive do
+      after
+        min(10, remaining) -> wait_until(deadline, fun)
+      end
   end
 
   def tmp(path \\ "", filename \\ "") do

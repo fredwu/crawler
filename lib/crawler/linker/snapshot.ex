@@ -5,6 +5,7 @@ defmodule Crawler.Linker.Snapshot do
 
   alias Crawler.Linker.PathOffliner
   alias Crawler.Linker.Snapshot.Component
+  alias Crawler.Snapper.Staging
   alias Crawler.URL
 
   @port_marker "__port_"
@@ -30,7 +31,8 @@ defmodule Crawler.Linker.Snapshot do
     @jamo_marker,
     @extension_marker,
     @directory_marker,
-    Component.marker()
+    Component.marker(),
+    Staging.prefix()
   ]
 
   def path(url) when is_binary(url) do
@@ -99,8 +101,8 @@ defmodule Crawler.Linker.Snapshot do
     |> Enum.join("/")
   end
 
-  # `%` is already escaped by PathOffliner, so a marker's `%5f` is not encoded
-  # again. The hex digit is lowercase so later case encoding leaves it alone.
+  # `%` is already escaped by PathOffliner, so a marker's percent escape is
+  # not encoded again. Lowercase hex keeps later case encoding from changing it.
   # Empty segments would otherwise collapse to the same file as a path
   # without them. Host suffixes are added after this step.
   defp encode_segments(path) do
@@ -121,6 +123,8 @@ defmodule Crawler.Linker.Snapshot do
   end
 
   defp encode_segment(""), do: @empty_marker
+  defp encode_segment("."), do: "%2e"
+  defp encode_segment(".."), do: "%2e%2e"
 
   defp encode_segment(segment) do
     segment
@@ -193,7 +197,9 @@ defmodule Crawler.Linker.Snapshot do
   end
 
   defp escape_marker(marker) do
-    String.replace_suffix(marker, "_", "%5f")
+    size = byte_size(marker) - 1
+    <<prefix::binary-size(size), final>> = marker
+    prefix <> "%" <> Base.encode16(<<final>>, case: :lower)
   end
 
   defp encode_file_identity(path) do
@@ -211,8 +217,9 @@ defmodule Crawler.Linker.Snapshot do
 
   # `Docs` and `docs` are one file on a case-insensitive disk. So are ß
   # and `ss`, and ﬁ and `fi`. A combining mark is one file with its composed
-  # letter, and a Hangul syllable is one file with its jamo. The markers are
-  # lowercase ASCII, so folding case or composition cannot merge them.
+  # letter, and a Hangul syllable is one file with its jamo. Precomposed
+  # characters can also share a canonical form. The markers are lowercase
+  # ASCII, so folding case or composition cannot merge them.
   defp encode_identity(path), do: encode_identity(path, [])
 
   defp encode_identity(<<codepoint::utf8, rest::binary>>, acc) do
@@ -240,7 +247,7 @@ defmodule Crawler.Linker.Snapshot do
       code in ?A..?Z ->
         @case_marker <> String.downcase(codepoint)
 
-      needs_case_marker?(codepoint) ->
+      needs_identity_marker?(codepoint) ->
         @case_marker <> code_hex(code)
 
       true ->
@@ -249,9 +256,10 @@ defmodule Crawler.Linker.Snapshot do
   end
 
   # Downcase misses folds that still share a file: ß with ss, ﬁ with fi,
-  # and µ with μ.
-  defp needs_case_marker?(codepoint) do
-    String.downcase(codepoint) != codepoint or :string.casefold(codepoint) != codepoint
+  # and µ with μ. NFC also maps distinct precomposed characters to one form.
+  defp needs_identity_marker?(codepoint) do
+    String.downcase(codepoint) != codepoint or :string.casefold(codepoint) != codepoint or
+      String.normalize(codepoint, :nfc) != codepoint
   end
 
   # Six hex digits so a shorter value followed by a hex digit cannot equal

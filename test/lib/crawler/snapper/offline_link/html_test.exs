@@ -164,13 +164,13 @@ defmodule Crawler.Snapper.OfflineLink.HtmlTest do
     assert_points(quoted_body, @page, "http://example.com/blog/a>b.html")
   end
 
-  test "drops a base tag when an attribute contains a closing bracket" do
+  test "removes a base href while preserving an attribute with a closing bracket" do
     html =
       ~s|<head><base data-name="a>b" href="https://example.com/dir/"></head><a href="next.html"></a>|
 
     body = rewrite(html, @page)
 
-    refute body =~ "<base"
+    assert body =~ ~s|<base data-name="a>b">|
     refute body =~ "https://example.com/dir"
     assert_points(body, @page, "https://example.com/dir/next.html")
 
@@ -194,7 +194,7 @@ defmodule Crawler.Snapper.OfflineLink.HtmlTest do
     assert_points(body, page, "http://example.com/")
     assert_points(body, page, "http://example.com/blog/post/plain.png")
     assert_points(body, page, "http://example.com/blog/post/other.html")
-    assert_points(body, page, "http://example.com/blog/post/icon.png")
+    assert_points(body, page, "http://example.com/blog/post/icon.png/")
     refute body =~ "__index.html/"
   end
 
@@ -302,9 +302,10 @@ defmodule Crawler.Snapper.OfflineLink.HtmlTest do
       quoted = fn target -> normalized <> Linker.offline_link(@page, target) <> normalized end
 
       assert body =~ "@IMPORT #{quoted.("http://example.com/blog/Theme.css")};"
-      assert body =~ "url(#{quoted.("http://example.com/blog/Picture.png")})"
+      assert body =~ "URL( #{quoted.("http://example.com/blog/Picture.png")} )"
       assert body =~ "image-set(#{quoted.("http://example.com/blog/Picture.png")} 1x)"
-      assert body =~ "URL=#{quoted.("http://example.com/blog/Next.html")}"
+      refresh_target = Linker.offline_link(@page, "http://example.com/blog/Next.html")
+      assert body =~ "URL=#{opening}#{refresh_target}#{closing}"
     end
   end
 end

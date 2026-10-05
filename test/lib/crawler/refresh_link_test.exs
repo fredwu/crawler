@@ -6,22 +6,25 @@ defmodule Crawler.RefreshLinkTest do
 
   import Crawler.SnapshotHelpers
 
-  for {name, target, quote} <- [
-        {"unquoted path", "/refresh/next;v=2", ""},
-        {"unquoted query", "/refresh/next?q=1;v=2", ""},
-        {"single-quoted path", "/refresh/next;v=2", "'"},
-        {"double-quoted query", "/refresh/next?q=1;v=2", "\""},
-        {"double-quoted apostrophe query", "/refresh/next?name=O'Reilly", "\""},
-        {"single-quoted double-quote query", ~s|/refresh/next?name="Reilly"|, "'"}
+  for {name, target, quote, expected_target} <- [
+        {"unquoted path", "/refresh/next;v=2", "", "/refresh/next;v=2"},
+        {"unquoted query", "/refresh/next?q=1;v=2", "", "/refresh/next?q=1;v=2"},
+        {"single-quoted path", "/refresh/next;v=2", "'", "/refresh/next;v=2"},
+        {"double-quoted query", "/refresh/next?q=1;v=2", "\"", "/refresh/next?q=1;v=2"},
+        {"double-quoted apostrophe query", "/refresh/next?name=O'Reilly", "\"",
+         "/refresh/next?name=O%27Reilly"},
+        {"single-quoted double-quote query", ~s|/refresh/next?name="Reilly"|, "'",
+         "/refresh/next?name=%22Reilly%22"}
       ] do
     test "fetches and opens the complete #{name} target", context do
       target = unquote(target)
       quote = unquote(quote)
       page = "#{context.url}/refresh/page"
-      landing = context.url <> target
+      landing = context.url <> unquote(expected_target)
       root = tmp(unique_scope("refresh-link"))
       scope = unique_scope("refresh-link")
       destination = URI.parse(landing)
+      assert URI.decode(destination.query || "") == (URI.parse(target).query || "")
       content = "0; url=#{quote}#{target}#{quote}"
       html = ~s|<meta http-equiv="refresh" content="#{escape_quotes(content)}">|
       body = "REFRESH #{target}"

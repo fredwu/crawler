@@ -44,40 +44,10 @@ defmodule Crawler.RedirectTraversalTest do
     refute Store.find({"#{url}/id/budget/next", scope})
   end
 
-  test "a redirect still fetches a landing page that was already stored", %{
-    site: site,
-    url: url,
-    req_options: req_options
-  } do
-    root = tmp("page-identity-alias")
-    scope = "page-identity-alias"
-    old = "#{url}/id/alias/old"
-    new = "#{url}/id/alias/new"
-    hits = new_count()
-
-    ReqTestSite.expect(site, "GET", "/id/alias/new", fn conn ->
-      bump(hits)
-      Plug.Conn.resp(conn, 200, "PAGE")
-    end)
-
-    first = crawl(new, scope: scope, workers: 1, save_to: root, req_options: req_options)
-    await_idle(first)
-    assert count(hits) == 1
-
-    ReqTestSite.expect_once(site, "GET", "/id/alias/old", fn conn ->
-      conn
-      |> Plug.Conn.put_resp_header("location", new)
-      |> Plug.Conn.resp(302, "")
-    end)
-
-    second = crawl(old, scope: scope, workers: 1, save_to: root, req_options: req_options)
-    await_idle(second)
-
-    assert count(hits) == 2
-    assert File.read!(saved(root, old)) == @utf8_bom <> "PAGE"
-    assert File.read!(saved(root, new)) == @utf8_bom <> "PAGE"
-    assert Store.find_processed({old, scope}).body == "PAGE"
-    assert Store.ops_count(scope) == 2
+  for store <- [nil, Store] do
+    test "a later redirect preserves a processed landing with #{inspect(store)}", context do
+      exercise_processed_landing(context, unquote(store))
+    end
   end
 
   test "a redirect past the link depth is saved and its links are not followed", %{
@@ -113,5 +83,50 @@ defmodule Crawler.RedirectTraversalTest do
     assert File.read!(saved(root, new)) =~ "LANDED"
     assert Store.ops_count(scope) == 1
     refute Store.find({"#{url}/id/depth/next", scope})
+  end
+
+  defp exercise_processed_landing(%{site: site, url: url, req_options: req_options}, store) do
+    scope = unique_scope("page-identity-alias")
+    root = tmp(scope)
+    old = "#{url}/id/alias/old"
+    new = "#{url}/id/alias/new"
+    next = "#{url}/id/alias/next"
+    redirected_body = ~s(REDIRECT<a href="next">next</a>)
+    hits = new_count()
+
+    ReqTestSite.expect(site, "GET", "/id/alias/new", fn conn ->
+      bump(hits)
+      body = if count(hits) == 1, do: "DIRECT", else: redirected_body
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, body)
+    end)
+
+    opts = [scope: scope, workers: 1, store: store, save_to: root, req_options: req_options]
+    first = crawl(new, opts)
+    await_idle(first)
+    assert count(hits) == 1
+    landing = Store.find_processed({new, scope})
+
+    ReqTestSite.expect_once(site, "GET", "/id/alias/old", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("location", new)
+      |> Plug.Conn.resp(302, "")
+    end)
+
+    text(site, "/id/alias/next", "NEXT")
+    second = crawl(old, opts)
+    await_idle(second)
+
+    assert count(hits) == 2
+    assert Store.find_processed({new, scope}) == landing
+    assert landing.body == if(store == Store, do: "DIRECT")
+    assert Store.find_processed({old, scope}).body == if(store == Store, do: redirected_body)
+    assert Store.find_processed({next, scope}).body == if(store == Store, do: "NEXT")
+    assert File.read!(saved(root, old)) =~ "REDIRECT"
+    assert File.read!(saved(root, new)) == @utf8_bom <> "DIRECT"
+    assert_link_opens(root, old, next)
+    assert Store.ops_count(scope) == 3
   end
 end

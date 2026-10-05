@@ -1,27 +1,33 @@
 defmodule Crawler.Charset.HTML do
   @moduledoc false
 
+  alias Crawler.Charset.Encoding
   alias Crawler.Charset.HTMLScanner
   alias Crawler.Charset.Labels
+  alias Crawler.Charset.Parameters
 
   @prescan_bytes 1024
 
   def charset(body) do
-    body
-    |> binary_part(0, min(byte_size(body), @prescan_bytes))
-    |> Labels.ascii_lower()
-    |> find_charset(0)
+    chunk =
+      body
+      |> binary_part(0, min(byte_size(body), @prescan_bytes))
+      |> Labels.ascii_lower()
+
+    chunk
+    |> HTMLScanner.meta_spans()
+    |> Enum.find_value(fn span ->
+      label =
+        chunk |> binary_part(elem(span, 0), elem(span, 1)) |> attrs_charset() |> meta_encoding()
+
+      if Labels.known?(label), do: label
+    end)
   end
 
-  defp find_charset(body, offset) do
-    case HTMLScanner.next_meta_span(body, offset) do
-      nil ->
-        nil
-
-      {start, stop} ->
-        tag = binary_part(body, start, stop - start)
-        label = attrs_charset(tag)
-        if Labels.known?(label), do: label, else: find_charset(body, stop)
+  defp meta_encoding(label) do
+    case Encoding.encoding(label) do
+      {:utf16, _endian} -> "utf-8"
+      _encoding -> label
     end
   end
 
@@ -41,7 +47,18 @@ defmodule Crawler.Charset.HTML do
 
   # The saved document is UTF-8. A meta that still names another encoding
   # would make a browser open a different path from the file that was fetched.
-  def declare_utf8(body), do: declare_utf8(body, Labels.ascii_lower(body), 0, [])
+  def declare_utf8(body) do
+    {parts, offset} =
+      body
+      |> HTMLScanner.meta_spans()
+      |> Enum.reduce({[], 0}, fn {start, length}, {parts, offset} ->
+        before_tag = binary_part(body, offset, start - offset)
+        tag = binary_part(body, start, length)
+        {[parts, before_tag, rewrite_tag(tag)], start + length}
+      end)
+
+    IO.iodata_to_binary([parts, binary_part(body, offset, byte_size(body) - offset)])
+  end
 
   def xml_charset(body) do
     chunk = binary_part(body, 0, min(byte_size(body), @prescan_bytes))
@@ -87,22 +104,6 @@ defmodule Crawler.Charset.HTML do
     end
   end
 
-  defp declare_utf8(body, _lowered, offset, acc) when offset >= byte_size(body) do
-    IO.iodata_to_binary(acc)
-  end
-
-  defp declare_utf8(body, lowered, offset, acc) do
-    case HTMLScanner.next_meta_span(lowered, offset) do
-      nil ->
-        IO.iodata_to_binary([acc, binary_part(body, offset, byte_size(body) - offset)])
-
-      {start, stop} ->
-        chunk = binary_part(body, offset, start - offset)
-        tag = binary_part(body, start, stop - start)
-        declare_utf8(body, lowered, stop, [acc, chunk, rewrite_tag(tag)])
-    end
-  end
-
   defp rewrite_tag(tag) do
     tag = if content_type_meta?(tag), do: rewrite_content_charset(tag), else: tag
     rewrite_charset_attr(tag)
@@ -132,7 +133,7 @@ defmodule Crawler.Charset.HTML do
   end
 
   defp rewrite_charset_param(value) do
-    case HTMLScanner.find_parameter_value(Labels.ascii_lower(value), "charset") do
+    case Parameters.find_value(Labels.ascii_lower(value), "charset") do
       {start, finish} -> replace_label(value, start, finish)
       _ -> value
     end

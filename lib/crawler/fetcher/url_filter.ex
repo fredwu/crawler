@@ -5,7 +5,12 @@ defmodule Crawler.Fetcher.UrlFilter do
 
   defmodule Spec do
     @moduledoc """
-    Spec for defining an url filter.
+    Defines a URL filter.
+
+    Return `{:ok, true}` to allow a URL or `{:ok, false}` to reject it with a
+    policy warning. Return `{:error, reason}` when filtering fails. The initial
+    URL's error is returned unchanged by the policer, fetcher, and worker.
+    The default parser logs a fixed error message without the reason.
     """
 
     @type url :: String.t()

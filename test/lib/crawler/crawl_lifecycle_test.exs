@@ -13,6 +13,7 @@ defmodule Crawler.CrawlLifecycleTest do
     page = "#{url}/lifecycle/stop"
     supervisor_before = supervisor_links()
     {:ok, requests} = Agent.start(fn -> 0 end)
+    on_exit(fn -> if Process.alive?(requests), do: Agent.stop(requests) end)
 
     ReqTestSite.stub(site, "GET", "/lifecycle/stop", fn conn ->
       count = Agent.get_and_update(requests, fn count -> {count, count + 1} end)
@@ -279,7 +280,7 @@ defmodule Crawler.CrawlLifecycleTest do
       Plug.Conn.resp(conn, 404, "missing")
     end)
 
-    assert {:ok, _} =
+    assert {:ok, rejected} =
              start_crawl(page,
                scope: scope,
                queue: dead,
@@ -287,7 +288,9 @@ defmodule Crawler.CrawlLifecycleTest do
                req_options: req_options
              )
 
-    Process.sleep(50)
+    refute Crawler.running?(rejected)
+    assert Store.pending_count(scope) == 0
+    assert Store.inflight_count(scope) == 0
     assert Agent.get(hits, & &1) == 0
 
     {:ok, opts} =

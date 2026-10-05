@@ -299,16 +299,28 @@ defmodule CrawlerTest do
   test ".crawl stopped", %{site: site, url: url, req_options: req_options} do
     url = "#{url}/stop"
     linked_url = "#{url}/stop1"
+    parent = self()
 
     ReqTestSite.expect_once(site, "GET", "/stop", fn conn ->
-      Plug.Conn.resp(conn, 200, """
-        <html><a href="#{linked_url}">1</a></html>
-      """)
+      send(parent, {:root_requested, self()})
+
+      receive do
+        :release -> Plug.Conn.resp(conn, 200, ~s(<a href="#{linked_url}">1</a>))
+      after
+        2_000 -> raise "Root request was not released"
+      end
     end)
 
-    {:ok, opts} = start_crawl(url, workers: 1, interval: 500, req_options: req_options)
+    {:ok, opts} = start_crawl(url, workers: 1, req_options: req_options)
+    assert_receive {:root_requested, handler}, 2_000
+    Crawler.pause(opts)
+    send(handler, :release)
 
-    Process.sleep(200)
+    wait(fn ->
+      assert Store.ops_count(opts[:scope]) == 1
+      assert Store.inflight_count(opts[:scope]) == 0
+      assert Store.pending_count(opts[:scope]) == 1
+    end)
 
     queue = opts[:queue]
 

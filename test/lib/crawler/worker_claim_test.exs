@@ -156,7 +156,7 @@ defmodule Crawler.WorkerClaimTest do
     assert {:ok, stale} = Store.start_work(opts)
 
     case event do
-      :drop_scope -> assert Store.drop_scope(scope) == generation + 1
+      :drop_scope -> refute Store.drop_scope(scope) == generation
       :retire_queue -> assert :ok = Store.release_queue(old_queue)
     end
 

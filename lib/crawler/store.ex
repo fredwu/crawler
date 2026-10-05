@@ -12,6 +12,10 @@ defmodule Crawler.Store do
   other queues in the same scope continues. Retirement preserves the scope's
   generation while other work contexts remain.
 
+  A Store restart invalidates every previous generation. Managed queues stop.
+  External queues remain running, but their old work cannot change new pages,
+  counters, or snapshots.
+
   A queued URL that fails, or whose handler crashes, stays recorded until that
   queue is idle in its scope. It is then dropped so a later crawl can fetch it
   again. Direct fetch registrations and processed pages stay until the scope
@@ -116,29 +120,23 @@ defmodule Crawler.Store do
   @doc """
   Removes every page and counter for `scope`.
 
-  The scope's generation stays and increases, so a worker from the dropped
-  crawl cannot write into the next crawl.
+  Returns a new generation token for the scope. A worker with the previous
+  token cannot write into the next crawl.
   """
   def drop_scope(scope) do
     GenServer.call(__MODULE__, {:drop_scope, scope})
   end
 
+  @doc """
+  Returns the scope's current opaque generation token.
+
+  Compare tokens for equality only. A scope reset or Store restart invalidates
+  its previous token. Other scopes keep their tokens during a scope reset.
+  """
   def generation(scope), do: GenServer.call(__MODULE__, {:generation, scope})
 
   def current?(scope, generation, queue \\ nil) do
     GenServer.call(__MODULE__, {:current?, scope, generation, queue})
-  end
-
-  def commit(scope, generation, fun) when is_function(fun, 0) do
-    if scope_current?(scope, generation) do
-      try do
-        fun.()
-      rescue
-        exception -> {:error, Exception.message(exception)}
-      end
-    else
-      {:error, :stale}
-    end
   end
 
   @doc """
@@ -234,14 +232,6 @@ defmodule Crawler.Store do
   end
 
   def release_queue(_queue), do: :ok
-
-  defp scope_current?(_scope, nil), do: true
-
-  defp scope_current?(scope, generation) when is_integer(generation) do
-    generation(scope) == generation
-  end
-
-  defp scope_current?(_scope, _generation), do: false
 
   defp identity(url, scope) when is_binary(url), do: {URL.canonical(url), scope}
   defp identity(url, scope), do: {url, scope}

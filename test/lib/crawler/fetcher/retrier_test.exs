@@ -36,4 +36,35 @@ defmodule Crawler.Fetcher.RetrierTest do
     assert result == {:warn, "skip"}
     assert Agent.get(attempts, & &1) == 1
   end
+
+  test "an exhausted retry keeps the final tagged error" do
+    attempts = :counters.new(1, [:atomics])
+
+    assert {:error, :down} =
+             Retrier.perform(
+               fn ->
+                 :counters.add(attempts, 1, 1)
+                 {:error, :down}
+               end,
+               %{retries: 2}
+             )
+
+    assert :counters.get(attempts, 1) == 3
+  end
+
+  test "a callback exception propagates immediately without consuming retry attempts" do
+    attempts = :counters.new(1, [:atomics])
+
+    assert_raise RuntimeError, "callback failed", fn ->
+      Retrier.perform(
+        fn ->
+          :counters.add(attempts, 1, 1)
+          raise "callback failed"
+        end,
+        %{retries: 3}
+      )
+    end
+
+    assert :counters.get(attempts, 1) == 1
+  end
 end

@@ -3,8 +3,9 @@ defmodule Crawler.CrawlRetryTest do
 
   alias Crawler.Store
 
-  test "retries retryable responses and leaves a slow attempt able to retry", %{url: url} do
+  test "retries retryable responses and a gated transport timeout", %{url: url} do
     {:ok, attempts} = Agent.start_link(fn -> %{} end)
+    parent = self()
 
     adapter = fn request ->
       path = request.url.path
@@ -24,7 +25,14 @@ defmodule Crawler.CrawlRetryTest do
             Req.Response.new(status: 404, body: "missing")
 
           path == "/retry/slow" and count == 1 ->
-            Process.sleep(40)
+            send(parent, {:transport_timeout, self()})
+
+            receive do
+              :return_timeout -> :ok
+            after
+              2_000 -> raise "Transport timeout was not released"
+            end
+
             {request, %Req.TransportError{reason: :timeout}}
 
           true ->
@@ -41,7 +49,7 @@ defmodule Crawler.CrawlRetryTest do
     scope = "retries"
 
     {:ok, status_opts} =
-      Crawler.crawl("#{url}/retry/status",
+      start_crawl("#{url}/retry/status",
         scope: scope,
         retries: 2,
         timeout: 1_000,
@@ -81,6 +89,11 @@ defmodule Crawler.CrawlRetryTest do
         store: Store,
         req_options: req_options
       )
+
+    assert_receive {:transport_timeout, request}, 2_000
+    assert Store.inflight_count(scope) == 1
+    assert Store.pending_count(scope) == 1
+    send(request, :return_timeout)
 
     wait(fn ->
       refute Crawler.running?(slow_opts)

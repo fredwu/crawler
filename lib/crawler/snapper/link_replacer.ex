@@ -2,7 +2,8 @@ defmodule Crawler.Snapper.LinkReplacer do
   @moduledoc """
   Replaces links found in a page so they work offline.
 
-  Removes integrity metadata from rewritten script, stylesheet, and modulepreload references because saved resource bytes can change.
+  Removes integrity metadata from rewritten script, stylesheet, modulepreload,
+  and script or style preload references because saved resource bytes can change.
   """
 
   alias Crawler.Linker
@@ -12,6 +13,8 @@ defmodule Crawler.Snapper.LinkReplacer do
   alias Crawler.Snapper.LinkReplacer.Html
   alias Crawler.Snapper.LinkReplacer.Javascript
   alias Crawler.Snapper.LinkReplacer.RawText
+  alias Crawler.Snapper.LinkReplacer.Tokens
+  alias Crawler.URL
 
   @doc """
   Replaces links found in a page so they work offline.
@@ -76,8 +79,9 @@ defmodule Crawler.Snapper.LinkReplacer do
       body
       |> rewrite_body(document_links, opts)
       |> Html.drop_base(opts)
-      |> RawText.restore(saved, fn source, type ->
-        rewrite_body(source, raw_links, Map.put(opts, :content_type, type))
+      |> RawText.restore(saved, fn source, source_opts ->
+        rewrite_opts = opts |> Map.delete(:javascript_goal) |> Map.merge(source_opts)
+        rewrite_body(source, raw_links, rewrite_opts)
       end)
 
     {:ok, new_body}
@@ -88,8 +92,9 @@ defmodule Crawler.Snapper.LinkReplacer do
     |> Parser.parse_links(opts, &get_link/2)
     |> List.flatten()
     |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
     |> Enum.sort_by(
-      fn {raw, _resolved} -> raw |> variants(opts) |> hd() |> byte_size() end,
+      fn {raw, _resolved} -> byte_size(raw) end,
       :desc
     )
     |> Enum.map(fn {raw, resolved} ->
@@ -100,13 +105,13 @@ defmodule Crawler.Snapper.LinkReplacer do
   defp rewrite_body(body, [], _opts), do: body
 
   defp rewrite_body(body, links, opts) do
-    prefix = replacement_prefix([body | Enum.map(links, &elem(&1, 1))])
+    prefix = Tokens.prefix([body | Enum.map(links, &elem(&1, 1))], "L")
 
     {body, replacements} =
       links
       |> Enum.with_index()
       |> Enum.reduce({body, %{}}, fn {{raw, offline}, index}, {body, replacements} ->
-        token = prefix <> Integer.to_string(index) <> <<0>>
+        token = Tokens.at(prefix, index)
         {modify_body(body, opts, {raw, token}), Map.put(replacements, token, offline)}
       end)
 
@@ -117,48 +122,21 @@ defmodule Crawler.Snapper.LinkReplacer do
     |> String.replace(tokens, &Map.fetch!(replacements, &1))
   end
 
-  defp replacement_prefix(values, prefix \\ <<0>> <> "L") do
-    if Enum.any?(values, &String.contains?(&1, prefix)) do
-      replacement_prefix(values, prefix <> "L")
-    else
-      prefix
-    end
-  end
-
   defp get_link({_, url}, _opts), do: {url, url}
   defp get_link({_, link, _, url}, _opts), do: {link, url}
 
+  defp modify_body(body, _opts, {"", _offline}), do: body
+
   defp modify_body(body, opts, {raw, offline}) do
-    Enum.reduce(variants(raw, opts), body, fn variant, body ->
-      rewrite_variant(body, variant, offline, opts)
-    end)
-  end
-
-  defp rewrite_variant(body, variant, _offline, _opts) when variant == "", do: body
-
-  defp rewrite_variant(body, variant, offline, opts) do
-    if String.contains?(body, variant) do
-      replace_variant(body, variant, offline, opts)
-    else
-      body
-    end
-  end
-
-  defp replace_variant(body, variant, offline, opts) do
     cond do
       MediaType.css?(opts[:content_type]) ->
-        Css.replace(body, variant, offline, entity_quotes: false)
+        Css.replace(body, raw, offline, entity_quotes: false)
 
       MediaType.javascript?(opts[:content_type]) ->
-        Javascript.replace(body, variant, offline)
+        Javascript.replace(body, raw, offline, Map.get(opts, :javascript_goal, :module))
 
       true ->
-        body
-        |> Html.replace_srcset(variant, offline)
-        |> Html.replace_style_attributes(variant, offline)
-        |> Html.replace_meta(variant, offline)
-        |> Html.replace_attributes(variant, offline)
-        |> Html.replace_unquoted(variant, offline)
+        Html.replace(body, raw, offline, opts)
     end
   end
 
@@ -177,7 +155,7 @@ defmodule Crawler.Snapper.LinkReplacer do
   end
 
   defp fragment_suffix(value) do
-    case String.split(value, "#", parts: 2) do
+    case String.split(URL.sanitize(value), "#", parts: 2) do
       [_base, fragment] -> "#" <> fragment
       _ -> ""
     end
@@ -185,17 +163,5 @@ defmodule Crawler.Snapper.LinkReplacer do
 
   defp strip_fragment(value) do
     value |> String.split("#", parts: 2) |> hd()
-  end
-
-  defp variants(raw, opts) do
-    if MediaType.css?(opts[:content_type]) or MediaType.javascript?(opts[:content_type]) do
-      [raw]
-    else
-      escaped = String.replace(raw, "&", "&amp;")
-
-      [String.replace(escaped, "\"", "&quot;"), escaped, raw]
-      |> Enum.uniq()
-      |> Enum.sort_by(&byte_size/1, :desc)
-    end
   end
 end

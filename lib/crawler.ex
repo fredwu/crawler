@@ -14,7 +14,10 @@ defmodule Crawler do
   @doc """
   Crawler is an application that gets started automatically with:
 
-  - a `Crawler.Store` that initiates a `Registry` for keeping internal data
+  - a `Crawler.Store` that owns a `Registry` for keeping internal data
+  - a supervisor for queues started by the crawler
+
+  Queues started by Crawler stop when the Store restarts.
   """
   def start(_type, _args) do
     children = [
@@ -22,7 +25,7 @@ defmodule Crawler do
       {DynamicSupervisor, name: Crawler.QueueSupervisor, strategy: :one_for_one}
     ]
 
-    Supervisor.start_link(children, strategy: :one_for_one, name: Crawler)
+    Supervisor.start_link(children, strategy: :rest_for_one, name: Crawler)
   end
 
   @doc """
@@ -54,7 +57,7 @@ defmodule Crawler do
     Map.put(opts, :generation, Store.drop_scope(scope))
   end
 
-  defp stamp_generation(%{generation: generation} = opts) when is_integer(generation), do: opts
+  defp stamp_generation(%{generation: generation} = opts) when not is_nil(generation), do: opts
 
   defp stamp_generation(%{scope: scope} = opts) do
     Map.put(opts, :generation, Store.generation(scope))
@@ -67,7 +70,7 @@ defmodule Crawler do
   URLs, counters, and in-flight page slots. When the crawl started the queue,
   the queue and the processes it started are shut down. A queue created
   outside Crawler keeps running. Stopping the scope that started a queue
-  shuts that queue down, even when these options only contain `queue:`.
+  shuts that queue down when these options contain its `queue:` and `scope:`.
   This does not change the caller's exit trapping.
 
   Stopping the crawl that created a shared queue shuts that queue down. Other
@@ -99,13 +102,11 @@ defmodule Crawler do
   @doc """
   Checks whether the crawler is still crawling.
 
-  A stopped scope reports `false` even when its queue still holds another
-  crawl's work. Pages this scope has queued still count until their workers
-  finish.
+  A scope with no remaining work reports `false` even when its queue still
+  holds another scope's work. Pages this scope has queued still count until
+  their workers finish. A paused or stopped crawl reports `false`.
   """
   def running?(opts) do
-    Process.sleep(10)
-
     opts = Enum.into(opts, %{})
 
     cond do
@@ -113,7 +114,6 @@ defmodule Crawler do
       closed?(opts[:scope], opts[:generation], opts[:queue]) -> false
       Store.inflight_count(opts[:scope]) > 0 -> true
       Store.pending_count(opts[:scope]) > 0 -> true
-      queued?(opts) -> true
       true -> false
     end
   end
@@ -142,35 +142,18 @@ defmodule Crawler do
 
   defp owning_queue(_opts), do: nil
 
-  defp closed?(_scope, generation, _queue) when not is_integer(generation), do: false
+  defp closed?(_scope, nil, _queue), do: false
 
   defp closed?(scope, generation, queue) do
     not Store.current?(scope, generation, queue)
   end
 
-  defp queue_reference(opts) do
-    queue = opts[:queue]
-    name = opts[:queue_name]
-
-    if is_atom(name) and not is_nil(name) and Process.whereis(name) == queue,
-      do: name,
-      else: queue
-  end
-
   defp paused?(opts), do: match?({:paused, _, _}, queue_info(opts))
 
-  defp queued?(opts) do
-    case queue_info(opts) do
-      {_status, %{data: data}, _workers} -> not :queue.is_empty(data)
-      _ -> false
-    end
-  end
-
   defp queue_info(opts) do
-    case queue_reference(opts) do
-      nil -> nil
+    case opts[:queue] do
       queue when is_pid(queue) -> GenStage.call(queue, :info)
-      name -> OPQ.info(name)
+      _ -> nil
     end
   catch
     :exit, _ -> nil

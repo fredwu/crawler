@@ -4,6 +4,7 @@ defmodule Crawler.Parser do
   """
 
   alias Crawler.Dispatcher
+  alias Crawler.HTMLSpans
   alias Crawler.MediaType
   alias Crawler.Parser.CssParser
   alias Crawler.Parser.Guarder
@@ -35,13 +36,13 @@ defmodule Crawler.Parser do
   @doc """
   Parses the links and returns the page.
 
-  There are two hooks:
+  Discovered links are sent to `Crawler.Dispatcher`. The scraper module in
+  `page.opts[:scraper]` receives the page after link discovery. Its
+  `scrape/1` result is returned.
 
-  - `link_handler` is useful when a custom parser calls this default parser and
-  utilises a different link handler for processing links.
-  - `scraper` is useful for scraping content immediately as the parser parses
-  the page, alternatively you can simply access the crawled data
-  asynchronously, refer to the [README](https://github.com/fredwu/crawler#usage)
+  A custom parser can use `parse_links/3` with its own link handler. Crawled
+  data is also available asynchronously; see the
+  [README](https://github.com/fredwu/crawler#usage).
 
   ## Examples
 
@@ -97,7 +98,7 @@ defmodule Crawler.Parser do
   def parse(input)
 
   def parse({:warn, reason}), do: Logger.debug(fn -> "#{inspect(reason)}" end)
-  def parse({:error, reason}), do: Logger.error(fn -> "#{inspect(reason)}" end)
+  def parse({:error, _reason}), do: Logger.error("Crawl failed")
 
   def parse(%{body: body, opts: opts} = page) do
     parse_links(body, opts, &Dispatcher.dispatch(&1, &2))
@@ -105,6 +106,17 @@ defmodule Crawler.Parser do
     {:ok, _page} = opts[:scraper].scrape(page)
   end
 
+  @doc """
+  Discovers links in `body` with the page options in `opts`.
+
+  Calls `link_handler.(element, link_opts)` for each discovered link. An element
+  is `{attribute, url}` when the URL is unchanged, or
+  `{"link", original_link, attribute, resolved_url}` when it is resolved or
+  normalized. The link options include its resource tag and any HTML base URL.
+
+  Returns the handler results grouped by parsed element. Returns an empty list
+  when the page cannot be parsed. This function does not call the scraper.
+  """
   def parse_links(body, opts, link_handler) do
     opts = put_base_href(body, opts)
 
@@ -129,11 +141,9 @@ defmodule Crawler.Parser do
   defp html?(opts), do: MediaType.html?(opts[:content_type])
 
   defp base_href(body) do
-    with {:ok, document} <- Floki.parse_document(body),
-         [href | _] <- Floki.attribute(document, "base", "href") do
-      href
-    else
-      _ -> nil
+    case HTMLSpans.base_tags(body) do
+      [tag | _] -> HTMLSpans.value(tag, "href")
+      [] -> nil
     end
   end
 
@@ -183,9 +193,14 @@ defmodule Crawler.Parser do
     type = opts[:content_type]
 
     cond do
-      MediaType.css?(type) -> CssParser.parse(body)
-      MediaType.javascript?(type) -> JsParser.elements(body)
-      true -> HtmlParser.parse(body, opts)
+      MediaType.css?(type) ->
+        CssParser.parse(body)
+
+      MediaType.javascript?(type) ->
+        JsParser.elements(body, Map.get(opts, :javascript_goal, :module))
+
+      true ->
+        HtmlParser.references(body, opts)
     end
   end
 end

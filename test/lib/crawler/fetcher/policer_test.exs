@@ -8,24 +8,25 @@ defmodule Crawler.Fetcher.PolicerTest do
   doctest Policer
 
   setup do
-    Store.ops_reset()
-
-    :ok
+    scope = unique_scope("policer")
+    on_exit(fn -> Store.drop_scope(scope) end)
+    {:ok, scope: scope}
   end
 
-  test "max_pages ok" do
-    Store.ops_inc()
-    Store.ops_inc()
+  test "max_pages ok", %{scope: scope} do
+    Store.ops_inc(scope)
+    Store.ops_inc(scope)
 
-    assert {:ok, %{max_pages: :infinity}} = Policer.police(%{max_pages: :infinity})
+    assert {:ok, %{max_pages: :infinity, scope: ^scope}} =
+             Policer.police(%{max_pages: :infinity, scope: scope})
   end
 
-  test "max_pages error" do
-    Store.ops_inc()
-    Store.ops_inc()
+  test "max_pages error", %{scope: scope} do
+    Store.ops_inc(scope)
+    Store.ops_inc(scope)
 
-    assert {:warn, "Fetch failed check 'within_max_pages?', with opts: " <> _} =
-             Policer.police(%{max_pages: 1})
+    assert {:warn, "Fetch failed check 'within_max_pages?', crawl: " <> _} =
+             Policer.police(%{max_pages: 1, scope: scope})
   end
 
   test "max_depths ok" do
@@ -33,7 +34,7 @@ defmodule Crawler.Fetcher.PolicerTest do
   end
 
   test "max_depths error" do
-    assert {:warn, "Fetch failed check 'within_fetch_depth?', with opts: " <> _} =
+    assert {:warn, "Fetch failed check 'within_fetch_depth?', crawl: " <> _} =
              Policer.police(%{
                depth: 2,
                max_depths: 2,
@@ -56,14 +57,14 @@ defmodule Crawler.Fetcher.PolicerTest do
   end
 
   test "uri_scheme error" do
-    assert {:warn, "Fetch failed check 'acceptable_uri_scheme?', with opts: " <> _} =
+    assert {:warn, "Fetch failed check 'acceptable_uri_scheme?', crawl: " <> _} =
              Policer.police(%{url: "ftp://hello.world"})
   end
 
-  test "fetched error" do
-    Crawler.Store.add({"http://policer/exist/", nil})
+  test "fetched error", %{scope: scope} do
+    Store.add({"http://policer/exist/", scope})
 
-    assert {:warn, "Fetch failed check 'not_fetched_yet?', with opts: " <> _} =
-             Policer.police(%{url: "http://policer/exist/", scope: nil})
+    assert {:warn, "Fetch failed check 'not_fetched_yet?', crawl: " <> _} =
+             Policer.police(%{url: "http://policer/exist/", scope: scope})
   end
 end

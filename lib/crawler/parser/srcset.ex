@@ -1,23 +1,21 @@
 defmodule Crawler.Parser.Srcset do
   @moduledoc false
 
+  alias Crawler.HTMLSpans
+
   @candidate ~r/^[\t\n\f\r ,]*([^\t\n\f\r ]+)/
 
   def urls(value), do: Enum.map(spans(value), fn {_start, _length, url} -> url end)
 
   def replace(value, variant, offline) do
-    value
-    |> spans()
-    |> Enum.reverse()
-    |> Enum.reduce(value, fn {start, length, url}, value ->
-      if url == variant do
-        head = binary_part(value, 0, start)
-        tail = binary_part(value, start + length, byte_size(value) - start - length)
-        head <> offline <> tail
-      else
-        value
+    {decoded, segments} = HTMLSpans.decode_with_spans(value)
+
+    edits =
+      for {start, length, url} <- spans(decoded), url == variant do
+        {HTMLSpans.source_span(segments, {start, length}), offline}
       end
-    end)
+
+    HTMLSpans.rewrite(value, edits)
   end
 
   defp spans(value), do: collect(value, 0, [])

@@ -99,8 +99,8 @@ defmodule Crawler.QueueFailureTest do
     assert Store.pending_count(owner_scope) == 0
     assert Store.pending_count(guest_scope) == 0
     assert Store.ops_count(guest_scope) == 1
-    assert Store.generation(owner_scope) == owner[:generation] + 1
-    assert Store.generation(guest_scope) == guest[:generation] + 1
+    refute Store.generation(owner_scope) == owner[:generation]
+    refute Store.generation(guest_scope) == guest[:generation]
     refute Store.find({owner_page, owner_scope})
     refute Store.find({guest_page, guest_scope})
     assert %Store.Page{body: "kept"} = Store.find_processed({kept_page, guest_scope})

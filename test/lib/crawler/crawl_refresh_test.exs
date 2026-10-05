@@ -45,12 +45,18 @@ defmodule Crawler.CrawlRefreshTest do
   } do
     parent = self()
     page = "#{url}/behavior/refresh-race"
-    {:ok, gate} = Agent.start_link(fn -> %{} end)
 
     ReqTestSite.stub(site, "GET", "/behavior/refresh-race", fn conn ->
       pid = self()
       send(parent, {:started, pid})
-      body = released_body(gate, pid)
+
+      body =
+        receive do
+          {:release, body} -> body
+        after
+          5_000 -> raise "Refresh request was not released"
+        end
+
       send(parent, {:finished, body})
       Plug.Conn.resp(conn, 200, body)
     end)
@@ -79,14 +85,14 @@ defmodule Crawler.CrawlRefreshTest do
       )
 
     assert_receive {:started, new}, 1_000
-    Agent.update(gate, &Map.put(&1, new, "NEW"))
+    send(new, {:release, "NEW"})
 
     wait(fn ->
       refute Crawler.running?(second)
       assert %Store.Page{body: "NEW"} = Store.find_processed({page, "refresh-race"})
     end)
 
-    Agent.update(gate, &Map.put(&1, old, "OLD"))
+    send(old, {:release, "OLD"})
     assert_receive {:finished, "OLD"}, 1_000
 
     wait(fn ->
@@ -97,22 +103,5 @@ defmodule Crawler.CrawlRefreshTest do
                tmp("behavior-refresh-race/#{site.path}/behavior/refresh-race", "__index.html")
              ) == @utf8_bom <> "NEW"
     end)
-  end
-
-  defp released_body(gate, pid) do
-    deadline = System.monotonic_time(:millisecond) + 5_000
-
-    Stream.repeatedly(fn ->
-      Process.sleep(10)
-      Agent.get(gate, &Map.get(&1, pid))
-    end)
-    |> Enum.find(fn
-      body when is_binary(body) -> true
-      _ -> System.monotonic_time(:millisecond) > deadline
-    end)
-    |> case do
-      body when is_binary(body) -> body
-      _ -> "late"
-    end
   end
 end

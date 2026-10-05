@@ -1,97 +1,72 @@
 defmodule Crawler.Parser.JsParser do
   @moduledoc """
-  Finds static JavaScript module specifiers.
+  Finds literal JavaScript module specifiers in imports and re-exports.
+
+  Decodes string escapes for URL resolution and keeps original byte spans for rewriting.
+  The optional source goal is `:module` (default) or `:script` for classic JavaScript.
   """
 
-  # A specifier statement may start after a newline, a semicolon, or `}`.
-  # A quote cannot, so the match does not enter a string.
-  @from ~r/(?:^|[\n;}])\s*(?:import|export)\b[^'";]*?\bfrom\s*(["'`])([^"'`]+)\1/
-  @side_effect ~r/(?:^|[\n;}])\s*import\s*(["'`])([^"'`]+)\1/
-  # A property call such as `obj.import("./x")` is not the import keyword.
+  # Scanner masks literal contents. Only its completed string tokens can be specifiers.
+  @from ~r/(?:^|[\n\r;}])\s*(?:import|export)\b[^;]*?\bfrom\s*(["'`])([^"'`]+)\1/
+  @side_effect ~r/(?:^|[\n\r;}])\s*import\s*(["'`])([^"'`]+)\1/
   # The argument must end the call or start the options object. `+` does not.
-  @dynamic ~r/(?<!\.)\bimport\s*\(\s*(["'`])([^"'`]+)\1\s*[,)]/
+  @dynamic ~r/\bimport\s*\(\s*(["'`])([^"'`]+)\1\s*[,)]/
 
   alias Crawler.Parser.JsParser.Scanner
+  alias Crawler.Parser.JsParser.StringLiteral
 
-  def elements(body) when is_binary(body) do
-    Enum.map(specs(body), &{"link", [{"href", &1}], []})
+  def elements(body, goal \\ :module)
+
+  def elements(body, goal) when is_binary(body) do
+    Enum.map(specs(body, goal), &{"link", [{"href", &1}], []})
   end
 
-  def elements(_body), do: []
+  def elements(_body, _goal), do: []
 
-  def specs(body) when is_binary(body) do
+  def specs(body, goal \\ :module)
+
+  def specs(body, goal) when is_binary(body) do
     body
-    |> spans()
+    |> spans(goal)
     |> Enum.map(fn {_at, _len, spec} -> spec end)
     |> Enum.uniq()
   end
 
-  def specs(_body), do: []
+  def specs(_body, _goal), do: []
 
   @doc false
-  def spans(body) when is_binary(body) do
-    {masked, ranges} = Scanner.scan(body)
+  def spans(body, goal \\ :module)
+
+  def spans(body, goal) when is_binary(body) do
+    {masked, strings} = Scanner.scan(body, goal)
+    strings = MapSet.new(strings)
 
     [@from, @side_effect, @dynamic]
-    |> Enum.flat_map(&span_matches(&1, body, masked, ranges))
+    |> Enum.flat_map(&span_matches(&1, body, masked, strings))
     |> Enum.filter(fn {_at, _len, spec} -> local?(spec) end)
   end
 
-  def spans(_body), do: []
+  def spans(_body, _goal), do: []
 
-  defp span_matches(regex, original, masked, ranges) do
+  defp span_matches(regex, original, masked, strings) do
     regex
     |> Regex.scan(masked, return: :index)
-    |> Enum.flat_map(fn [{at, len}, _quote, {spec_at, spec_len}] ->
-      if keyword_in_code?(masked, at, len, ranges) and not property_import?(masked, at, len) do
-        [{spec_at, spec_len, binary_part(original, spec_at, spec_len)}]
+    |> Enum.flat_map(fn [_statement, _quote, {spec_at, spec_len}] ->
+      with true <- MapSet.member?(strings, {spec_at, spec_at + spec_len}),
+           {:ok, spec} <- StringLiteral.decode(binary_part(original, spec_at, spec_len)) do
+        [{spec_at, spec_len, spec}]
       else
-        []
+        _ -> []
       end
     end)
-  end
-
-  # `obj. import("./x")` and `obj./* c */import("./x")` are property calls.
-  # Comments are spaces here, so skip those spaces before checking for `.`.
-  defp property_import?(source, at, len) do
-    case :binary.match(binary_part(source, at, len), "import") do
-      {index, _length} -> previous_non_space(source, at + index) == ?.
-      :nomatch -> false
-    end
-  end
-
-  defp previous_non_space(_source, index) when index <= 0, do: nil
-
-  defp previous_non_space(source, index) do
-    case :binary.at(source, index - 1) do
-      byte when byte in [?\s, ?\t, ?\n, ?\r, ?\f] -> previous_non_space(source, index - 1)
-      byte -> byte
-    end
-  end
-
-  # The specifier itself is a string. Reject the match only when the
-  # import or export keyword is inside one.
-  defp keyword_in_code?(source, at, len, ranges) do
-    key_at =
-      case :binary.match(binary_part(source, at, len), ["import", "export"]) do
-        {index, _length} -> at + index
-        :nomatch -> at
-      end
-
-    not inside_string?(ranges, key_at)
-  end
-
-  defp inside_string?(ranges, index) do
-    Enum.any?(ranges, fn {start, stop} -> index >= start and index < stop end)
   end
 
   defp local?(spec) do
     scheme = String.downcase(spec)
 
-    not String.contains?(spec, "${") and
-      (String.starts_with?(spec, ".") or
-         String.starts_with?(spec, "/") or
-         String.starts_with?(scheme, "http://") or
-         String.starts_with?(scheme, "https://"))
+    String.starts_with?(spec, ".") or
+      String.starts_with?(spec, "/") or
+      String.starts_with?(scheme, "http://") or
+      String.starts_with?(scheme, "https://")
   end
 end
