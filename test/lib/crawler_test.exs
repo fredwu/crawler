@@ -308,7 +308,8 @@ defmodule CrawlerTest do
 
     refute opts1[:scope] == opts2[:scope]
 
-    wait(fn ->
+    # Two forced crawls also fetch robots.txt, and each queue spaces jobs by 100ms.
+    wait(2_000, fn ->
       assert Store.find_processed({url, opts1[:scope]})
       assert Store.find_processed({url, opts2[:scope]})
       assert Store.find_processed({linked_url1, opts1[:scope]})

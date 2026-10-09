@@ -4,11 +4,15 @@ defmodule Crawler.Robots do
   alias Crawler.Fetcher.Requester
   alias Crawler.HTMLSpans
   alias Crawler.Site
+  alias Crawler.Sitemap
   alias Crawler.Store
+  alias Crawler.URL.Percent
 
-  def allow_all, do: %{groups: []}
+  def allow_all, do: %{groups: [], sitemaps: []}
 
-  def disallow_all, do: %{groups: [%{agents: ["*"], rules: [disallow: "/"]}]}
+  def disallow_all do
+    %{groups: [%{agents: ["*"], rules: [disallow: compile_rule("/")]}], sitemaps: []}
+  end
 
   def product_token(user_agent) when is_binary(user_agent) do
     user_agent
@@ -20,22 +24,21 @@ defmodule Crawler.Robots do
   def product_token(_user_agent), do: "Crawler"
 
   def parse(body) when is_binary(body) do
-    groups =
+    lines =
       body
+      |> strip_bom()
       |> String.split(~r/\r\n|\n|\r/)
       |> Enum.map(&strip_comment/1)
       |> Enum.map(&String.trim/1)
-      |> group_lines()
 
-    %{groups: groups}
+    %{groups: group_lines(lines), sitemaps: sitemap_lines(lines)}
   end
 
   def parse(_body), do: allow_all()
 
   def allowed?(rules, url, user_agent) do
     rules = rules || allow_all()
-    token = product_token(user_agent) |> String.downcase()
-    groups = matching_groups(rules.groups, token)
+    groups = matching_groups(Map.get(rules, :groups, []), user_agent)
     decide(Enum.flat_map(groups, & &1.rules), url)
   end
 
@@ -48,23 +51,23 @@ defmodule Crawler.Robots do
   end
 
   def header_nofollow?(headers, user_agent) when is_list(headers) do
-    token = product_token(user_agent) |> String.downcase()
+    tokens = token_set(user_agent)
 
     Enum.any?(headers, fn {name, value} ->
-      String.downcase(to_string(name)) == "x-robots-tag" and directives_block?(value, token)
+      String.downcase(to_string(name)) == "x-robots-tag" and directives_block?(value, tokens)
     end)
   end
 
   def header_nofollow?(_headers, _user_agent), do: false
 
   def meta_nofollow?(body, user_agent) when is_binary(body) do
-    token = product_token(user_agent) |> String.downcase()
+    tokens = token_set(user_agent)
 
     body
     |> HTMLSpans.tags()
     |> Enum.any?(fn tag ->
       tag.name == "meta" and not tag.closing? and not tag.in_template? and
-        meta_blocks?(tag, token)
+        meta_blocks?(tag, tokens)
     end)
   end
 
@@ -88,6 +91,7 @@ defmodule Crawler.Robots do
     case fetch(opts, origin) do
       {:cache, rules} ->
         Store.finish_robots(opts[:scope], origin, rules)
+        Sitemap.follow(opts, origin, rules)
         rules
 
       {:temporary, rules} ->
@@ -105,7 +109,7 @@ defmodule Crawler.Robots do
 
     case Requester.make(robots_opts) do
       {:ok, %{status: status, body: body}} when status in 200..299 and is_binary(body) ->
-        {:cache, parse(body)}
+        if String.valid?(body), do: {:cache, parse(body)}, else: {:temporary, disallow_all()}
 
       {:ok, %{status: status}} when status in 400..499 ->
         {:cache, allow_all()}
@@ -115,17 +119,38 @@ defmodule Crawler.Robots do
     end
   end
 
-  defp matching_groups(groups, token) do
-    specific = Enum.filter(groups, &(token in &1.agents))
-    if specific == [], do: Enum.filter(groups, &("*" in &1.agents)), else: specific
+  defp matching_groups(groups, user_agent) do
+    tokens = user_agent |> product_tokens() |> Enum.filter(&product_name?/1)
+
+    agents =
+      groups
+      |> Enum.flat_map(& &1.agents)
+      |> MapSet.new()
+
+    case longest_token(Enum.filter(tokens, &(MapSet.member?(agents, &1) and &1 != "*"))) do
+      nil -> Enum.filter(groups, &("*" in &1.agents))
+      token -> Enum.filter(groups, &(token in &1.agents))
+    end
+  end
+
+  defp product_name?(token), do: String.match?(token, ~r/[a-z]/)
+
+  defp longest_token([]), do: nil
+
+  # The same length keeps the name that appears later in the User-Agent.
+  # Mozilla and Crawler are both 7 letters, and Crawler is the later one.
+  defp longest_token(tokens) do
+    best = tokens |> Enum.map(&String.length/1) |> Enum.max()
+    tokens |> Enum.reverse() |> Enum.find(&(String.length(&1) == best))
   end
 
   defp decide(rules, url) do
+    target = request_target(url)
+
     matches =
-      for {kind, pattern} <- rules,
-          pattern != "",
-          rule_match?(pattern, target(url, pattern)) do
-        {byte_size(pattern), kind}
+      for {kind, %{regex: regex, length: length}} <- rules,
+          Regex.match?(regex, target) do
+        {length, kind}
       end
 
     case matches do
@@ -139,35 +164,101 @@ defmodule Crawler.Robots do
     end
   end
 
-  defp target(url, pattern) do
-    uri = URI.parse(url)
-    path = if is_binary(uri.path) and uri.path != "", do: uri.path, else: "/"
+  defp request_target(url) do
+    uri = URI.parse(to_string(url))
 
-    if String.contains?(pattern, "?") do
-      path <> "?" <> (uri.query || "")
-    else
-      path
+    path =
+      case uri.path do
+        path when is_binary(path) and path != "" -> compare_text(path, :path)
+        _ -> "/"
+      end
+
+    case uri.query do
+      nil -> path
+      query -> path <> "?" <> compare_text(query, :query)
     end
   end
 
-  defp rule_match?(pattern, path) do
-    anchored = String.ends_with?(pattern, "$")
-    body = if anchored, do: String.trim_trailing(pattern, "$"), else: pattern
+  defp compile_rule(pattern) do
+    {body, anchored?} =
+      if String.ends_with?(pattern, "$") do
+        {binary_part(pattern, 0, byte_size(pattern) - 1), true}
+      else
+        {pattern, false}
+      end
 
-    source =
-      body
-      |> String.split("*", trim: false)
-      |> Enum.map_join(".*", &Regex.escape/1)
+    pieces = body |> String.split("*") |> Enum.map(&canonical_piece/1)
+    source = "\\A" <> Enum.map_join(pieces, ".*", &Regex.escape/1)
+    source = if anchored?, do: source <> "\\z", else: source
+    stars = max(length(pieces) - 1, 0)
 
-    source = if anchored, do: "\\A" <> source <> "\\z", else: "\\A" <> source
-    Regex.match?(Regex.compile!(source), path)
+    length =
+      Enum.reduce(pieces, stars, fn piece, total -> total + byte_size(piece) end) +
+        if(anchored?, do: 1, else: 0)
+
+    %{regex: Regex.compile!(source), length: length}
   end
+
+  defp canonical_piece(piece) do
+    case String.split(piece, "?", parts: 2) do
+      [path, query] -> compare_text(path, :path) <> "?" <> compare_text(query, :query)
+      [path] -> compare_text(path, :path)
+    end
+  end
+
+  defp compare_text(text, context) do
+    text
+    |> Percent.canonicalize(context)
+    |> String.replace("%2a", "*")
+    |> String.replace("%24", "$")
+  end
+
+  defp product_tokens(nil), do: ["crawler"]
+
+  defp product_tokens(user_agent) when is_binary(user_agent) do
+    ~r/[A-Za-z0-9_-]+/
+    |> Regex.scan(user_agent)
+    |> Enum.map(fn [token] -> String.downcase(token) end)
+  end
+
+  defp product_tokens(_user_agent), do: ["crawler"]
+
+  defp token_set(user_agent), do: MapSet.new(product_tokens(user_agent))
+
+  defp agent_name("*"), do: "*"
+
+  defp agent_name(value) do
+    body = String.trim_trailing(value, "*")
+
+    cond do
+      body == "" ->
+        "*"
+
+      true ->
+        case product_tokens(body) do
+          [token | _] -> token
+          [] -> "*"
+        end
+    end
+  end
+
+  defp strip_bom(<<0xEF, 0xBB, 0xBF, rest::binary>>), do: rest
+  defp strip_bom(body), do: body
 
   defp strip_comment(line) do
     case String.split(line, "#", parts: 2) do
       [head, _] -> head
       [head] -> head
     end
+  end
+
+  defp sitemap_lines(lines) do
+    Enum.flat_map(lines, fn line ->
+      case directive(line) do
+        {:sitemap, url} -> [url]
+        _ -> []
+      end
+    end)
   end
 
   defp group_lines(lines) do
@@ -201,8 +292,8 @@ defmodule Crawler.Robots do
   defp add_line(group, line) do
     case directive(line) do
       {:agent, agent} -> %{group | agents: [agent | group.agents]}
-      {:rule, kind, path} -> %{group | rules: [{kind, path} | group.rules]}
-      :skip -> group
+      {:rule, kind, path} -> %{group | rules: [{kind, compile_rule(path)} | group.rules]}
+      _ -> group
     end
   end
 
@@ -213,9 +304,10 @@ defmodule Crawler.Robots do
         value = String.trim(value)
 
         cond do
-          name == "user-agent" and value != "" -> {:agent, String.downcase(value)}
-          name == "allow" -> {:rule, :allow, value}
-          name == "disallow" -> {:rule, :disallow, value}
+          name == "user-agent" and value != "" -> {:agent, agent_name(value)}
+          name == "allow" and value != "" -> {:rule, :allow, value}
+          name == "disallow" and value != "" -> {:rule, :disallow, value}
+          name == "sitemap" and value != "" -> {:sitemap, value}
           true -> :skip
         end
 
@@ -224,13 +316,13 @@ defmodule Crawler.Robots do
     end
   end
 
-  defp meta_blocks?(tag, token) do
+  defp meta_blocks?(tag, tokens) do
     name = tag |> HTMLSpans.value("name") |> to_string() |> String.trim() |> String.downcase()
     content = HTMLSpans.value(tag, "content") || ""
-    name in ["robots", token] and directives_block?(content, token)
+    (name == "robots" or MapSet.member?(tokens, name)) and directives_block?(content, tokens)
   end
 
-  defp directives_block?(value, token) when is_binary(value) do
+  defp directives_block?(value, tokens) when is_binary(value) do
     value
     |> String.downcase()
     |> String.split(",")
@@ -242,10 +334,11 @@ defmodule Crawler.Robots do
           directive in ["nofollow", "none"]
 
         [agent, directive] ->
-          String.trim(agent) == token and String.trim(directive) in ["nofollow", "none"]
+          MapSet.member?(tokens, String.trim(agent)) and
+            String.trim(directive) in ["nofollow", "none"]
       end
     end)
   end
 
-  defp directives_block?(_value, _token), do: false
+  defp directives_block?(_value, _tokens), do: false
 end

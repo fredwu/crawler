@@ -339,7 +339,8 @@ defmodule Crawler.Store.Server do
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
     case State.robots_down(state, ref) do
       {waiters, state} when waiters != [] ->
-        reply_robots(waiters, Robots.allow_all())
+        # The owner died before it stored the file. That is not permission to fetch.
+        reply_robots(waiters, Robots.disallow_all())
         {:noreply, state}
 
       {[], state} ->

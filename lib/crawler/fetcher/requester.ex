@@ -107,9 +107,23 @@ defmodule Crawler.Fetcher.Requester do
   defp timeout_opts(_timeout), do: []
 
   defp allow_redirect?(url, opts) do
-    filter = opts[:url_filter] || UrlFilter
-    opts = opts |> Enum.into(%{}) |> Map.put(:url, url)
+    if opts[:robots_fetch] == true or opts[:sitemap_fetch] == true do
+      http_url?(url)
+    else
+      filter = opts[:url_filter] || UrlFilter
+      opts = opts |> Enum.into(%{}) |> Map.put(:url, url)
+      match?({:ok, true}, filter.filter(url, opts))
+    end
+  end
 
-    match?({:ok, true}, filter.filter(url, opts))
+  defp http_url?(url) do
+    case URI.parse(url) do
+      %URI{scheme: scheme, host: host}
+      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+        true
+
+      _ ->
+        false
+    end
   end
 end
