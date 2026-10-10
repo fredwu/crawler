@@ -1,6 +1,7 @@
 defmodule Crawler.HTTP.Transport do
   @moduledoc false
 
+  alias Crawler.HTTP.Stream
   alias Crawler.URL.Percent
 
   def install(request) do
@@ -34,10 +35,24 @@ defmodule Crawler.HTTP.Transport do
   defp finch(request, logical_uri) do
     uri = request.url
     transport_uri = finch_uri(uri)
-    transported = wrap_callbacks(%{request | url: transport_uri}, logical_uri)
+    streaming = preserve_repeated_headers(request)
+    transported = wrap_callbacks(%{streaming | url: transport_uri}, logical_uri)
     {returned, response} = Req.Steps.run_finch(transported)
     returned = restore_uri(returned, transport_uri, uri)
     {restore_callbacks(returned, request), response}
+  end
+
+  # Req's streamed Finch reducer stores each field with put_header, which keeps
+  # only the last Set-Cookie or Link. Append instead, unless the caller already
+  # replaced :finch_request.
+  defp preserve_repeated_headers(request) do
+    case {request.into, Req.Request.get_option(request, :finch_request)} do
+      {callback, existing} when is_function(callback, 2) and not is_function(existing, 4) ->
+        Req.Request.put_option(request, :finch_request, &Stream.stream/4)
+
+      _other ->
+        request
+    end
   end
 
   defp finch_uri(%URI{query: ""} = uri) do
@@ -83,7 +98,7 @@ defmodule Crawler.HTTP.Transport do
     returned = %{returned | into: original.into}
 
     case Req.Request.get_option(original, :finch_request) do
-      nil -> returned
+      nil -> Req.Request.delete_option(returned, :finch_request)
       callback -> Req.Request.put_option(returned, :finch_request, callback)
     end
   end

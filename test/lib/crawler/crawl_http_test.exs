@@ -381,6 +381,156 @@ defmodule Crawler.CrawlHTTPTest do
     assert Store.find_processed({"#{context.url}/gzip-next", opts.scope})
   end
 
+  test "a double gzip page is stored and followed as html", context do
+    body = ~s|<a href="/nested-next">Next</a>|
+    root = tmp(unique_scope("nested-gzip"))
+
+    ReqTestSite.expect_once(context.site, "GET", "/nested", fn conn ->
+      conn
+      |> put_resp_header("content-type", "text/html")
+      |> put_resp_header("content-encoding", "gzip, gzip")
+      |> resp(200, :zlib.gzip(:zlib.gzip(body)))
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/nested-next", &html(&1, "next"))
+
+    opts = crawl("#{context.url}/nested", context, save_to: root)
+    saved = File.read!(Path.join(root, Snapshot.path("#{context.url}/nested")))
+
+    assert Store.find_processed({"#{context.url}/nested", opts.scope}).body == body
+    assert saved =~ "Next"
+    refute String.starts_with?(saved, <<31, 139>>)
+    assert Store.find_processed({"#{context.url}/nested-next", opts.scope})
+  end
+
+  test "refresh and link headers are followed like the same tags", context do
+    ReqTestSite.expect_once(context.site, "GET", "/headers", fn conn ->
+      conn
+      |> put_resp_header("content-type", "text/html")
+      |> put_resp_header("refresh", "0; url=/headers-next")
+      |> put_resp_header(
+        "link",
+        ~s|</headers-app.css>; rel="stylesheet", </headers-extra.css>; rel="stylesheet", <https://other.test/page>; rel="next"|
+      )
+      |> resp(200, "<p>Hello</p>")
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/headers-next", &html(&1, "next"))
+
+    for path <- ["/headers-app.css", "/headers-extra.css"] do
+      ReqTestSite.expect_once(context.site, "GET", path, fn conn ->
+        conn |> put_resp_header("content-type", "text/css") |> resp(200, "")
+      end)
+    end
+
+    opts = crawl("#{context.url}/headers", context, assets: ["css"])
+
+    assert Store.find_processed({"#{context.url}/headers-next", opts.scope})
+    assert Store.find_processed({"#{context.url}/headers-app.css", opts.scope})
+    assert Store.find_processed({"#{context.url}/headers-extra.css", opts.scope})
+    refute Store.find({"https://other.test/page", opts.scope})
+  end
+
+  test "preload link headers are followed like the same tags", context do
+    ReqTestSite.expect_once(context.site, "GET", "/preload-page", fn conn ->
+      conn
+      |> put_resp_header("content-type", "text/html")
+      |> put_resp_header(
+        "link",
+        ~s|</preload.css>; rel=preload; as=style, </hero.png>; rel=preload; as=image; imagesrcset="a.png 1x, b.png 2x"|
+      )
+      |> resp(200, "<p>Hello</p>")
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/preload.css", fn conn ->
+      conn |> put_resp_header("content-type", "text/css") |> resp(200, "")
+    end)
+
+    for path <- ["/hero.png", "/a.png", "/b.png"] do
+      ReqTestSite.expect_once(context.site, "GET", path, fn conn ->
+        conn |> put_resp_header("content-type", "image/png") |> resp(200, "png")
+      end)
+    end
+
+    opts = crawl("#{context.url}/preload-page", context, assets: ["css", "images"])
+
+    assert Store.find_processed({"#{context.url}/preload.css", opts.scope})
+    assert Store.find_processed({"#{context.url}/hero.png", opts.scope})
+    assert Store.find_processed({"#{context.url}/a.png", opts.scope})
+    assert Store.find_processed({"#{context.url}/b.png", opts.scope})
+  end
+
+  test "repeated link header fields are all followed", context do
+    ReqTestSite.expect_once(context.site, "GET", "/fields", fn conn ->
+      conn
+      |> put_resp_header("content-type", "text/html")
+      |> prepend_resp_headers([
+        {"link", ~s|</fields-app.css>; rel="stylesheet"|},
+        {"link", ~s|</fields-extra.css>; rel="stylesheet"|}
+      ])
+      |> resp(200, "<p>Hello</p>")
+    end)
+
+    for path <- ["/fields-app.css", "/fields-extra.css"] do
+      ReqTestSite.expect_once(context.site, "GET", path, fn conn ->
+        conn |> put_resp_header("content-type", "text/css") |> resp(200, "")
+      end)
+    end
+
+    opts = crawl("#{context.url}/fields", context, assets: ["css"])
+
+    assert Store.find_processed({"#{context.url}/fields-app.css", opts.scope})
+    assert Store.find_processed({"#{context.url}/fields-extra.css", opts.scope})
+  end
+
+  test "a cross-site refresh header is not fetched", context do
+    ReqTestSite.expect_once(context.site, "GET", "/offsite", fn conn ->
+      conn
+      |> put_resp_header("content-type", "text/html")
+      |> put_resp_header("refresh", "0; url=https://other.test/out")
+      |> resp(200, "<p>Hello</p>")
+    end)
+
+    opts = crawl("#{context.url}/offsite", context)
+    refute Store.find({"https://other.test/out", opts.scope})
+  end
+
+  test "nofollow skips a refresh header and still fetches its stylesheet", context do
+    ReqTestSite.expect_once(context.site, "GET", "/quiet", fn conn ->
+      conn
+      |> put_resp_header("content-type", "text/html")
+      |> put_resp_header("x-robots-tag", "nofollow")
+      |> put_resp_header("refresh", "0; url=/secret")
+      |> put_resp_header("link", ~s|</stay.css>; rel="stylesheet"|)
+      |> resp(200, "<p>Hello</p>")
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/stay.css", fn conn ->
+      conn |> put_resp_header("content-type", "text/css") |> resp(200, "")
+    end)
+
+    opts = crawl("#{context.url}/quiet", context, assets: ["css"])
+
+    refute Store.find({"#{context.url}/secret", opts.scope})
+    assert Store.find_processed({"#{context.url}/stay.css", opts.scope})
+  end
+
+  test "refresh and link headers on a stylesheet are not followed", context do
+    ReqTestSite.expect_once(context.site, "GET", "/sheet.css", fn conn ->
+      conn
+      |> put_resp_header("content-type", "text/css")
+      |> put_resp_header("refresh", "0; url=/sheet-next")
+      |> put_resp_header("link", ~s|</sheet-extra.css>; rel="stylesheet"|)
+      |> resp(200, "body{}")
+    end)
+
+    opts = crawl("#{context.url}/sheet.css", context, assets: ["css"])
+
+    assert Store.find_processed({"#{context.url}/sheet.css", opts.scope})
+    refute Store.find({"#{context.url}/sheet-next", opts.scope})
+    refute Store.find({"#{context.url}/sheet-extra.css", opts.scope})
+  end
+
   test "responses above the decoded cap are not stored", context do
     root = tmp(unique_scope("body-cap"))
     small = String.duplicate("a", 100)

@@ -37,7 +37,7 @@ defmodule Crawler.HTTP.Body do
   def finish({request, %Req.Response{} = response}) do
     case state(response) do
       nil ->
-        {request, %{response | body: binary_body(response.body)}}
+        finish_unstreamed(request, response)
 
       %{overflow: true, max: max} = state ->
         close(state)
@@ -53,6 +53,41 @@ defmodule Crawler.HTTP.Body do
   end
 
   def finish(result), do: result
+
+  # Redirect hops and failed transfers never reach finish/1.
+  def release({_request, %Req.Response{} = response}) do
+    response
+    |> state()
+    |> release_state()
+  end
+
+  def release(_other), do: :ok
+
+  # No bytes arrived, so this does not open an inflate stream.
+  defp finish_unstreamed(request, response) do
+    case codings(response) do
+      {:error, name} ->
+        Req.Request.halt(request, %Crawler.HTTP.UnsupportedEncoding{encoding: name})
+
+      [] ->
+        {request, %{response | body: binary_body(response.body)}}
+
+      [coding | _rest] ->
+        Req.Request.halt(request, %Crawler.HTTP.UnsupportedEncoding{
+          encoding: Atom.to_string(coding)
+        })
+    end
+  end
+
+  defp release_state(nil), do: :ok
+  defp release_state(%{closed?: true}), do: :ok
+
+  defp release_state(state) when is_map(state) do
+    close(state)
+    :ok
+  end
+
+  defp release_state(_state), do: :ok
 
   defp finish_stream(request, response, state) do
     case flush(state) do
@@ -75,25 +110,23 @@ defmodule Crawler.HTTP.Body do
   end
 
   defp open(response, max) do
-    case encoding(response) do
-      :identity ->
-        blank(max, :identity, nil)
+    case codings(response) do
+      {:error, name} ->
+        %{blank(max) | error: name}
 
-      :gzip ->
-        blank(max, :gzip, inflate_init(16 + 15))
+      [] ->
+        blank(max)
 
-      :deflate ->
-        blank(max, :deflate, inflate_init(15))
-
-      {:other, name} ->
-        %{blank(max, :other, nil) | error: name}
+      codings ->
+        layers = Enum.map(codings, &init_layer/1)
+        %{blank(max) | layers: layers, encoding: hd(layers).encoding}
     end
   end
 
-  defp blank(max, encoding, zlib) do
+  defp blank(max) do
     %{
-      z: zlib,
-      encoding: encoding,
+      layers: [],
+      encoding: :identity,
       chunks: [],
       size: 0,
       max: max,
@@ -104,6 +137,127 @@ defmodule Crawler.HTTP.Body do
     }
   end
 
+  defp init_layer(:gzip), do: layer(:gzip, 16 + 15)
+  defp init_layer(:deflate), do: layer(:deflate, 15)
+
+  defp layer(encoding, window) do
+    %{z: inflate_init(window), encoding: encoding, finished?: false, produced: 0}
+  end
+
+  # RFC 9110 applies content-codings in listed order, so the last one is outermost.
+  defp codings(response) do
+    response
+    |> Req.Response.get_header("content-encoding")
+    |> Enum.flat_map(&split_codings/1)
+    |> Enum.reject(&(&1 in ["", "identity"]))
+    |> Enum.reverse()
+    |> decode_codings([])
+  end
+
+  defp split_codings(value) do
+    value
+    |> String.downcase()
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+  end
+
+  defp decode_codings([], acc), do: Enum.reverse(acc)
+
+  defp decode_codings([token | rest], acc) do
+    case classify_coding(token) do
+      {:ok, coding} -> decode_codings(rest, [coding | acc])
+      {:error, name} -> {:error, name}
+    end
+  end
+
+  defp classify_coding("gzip"), do: {:ok, :gzip}
+  defp classify_coding("x-gzip"), do: {:ok, :gzip}
+  defp classify_coding("deflate"), do: {:ok, :deflate}
+  defp classify_coding(other), do: {:error, other}
+
+  # `:finished` means this input was consumed, not that the member is closed.
+  # A later chunk still belongs to the same decoder.
+  defp step([layer | rest], data, max) do
+    case next_output(layer.z, data, layer.encoding) do
+      {:error, reason} ->
+        {:error, reason}
+
+      {status, output} ->
+        push(layer, rest, status, output, max)
+    end
+  end
+
+  defp push(layer, rest, status, output, max) do
+    chunk = IO.iodata_length(output)
+    layer = %{layer | produced: layer.produced + chunk, finished?: status == :finished}
+
+    if rest != [] and layer.produced > max do
+      {:overflow, layer.produced, [layer | rest]}
+    else
+      case pipe(rest, output, max) do
+        {:ok, final, rest} -> {status, final, [layer | rest]}
+        {:overflow, produced, layers} -> {:overflow, produced, [layer | layers]}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp pipe([], data, _max), do: {:ok, data, []}
+
+  defp pipe(layers, data, max) do
+    case feed(layers, data, [], max) do
+      {:ok, output, seen} -> {:ok, output, Enum.reverse(seen)}
+      {:overflow, produced, seen, rest} -> {:overflow, produced, Enum.reverse(seen, rest)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp feed([], data, seen, _max), do: {:ok, data, seen}
+
+  defp feed([layer | rest], data, seen, max) do
+    case drain_layer(layer, data, max, []) do
+      {:ok, output, layer} ->
+        feed(rest, output, [layer | seen], max)
+
+      {:overflow, produced, layer} ->
+        {:overflow, produced, [layer | seen], rest}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp drain_layer(layer, data, max, acc) do
+    case next_output(layer.z, data, layer.encoding) do
+      {:error, reason} ->
+        {:error, reason}
+
+      {status, output} ->
+        drain_output(layer, status, output, data, max, acc)
+    end
+  end
+
+  defp drain_output(layer, status, output, data, max, acc) do
+    produced = layer.produced + IO.iodata_length(output)
+    layer = %{layer | produced: produced, finished?: layer.finished? or status == :finished}
+
+    cond do
+      produced > max ->
+        {:overflow, produced, layer}
+
+      status == :finished ->
+        {:ok, IO.iodata_to_binary([acc, output]), layer}
+
+      IO.iodata_length(output) > 0 or data not in [<<>>, []] ->
+        drain_layer(layer, <<>>, max, [acc, output])
+
+      true ->
+        {:ok, IO.iodata_to_binary(acc), layer}
+    end
+  end
+
+  defp all_finished?(layers), do: Enum.all?(layers, & &1.finished?)
+
   defp inflate_init(window) do
     zlib = :zlib.open()
     :zlib.inflateInit(zlib, window)
@@ -111,25 +265,26 @@ defmodule Crawler.HTTP.Body do
   end
 
   defp consume(%{error: error} = state, _data) when not is_nil(error), do: {:stop, state}
-
-  defp consume(%{encoding: :identity} = state, data), do: take(state, data)
-
-  defp consume(%{encoding: :other} = state, _data), do: {:stop, state}
-
+  defp consume(%{layers: []} = state, data), do: take(state, data)
   defp consume(state, data), do: pull(state, data)
 
   defp pull(state, data) do
-    case next_output(state.z, data, state.encoding) do
-      {:finished, output} ->
-        take(%{state | finished?: true}, output)
-
-      {:continue, output} ->
-        continue(state, output, data)
-
+    case step(state.layers, data, state.max) do
       {:error, reason} ->
         {:stop, %{state | error: reason, chunks: []}}
+
+      {:overflow, produced, layers} ->
+        {:stop,
+         %{state | layers: layers, overflow: true, chunks: [], size: max(state.size, produced)}}
+
+      {status, output, layers} ->
+        state = %{state | layers: layers, finished?: all_finished?(layers)}
+        release(state, status, output, data)
     end
   end
+
+  defp release(state, :finished, output, _data), do: take(state, output)
+  defp release(state, :continue, output, data), do: continue(state, output, data)
 
   defp continue(state, output, data) do
     case take(state, output) do
@@ -165,7 +320,7 @@ defmodule Crawler.HTTP.Body do
     end
   end
 
-  defp flush(%{z: nil} = state), do: {:ok, state}
+  defp flush(%{layers: []} = state), do: {:ok, state}
 
   defp flush(%{finished?: true} = state), do: commit(state)
 
@@ -175,7 +330,7 @@ defmodule Crawler.HTTP.Body do
         commit(state)
 
       {:ok, state} ->
-        {:stop, %{state | error: Atom.to_string(state.encoding), chunks: []}}
+        {:stop, %{state | error: layer_name(state), chunks: []}}
 
       {:stop, state} ->
         {:stop, state}
@@ -184,10 +339,10 @@ defmodule Crawler.HTTP.Body do
 
   # `:zlib.safeInflate/2` returns `:finished` when the input is consumed. The gzip or zlib trailer is checked by `inflateEnd/1`.
   defp commit(state) do
-    if trailer_ok?(state) do
+    if Enum.all?(state.layers, &trailer_ok?/1) do
       {:ok, state}
     else
-      {:stop, %{state | error: Atom.to_string(state.encoding), chunks: []}}
+      {:stop, %{state | error: layer_name(state), chunks: []}}
     end
   end
 
@@ -201,41 +356,31 @@ defmodule Crawler.HTTP.Body do
   end
 
   defp close(%{closed?: true} = state), do: state
-  defp close(%{z: nil} = state), do: %{state | closed?: true}
 
-  defp close(%{z: zlib} = state) do
+  defp close(%{layers: layers} = state) do
+    Enum.each(layers, &close_layer/1)
+    %{state | layers: [], closed?: true}
+  end
+
+  defp close_layer(%{z: nil}), do: :ok
+
+  defp close_layer(%{z: zlib}) do
     try do
       :zlib.inflateEnd(zlib)
     catch
       _, _ -> :ok
     end
 
-    :zlib.close(zlib)
-    %{state | z: nil, closed?: true}
-  end
-
-  defp encoding(response) do
-    case Req.Response.get_header(response, "content-encoding") do
-      [value | _] -> decode_encoding(value)
-      _ -> :identity
+    # :zlib.close/1 raises when this stream was already closed.
+    try do
+      :zlib.close(zlib)
+    catch
+      _, _ -> :ok
     end
   end
 
-  defp decode_encoding(value) do
-    token =
-      value
-      |> String.downcase()
-      |> String.split(",", parts: 2)
-      |> hd()
-      |> String.trim()
-
-    case token do
-      token when token in ["", "identity"] -> :identity
-      token when token in ["gzip", "x-gzip"] -> :gzip
-      "deflate" -> :deflate
-      other -> {:other, other}
-    end
-  end
+  defp layer_name(%{layers: [%{encoding: encoding} | _]}), do: Atom.to_string(encoding)
+  defp layer_name(%{encoding: encoding}), do: Atom.to_string(encoding)
 
   defp max_body(request) do
     case Req.Request.get_option(request, :crawler_max_body) do

@@ -5,6 +5,7 @@ defmodule Crawler.Parser do
 
   alias Crawler.Dispatcher
   alias Crawler.HTMLSpans
+  alias Crawler.HTTP.DocumentHeaders
   alias Crawler.MediaType
   alias Crawler.Parser.CssParser
   alias Crawler.Parser.Guarder
@@ -200,10 +201,18 @@ defmodule Crawler.Parser do
   defp do_parse_links(false, _body, _opts, _link_handler), do: []
 
   defp do_parse_links(true, body, opts, link_handler) do
-    Enum.map(
-      parse_file(body, opts),
-      &LinkParser.parse(&1, opts, link_handler)
-    )
+    body
+    |> parse_file(opts)
+    |> prepend_document_headers(opts)
+    |> Enum.map(&LinkParser.parse(&1, opts, link_handler))
+  end
+
+  defp prepend_document_headers(elements, opts) do
+    if html?(opts) do
+      DocumentHeaders.elements(opts[:headers]) ++ elements
+    else
+      elements
+    end
   end
 
   defp parse_file(body, opts) do

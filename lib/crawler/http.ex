@@ -97,23 +97,29 @@ defmodule Crawler.HTTP do
   # crawl is allowed to request, and the hop requests that normalized address.
   # A blank location is removed so Req does not request it. A spent redirect
   # budget stays with Req, which reports too many redirects and does not fetch
-  # the next address.
+  # the next address. A hop that will not reach Body.finish/1 closes its inflate
+  # streams here. A response that stays in this pipeline is left open.
   defp guard_redirect({request, %Req.Response{status: status} = response}, allow)
        when status in @redirect_statuses do
-    if follow_redirects?(request) do
-      case first_location(response) do
-        nil -> {request, Req.Response.delete_header(response, "location")}
-        location -> review_redirect(request, response, location, allow)
-      end
-    else
-      {request, response}
+    cond do
+      not redirect_enabled?(request) ->
+        {request, response}
+
+      hops_remaining?(request) ->
+        review_location(request, response, allow)
+
+      location_header?(response) ->
+        {request, abandon_body(request, response)}
+
+      true ->
+        {request, response}
     end
   end
 
   defp guard_redirect(result, _allow), do: result
 
-  defp follow_redirects?(request) do
-    Req.Request.get_option(request, :redirect, true) != false and hops_remaining?(request)
+  defp redirect_enabled?(request) do
+    Req.Request.get_option(request, :redirect, true) != false
   end
 
   # `:req_redirect_count` is the hop count Req stores on the inner request.
@@ -133,19 +139,44 @@ defmodule Crawler.HTTP do
     end
   end
 
+  defp location_header?(response) do
+    match?([_ | _], Req.Response.get_header(response, "location"))
+  end
+
+  defp review_location(request, response, allow) do
+    case first_location(response) do
+      nil ->
+        {request, Req.Response.delete_header(response, "location")}
+
+      location ->
+        review_redirect(request, response, location, allow)
+    end
+  end
+
   defp review_redirect(request, response, location, allow) do
+    response = abandon_body(request, response)
+
     case URL.resolve(location, URI.to_string(request.url)) do
       {:ok, next} ->
-        if allow.(next) do
-          request = redirect_headers(request, next)
-          {request, Req.Response.put_header(response, "location", next)}
-        else
-          Req.Request.halt(request, %RedirectRejected{url: next})
-        end
+        accepted_redirect(request, response, next, allow)
 
       :skip ->
         Req.Request.halt(request, %RedirectRejected{url: location})
     end
+  end
+
+  defp accepted_redirect(request, response, next, allow) do
+    if allow.(next) do
+      request = redirect_headers(request, next)
+      {request, Req.Response.put_header(response, "location", next)}
+    else
+      Req.Request.halt(request, %RedirectRejected{url: next})
+    end
+  end
+
+  defp abandon_body(request, response) do
+    Body.release({request, response})
+    response
   end
 
   defp capture_cookies({request, %Req.Response{} = response} = result) do
