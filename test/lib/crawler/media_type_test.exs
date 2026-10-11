@@ -35,6 +35,9 @@ defmodule Crawler.MediaTypeTest do
     refute MediaType.css?(nil)
     refute MediaType.javascript?(nil)
     refute MediaType.xhtml?(nil)
+    refute MediaType.svg?(nil)
+    assert MediaType.svg?(" Image/SVG+XML ; charset=utf-8 ")
+    refute MediaType.svg?("image/svg")
     assert MediaType.css?(" Text/CSS ; charset=utf-8")
     assert MediaType.javascript?(" Application/JavaScript ; charset=utf-8")
   end

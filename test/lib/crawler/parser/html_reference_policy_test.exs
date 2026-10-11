@@ -60,7 +60,8 @@ defmodule Crawler.Parser.HTMLReferencePolicyTest do
              {"image.png", "http://example.com/dir/image.png", "img"},
              {"sprite.svg#mark", "http://example.com/dir/sprite.svg", "img"},
              {"next", "http://example.com/dir/next", "a"},
-             {"app.js", "http://example.com/dir/app.js", "script"}
+             {"app.js", "http://example.com/dir/app.js", "script"},
+             {"ignored", "http://example.com/dir/ignored", "a"}
            ]
   end
 

@@ -151,6 +151,33 @@ defmodule Crawler.FilterErrorTest do
     assert_failed_settlement(opts, requests)
   end
 
+  test "a duplicate asset keeps the already-seen warning when the filter errors", %{opts: opts} do
+    assert {:ok, _} = Store.add({opts.url, opts.scope})
+    opts = %{opts | html_tag: "img", filter_result: {:error, :filter_unavailable}}
+
+    assert {:warn, message} = Fetcher.fetch(opts)
+    assert message =~ "not_fetched_yet?"
+    refute_received {:filtered, _, _}
+  end
+
+  test "a duplicate page link still returns a url filter error", %{opts: opts} do
+    assert {:ok, _} = Store.add({opts.url, opts.scope})
+    opts = %{opts | html_tag: "a", filter_result: {:error, :filter_unavailable}}
+
+    assert {:error, :filter_unavailable} = Fetcher.fetch(opts)
+    assert_received {:filtered, url, {:error, :filter_unavailable}}
+    assert url == opts.url
+  end
+
+  test "a rejected duplicate page link does not open the stored page", %{opts: opts} do
+    assert {:ok, _} = Store.add({opts.url, opts.scope})
+    opts = %{opts | html_tag: "a", filter_result: {:ok, false}}
+
+    assert {:warn, message} = Fetcher.fetch(opts)
+    assert message =~ "not_fetched_yet?"
+    refute Store.find_processed({opts.url, opts.scope})
+  end
+
   test "a queued filter error releases its page slot and permits a successful retry", %{
     opts: opts,
     requests: requests

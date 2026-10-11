@@ -29,9 +29,28 @@ defmodule Crawler.Parser.Guarder do
       iex>   %{html_tag: "link", content_type: "image/png"}
       iex> )
       false
+
+      iex> Guarder.pass?(
+      iex>   %{html_tag: "a", content_type: "image/svg+xml"}
+      iex> )
+      true
+
+      iex> Guarder.pass?(
+      iex>   %{html_tag: "img", content_type: "image/svg+xml"}
+      iex> )
+      false
+
+      iex> Guarder.pass?(
+      iex>   %{html_tag: "a", content_type: "image/svg+xml; charset=utf-8"}
+      iex> )
+      true
   """
   def pass?(opts) do
-    parsable_tag?(opts[:html_tag]) and parsable_type?(opts[:content_type])
+    if MediaType.svg?(opts[:content_type]) do
+      opts[:html_tag] == "a"
+    else
+      parsable_tag?(opts[:html_tag]) and parsable_type?(opts[:content_type])
+    end
   end
 
   defp parsable_tag?(html_tag), do: html_tag in ["a", "link", "script"]

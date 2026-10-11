@@ -61,10 +61,14 @@ defmodule Crawler.Parser.HtmlParser do
     end)
     |> Enum.filter(fn tag ->
       HTMLReferences.attributes(tag.name, tag.attributes, opts, tag.namespace) != [] or
-        (tag.namespace == :html and
-           ((tag.name == "script" and HTMLReferences.enabled?(opts, "js")) or
-              (tag.name == "style" and HTMLReferences.enabled?(opts, "css"))))
+        text_source?(tag, opts)
     end)
+  end
+
+  defp text_source?(tag, opts) do
+    tag.namespace in [:html, :svg] and
+      ((tag.name == "script" and HTMLReferences.enabled?(opts, "js")) or
+         (tag.name == "style" and HTMLReferences.enabled?(opts, "css")))
   end
 
   defp prepare_source(body, tags) do

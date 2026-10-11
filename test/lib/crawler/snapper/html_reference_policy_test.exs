@@ -76,7 +76,7 @@ defmodule Crawler.Snapper.HTMLReferencePolicyTest do
     expected =
       ~s|<svg><script src="image.png"/><image href="#{offline("image.png")}" data="image.png"/>| <>
         ~s|<![CDATA[<image href="image.png"/>]]></svg>| <>
-        ~s|<math><a href="image.png">M</a></math><a href="#{offline("image.png")}">A</a>|
+        ~s|<math><a href="#{offline("image.png")}">M</a></math><a href="#{offline("image.png")}">A</a>|
 
     assert rewrite(source, ["images", "js"]) == expected
   end

@@ -37,18 +37,38 @@ defmodule Crawler.Snapper.LinkReplacer.Html do
   end
 
   defp replace_value(
+         %{namespace: :svg, name: tag},
+         %{name: name, decoded: variant, value: value} = attr,
+         variant,
+         offline
+       )
+       when name in ~w(href xlink:href) do
+    if HTMLReferences.local_reference?(variant) and HTMLReferences.role(tag, name, []) == "img" do
+      value
+    else
+      href_replacement(attr, offline)
+    end
+  end
+
+  defp replace_value(
          _tag,
-         %{name: name, decoded: variant, terminal_slash?: terminal},
+         %{name: name, decoded: variant} = attr,
          variant,
          offline
        )
        when name in ~w(href xlink:href src poster data) do
-    if terminal, do: "\"" <> offline <> "\"", else: offline
+    href_replacement(attr, offline)
   end
 
   defp replace_value(_tag, %{name: name, value: value}, variant, offline)
        when name in ~w(srcset imagesrcset) do
     Srcset.replace(value, variant, offline)
+  end
+
+  defp replace_value(%{namespace: :svg}, %{name: "style", value: value}, variant, offline) do
+    if HTMLReferences.local_reference?(variant),
+      do: value,
+      else: Css.replace(value, variant, offline)
   end
 
   defp replace_value(_tag, %{name: "style", value: value}, variant, offline) do
@@ -60,6 +80,9 @@ defmodule Crawler.Snapper.LinkReplacer.Html do
   end
 
   defp replace_value(_tag, attr, _variant, _offline), do: attr.value
+
+  defp href_replacement(%{terminal_slash?: true}, offline), do: "\"" <> offline <> "\""
+  defp href_replacement(_attr, offline), do: offline
 
   def drop_base(body, opts) do
     if MediaType.html?(opts[:content_type]) do

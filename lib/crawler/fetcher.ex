@@ -13,11 +13,14 @@ defmodule Crawler.Fetcher do
   alias Crawler.Fetcher.Requester
   alias Crawler.HTTP
   alias Crawler.Linker.Snapshot
+  alias Crawler.MediaType
   alias Crawler.Robots
   alias Crawler.Snapper
   alias Crawler.Store
   alias Crawler.Store.Page
   alias Crawler.URL
+
+  @picture_pause 50
 
   @doc """
   Fetches a URL by:
@@ -29,12 +32,141 @@ defmodule Crawler.Fetcher do
   - performing retries upon failed fetches through `Crawler.Fetcher.Retrier.perform/2`
   """
   def fetch(opts) do
+    case fetch_unseen(opts) do
+      {:warn, "Fetch failed check 'not_fetched_yet?'" <> _} = warn ->
+        open_stored_svg(opts) || warn
+
+      other ->
+        other
+    end
+  end
+
+  defp fetch_unseen(opts) do
     with {:ok, opts} <- Policer.police(opts),
          :ok <- permit_robots(opts),
          {:ok, opts} <- Recorder.record(opts) do
       opts[:retrier].perform(fn -> fetch_url(opts) end, opts)
     end
   end
+
+  # The first fetch stores the body and keeps its reference role. A later page
+  # link still parses and rewrites that SVG, then records the document role so
+  # another link does not parse it again. Picture-only references stay closed.
+  # The document link waits out a picture fetch so that fetch's snapshot cannot
+  # replace the rewritten file, and so the final response URL is already stored.
+  # The page-link check comes before the URL filter. A duplicate asset must keep
+  # the original already-seen warning when that filter returns an error.
+  defp open_stored_svg(opts) do
+    with true <- opts[:html_tag] == "a",
+         {:ok, true} <- admit_reference(opts),
+         %Page{body: body, opts: stored} <- await_picture(opts),
+         true <- svg_document_upgrade?(opts, stored) do
+      publish_stored_svg(body, stored, opts)
+    else
+      {:error, _} = error -> error
+      _ -> nil
+    end
+  end
+
+  defp await_picture(opts) do
+    key = {opts[:url], opts[:scope]}
+
+    cond do
+      not current_crawl?(opts) ->
+        nil
+
+      ready = ready_page(key) ->
+        ready
+
+      picture_running?(key) ->
+        Process.sleep(@picture_pause)
+        await_picture(opts)
+
+      true ->
+        ready_page(key)
+    end
+  end
+
+  defp ready_page(key) do
+    case Store.find(key) do
+      %Page{processed: true, body: body, opts: stored} = page
+      when is_binary(body) and is_map(stored) ->
+        page
+
+      _ ->
+        nil
+    end
+  end
+
+  # Unknown bytes can still be an SVG. A known non-SVG picture is not worth holding
+  # a worker, even when its body was not stored. Duplicate page links are not
+  # picture fetches and return immediately.
+  defp picture_running?(key) do
+    case Store.find(key) do
+      %Page{} = page ->
+        picture_fetch?(page) and open_picture?(page) and Store.fetch_in_flight?(key)
+
+      _ ->
+        false
+    end
+  end
+
+  defp picture_fetch?(%Page{opts: %{html_tag: tag}}) when is_binary(tag) and tag != "a", do: true
+  defp picture_fetch?(%Page{fetch_tag: tag}) when is_binary(tag) and tag != "a", do: true
+  defp picture_fetch?(_page), do: false
+
+  defp open_picture?(%Page{picture_type: type}) when is_binary(type), do: MediaType.svg?(type)
+  defp open_picture?(%Page{body: body}) when not is_binary(body), do: true
+  defp open_picture?(%Page{opts: stored}), do: MediaType.svg?(stored[:content_type])
+
+  defp current_crawl?(opts) do
+    Store.current?(opts[:scope], opts[:generation], opts[:queue])
+  end
+
+  defp publish_stored_svg(body, stored, opts) do
+    opts = document_opts(opts, stored)
+
+    case snap_page(body, opts) do
+      {:ok, _} ->
+        case Store.add_page_data(
+               {opts[:url], opts[:scope]},
+               body,
+               Map.put(stored, :html_tag, "a")
+             ) do
+          {:error, _} = error -> error
+          _ -> %Page{url: opts[:url], body: body, opts: opts}
+        end
+
+      other ->
+        other
+    end
+  end
+
+  # `depth` matches a normal fetch: Recorder increments it once before parsing.
+  defp document_opts(opts, stored) do
+    opts =
+      opts
+      |> Map.put(:content_type, stored[:content_type])
+      |> Map.put(:referrer_url, stored[:referrer_url] || opts[:url])
+      |> Map.put(:headers, stored[:headers])
+      |> Map.replace!(:depth, opts[:depth] + 1)
+
+    case stored[:alias_url] do
+      final when is_binary(final) -> Map.put(opts, :alias_url, final)
+      _ -> opts
+    end
+  end
+
+  defp svg_document_upgrade?(opts, stored) do
+    opts[:html_tag] == "a" and stored[:html_tag] != "a" and MediaType.svg?(stored[:content_type])
+  end
+
+  defp admit_reference(%{url_filter: filter, url: url} = opts)
+       when is_atom(filter) and not is_nil(filter) do
+    filter.filter(url, opts)
+  end
+
+  defp admit_reference(_opts), do: {:ok, true}
 
   defp permit_robots(opts) do
     if Robots.permitted?(opts) do
@@ -92,8 +224,11 @@ defmodule Crawler.Fetcher do
     opts = HeaderPreparer.prepare(Req.get_headers_list(response), opts)
     body = Charset.decode(body, opts)
 
-    with {:ok, _} <- Recorder.maybe_store_page(body, opts),
-         {:ok, opts} <- record_referrer_url(response, body, opts) do
+    with :ok <- note_picture_type(opts),
+         {:ok, _} <- Recorder.maybe_store_page(body, opts),
+         :ok <- retain_picture_svg(body, opts),
+         {:ok, opts} <- record_referrer_url(response, body, opts),
+         :ok <- store_response_identity(opts) do
       case snap_page(body, opts) do
         {:ok, _} ->
           Logger.debug(fn -> "Fetched #{Diagnostics.url(opts[:url])}" end)
@@ -182,6 +317,74 @@ defmodule Crawler.Fetcher do
   end
 
   defp remember_alias(_final, _body, opts), do: {:ok, opts}
+
+  # Record the type before the body is stored. A document link can then stop
+  # waiting as soon as a picture is known not to be SVG.
+  defp note_picture_type(%{html_tag: tag} = opts) when is_binary(tag) and tag != "a" do
+    case opts[:content_type] do
+      type when is_binary(type) ->
+        Store.note_picture_type({opts[:url], opts[:scope]}, type, opts[:generation], opts[:queue])
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp note_picture_type(_opts), do: :ok
+
+  # The user store already ran. Keep an internal copy only when it did not write
+  # one, so a later document link can open this SVG. Document pages and other
+  # media stay body-less when storage is disabled.
+  defp retain_picture_svg(body, %{html_tag: tag} = opts) when is_binary(tag) and tag != "a" do
+    if MediaType.svg?(opts[:content_type]) do
+      retain_missing_body(body, opts)
+    else
+      :ok
+    end
+  end
+
+  defp retain_picture_svg(_body, _opts), do: :ok
+
+  defp retain_missing_body(body, opts) do
+    key = {opts[:url], opts[:scope]}
+
+    case Store.find(key) do
+      %Page{body: stored} when is_binary(stored) ->
+        :ok
+
+      _ ->
+        case Store.add_page_data(key, body, opts) do
+          {:error, :stale} = error -> error
+          _ -> :ok
+        end
+    end
+  end
+
+  # The user store already received the body. Only the internal page needs the
+  # final URL, so a later document upgrade does not resolve links against the
+  # pre-redirect request and can publish the alias landing as well.
+  defp store_response_identity(opts) do
+    key = {opts[:url], opts[:scope]}
+
+    case Store.find(key) do
+      %Page{body: body, opts: stored} when is_binary(body) and is_map(stored) ->
+        stored =
+          stored
+          |> Map.put(:referrer_url, opts[:referrer_url])
+          |> put_alias_url(opts[:alias_url])
+
+        case Store.add_page_data(key, body, stored) do
+          {:error, :stale} = error -> error
+          _ -> :ok
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp put_alias_url(opts, url) when is_binary(url), do: Map.put(opts, :alias_url, url)
+  defp put_alias_url(opts, _url), do: opts
 
   defp store_alias(body, opts) do
     case Recorder.maybe_store_page(body, %{opts | url: opts[:alias_url]}) do

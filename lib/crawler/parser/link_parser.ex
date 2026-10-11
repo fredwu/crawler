@@ -47,14 +47,16 @@ defmodule Crawler.Parser.LinkParser do
       tag
       |> links(attrs, children, opts, namespace)
       |> Enum.map(fn {attr, link} ->
-        role = HTMLReferences.role(tag, attr, attrs)
-        goal = reference_goal(tag, attr, attrs, opts)
-        {role, goal, LinkExpander.expand({attr_name(attr), link}, opts)}
+        {role, reference_tag} = reference_identity(tag, attr, attrs, namespace)
+        goal = reference_goal(tag, attr, link, attrs, opts, namespace)
+        {role, reference_tag, goal, LinkExpander.expand({attr_name(attr), link}, opts)}
       end)
-      |> Enum.reject(&match?({_role, _goal, nil}, &1))
-      |> Enum.uniq_by(fn {role, goal, element} -> {role, goal, raw_link(element)} end)
-      |> Enum.map(fn {role, goal, element} ->
-        handler.(element, handler_opts(opts, role, goal, tag))
+      |> Enum.reject(&match?({_role, _reference_tag, _goal, nil}, &1))
+      |> Enum.uniq_by(fn {role, reference_tag, goal, element} ->
+        {role, reference_tag, goal, raw_link(element)}
+      end)
+      |> Enum.map(fn {role, reference_tag, goal, element} ->
+        handler.(element, handler_opts(opts, role, goal, reference_tag))
       end)
 
     case results do
@@ -70,10 +72,24 @@ defmodule Crawler.Parser.LinkParser do
       |> HTMLReferences.attributes(attrs, opts, namespace)
       |> Enum.flat_map(fn name -> attribute_links(name, HTMLReferences.attribute(attrs, name)) end)
 
-    attributes ++ source_links(tag, attrs, children, opts, namespace)
+    (attributes ++ source_links(tag, attrs, children, opts, namespace))
+    |> drop_same_drawing(tag, namespace)
   end
 
-  defp source_links("style", _attrs, children, opts, :html) do
+  defp drop_same_drawing(links, tag, :svg) do
+    Enum.reject(links, &same_drawing?(&1, tag))
+  end
+
+  defp drop_same_drawing(links, _tag, _namespace), do: links
+
+  defp same_drawing?({attr, value}, tag) do
+    HTMLReferences.local_reference?(value) and
+      (attr in ["style", "style_text"] or HTMLReferences.role(tag, attr, []) == "img")
+  end
+
+  defp same_drawing?(_link, _tag), do: false
+
+  defp source_links("style", _attrs, children, opts, namespace) when namespace in [:html, :svg] do
     if HTMLReferences.enabled?(opts, "css"),
       do: children |> raw_text() |> style_links("style_text"),
       else: []
@@ -81,16 +97,28 @@ defmodule Crawler.Parser.LinkParser do
 
   defp source_links("script", attrs, children, opts, :html) do
     if HTMLReferences.enabled?(opts, "js") and HTMLReferences.script_source(attrs) == :inline do
-      children
-      |> raw_text()
-      |> JsParser.specs(HTMLReferences.script_goal(attrs))
-      |> Enum.map(&{"href", &1})
+      inline_script_links(attrs, children)
+    else
+      []
+    end
+  end
+
+  defp source_links("script", attrs, children, opts, :svg) do
+    if HTMLReferences.enabled?(opts, "js") and HTMLReferences.svg_script_source(attrs) == :inline do
+      inline_script_links(attrs, children)
     else
       []
     end
   end
 
   defp source_links(_tag, _attrs, _children, _opts, _namespace), do: []
+
+  defp inline_script_links(attrs, children) do
+    children
+    |> raw_text()
+    |> JsParser.specs(HTMLReferences.script_goal(attrs))
+    |> Enum.map(&{"href", &1})
+  end
 
   defp attribute_links(_name, nil), do: []
   defp attribute_links("style", value), do: style_links(value, "style")
@@ -120,10 +148,17 @@ defmodule Crawler.Parser.LinkParser do
     |> Enum.map(fn {"link", [{"href", url}], _} -> {attr, url} end)
   end
 
-  defp reference_goal(tag, attr, attrs, opts) do
+  defp reference_goal(tag, attr, link, attrs, opts, namespace) do
     cond do
       MediaType.javascript?(opts[:content_type]) ->
         :module
+
+      tag == "script" and namespace == :svg and attr == "xlink:href" ->
+        HTMLReferences.script_goal(attrs)
+
+      tag == "script" and namespace == :svg and attr == "href" and
+          HTMLReferences.attribute(attrs, "href") == link ->
+        HTMLReferences.script_goal(attrs)
 
       tag == "script" and attr == "href" ->
         :module
@@ -138,6 +173,12 @@ defmodule Crawler.Parser.LinkParser do
         nil
     end
   end
+
+  defp reference_identity(_tag, attr, _attrs, :math) when attr in ["href", "xlink:href"],
+    do: {"a", "a"}
+
+  defp reference_identity(tag, attr, attrs, _namespace),
+    do: {HTMLReferences.role(tag, attr, attrs), tag}
 
   defp handler_opts(opts, role, goal, tag) do
     opts =

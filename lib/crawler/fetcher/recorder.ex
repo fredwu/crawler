@@ -60,7 +60,7 @@ defmodule Crawler.Fetcher.Recorder do
   end
 
   defp store_url(opts) do
-    Store.add({opts[:url], opts[:scope]}, opts[:generation], opts[:queue])
+    Store.add({opts[:url], opts[:scope]}, opts[:generation], opts[:queue], opts[:html_tag])
   end
 
   defp store_url_depth(opts) do

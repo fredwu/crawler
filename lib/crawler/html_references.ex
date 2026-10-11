@@ -3,6 +3,9 @@ defmodule Crawler.HTMLReferences do
 
   alias Crawler.MediaType
 
+  @svg_paint ~w(image use feimage lineargradient radialgradient pattern filter)
+  @math_inert @svg_paint ++ ~w(base script style svg)
+
   def attributes(tag, attrs, opts, namespace \\ :html) do
     names = element_attributes(tag, attrs, opts, namespace)
 
@@ -20,6 +23,21 @@ defmodule Crawler.HTMLReferences do
       true -> :inline
     end
   end
+
+  def svg_script_source(attrs) do
+    cond do
+      not executable_script?(attrs) -> :none
+      attribute(attrs, "href") != nil -> :external
+      attribute(attrs, "xlink:href") != nil -> :external
+      true -> :inline
+    end
+  end
+
+  def local_reference?(value) when is_binary(value) do
+    value |> String.trim() |> String.starts_with?("#")
+  end
+
+  def local_reference?(_value), do: false
 
   def executable_script?(attrs) do
     type = attrs |> script_type() |> String.downcase(:ascii)
@@ -57,7 +75,7 @@ defmodule Crawler.HTMLReferences do
   def role(tag, _attr, _attrs) when tag in ["a", "area", "iframe", "object", "embed", "meta"],
     do: "a"
 
-  def role(tag, _attr, _attrs) when tag in ["image", "use"], do: "img"
+  def role(tag, _attr, _attrs) when tag in @svg_paint, do: "img"
   def role("link", "imagesrcset", _attrs), do: "img"
   def role("link", "href", attrs), do: link_role(attrs)
   def role(tag, _attr, _attrs) when tag in ["img", "source", "video", "audio", "track"], do: tag
@@ -87,8 +105,27 @@ defmodule Crawler.HTMLReferences do
     if skip_link?(attrs, opts), do: [], else: svg_href(attrs)
   end
 
-  defp element_attributes(tag, attrs, opts, :svg) when tag in ["image", "use"],
+  defp element_attributes("script", attrs, opts, :svg) do
+    if enabled?(opts, "js") and svg_script_source(attrs) == :external do
+      svg_href(attrs)
+    else
+      []
+    end
+  end
+
+  defp element_attributes(tag, attrs, opts, :svg) when tag in @svg_paint,
     do: channel_attributes(opts, "images", svg_href(attrs))
+
+  defp element_attributes(tag, _attrs, _opts, :math) when tag in @math_inert, do: []
+
+  defp element_attributes(_tag, attrs, opts, :math) do
+    cond do
+      skip_link?(attrs, opts) -> []
+      attribute(attrs, "href") != nil -> ["href"]
+      attribute(attrs, "xlink:href") != nil -> ["xlink:href"]
+      true -> []
+    end
+  end
 
   defp element_attributes(_tag, _attrs, _opts, namespace) when namespace != :html, do: []
 

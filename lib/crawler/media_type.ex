@@ -49,4 +49,7 @@ defmodule Crawler.MediaType do
 
   def xhtml?(nil), do: false
   def xhtml?(type), do: normalize(type) == "application/xhtml+xml"
+
+  def svg?(nil), do: false
+  def svg?(type), do: normalize(type) == "image/svg+xml"
 end

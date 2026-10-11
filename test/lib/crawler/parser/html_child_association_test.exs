@@ -20,6 +20,7 @@ defmodule Crawler.Parser.HTMLChildAssociationTest do
         ~s|<a href="next">Out<b>Live</b></a>|
 
     assert HtmlParser.parse(source, %{}) == [
+             {"a", [{"href", "next"}], ["Math", {"b", [], ["Foreign"]}]},
              {"a", [{"href", "next"}], ["Out", {"b", [], ["Live"]}]}
            ]
   end

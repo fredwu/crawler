@@ -6,6 +6,7 @@ defmodule Crawler.Snapper.LinkReplacer do
   and script or style preload references because saved resource bytes can change.
   """
 
+  alias Crawler.HTMLReferences
   alias Crawler.Linker
   alias Crawler.MediaType
   alias Crawler.Parser
@@ -81,7 +82,7 @@ defmodule Crawler.Snapper.LinkReplacer do
       |> Html.drop_base(opts)
       |> RawText.restore(saved, fn source, source_opts ->
         rewrite_opts = opts |> Map.delete(:javascript_goal) |> Map.merge(source_opts)
-        rewrite_body(source, raw_links, rewrite_opts)
+        rewrite_body(source, source_links(raw_links, source_opts), rewrite_opts)
       end)
 
     {:ok, new_body}
@@ -101,6 +102,14 @@ defmodule Crawler.Snapper.LinkReplacer do
       {raw, Linker.offline_link(opts[:url], with_fragment(resolved, raw))}
     end)
   end
+
+  # An SVG paint server such as url(#id) points at this drawing. Rewriting it
+  # with another link's matching fragment would send the paint at an offline file.
+  defp source_links(links, %{svg_style: true}) do
+    Enum.reject(links, fn {raw, _offline} -> HTMLReferences.local_reference?(raw) end)
+  end
+
+  defp source_links(links, _source_opts), do: links
 
   defp rewrite_body(body, [], _opts), do: body
 

@@ -55,8 +55,22 @@ defmodule Crawler.Store do
   @doc """
   Adds a URL to the registry.
   """
-  def add({url, scope}, generation \\ nil, queue \\ nil) do
-    GenServer.call(__MODULE__, {:add, identity(url, scope), generation, queue})
+  def add({url, scope}, generation \\ nil, queue \\ nil, fetch_tag \\ nil) do
+    GenServer.call(__MODULE__, {:add, identity(url, scope), generation, queue, fetch_tag})
+  end
+
+  @doc false
+  def fetch_in_flight?({url, scope}) do
+    GenServer.call(__MODULE__, {:fetch_in_flight?, identity(url, scope)})
+  end
+
+  @doc false
+  def note_picture_type({url, scope}, content_type, generation, queue)
+      when is_binary(content_type) do
+    GenServer.call(
+      __MODULE__,
+      {:note_picture_type, identity(url, scope), content_type, generation, queue}
+    )
   end
 
   def register_alias({url, scope}, generation, queue) do

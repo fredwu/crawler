@@ -122,6 +122,12 @@ defmodule Crawler.HTMLSpans do
     {{offset, length}, consumed}
   end
 
+  defp content_span(body, %{closing?: false, self_closing?: false, name: name}, offset, :svg)
+       when name in ["script", "style"] do
+    {length, consumed} = raw_end(body, name)
+    {{offset, length}, consumed}
+  end
+
   defp content_span(_body, _tag, _offset, _namespace), do: {nil, 0}
 
   defp raw_end(body, "plaintext"), do: {byte_size(body), byte_size(body)}

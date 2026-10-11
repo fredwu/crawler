@@ -21,12 +21,12 @@ defmodule Crawler.Store.Server do
   end
 
   @impl true
-  def handle_call({:add, {url, scope} = key, generation, queue}, _from, state) do
+  def handle_call({:add, {url, scope} = key, generation, queue, fetch_tag}, _from, state) do
     if current_work?(state, scope, generation, queue) do
       result =
         case Registry.lookup(DB, key) do
           [{pid, _page}] -> {:error, {:already_registered, pid}}
-          [] -> Registry.register(DB, key, %Page{url: url})
+          [] -> Registry.register(DB, key, %Page{url: url, fetch_tag: fetch_tag})
         end
 
       state = if match?({:ok, _}, result), do: State.track_page(state, key, queue), else: state
@@ -34,6 +34,26 @@ defmodule Crawler.Store.Server do
     else
       {:reply, {:error, :stale}, state}
     end
+  end
+
+  def handle_call({:fetch_in_flight?, key}, {worker, _tag}, state) do
+    {:reply, Claims.in_use?(state.claims, key, worker), state}
+  end
+
+  def handle_call(
+        {:note_picture_type, {_url, scope} = key, content_type, generation, queue},
+        _from,
+        state
+      ) do
+    result =
+      if current_work?(state, scope, generation, queue) do
+        Registry.update_value(DB, key, &%{&1 | picture_type: content_type})
+        :ok
+      else
+        {:error, :stale}
+      end
+
+    {:reply, result, state}
   end
 
   def handle_call({:register_alias, {_url, scope} = key, generation, queue}, {worker, _}, state) do

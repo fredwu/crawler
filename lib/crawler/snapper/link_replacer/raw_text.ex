@@ -46,17 +46,28 @@ defmodule Crawler.Snapper.LinkReplacer.RawText do
 
     cond do
       tag.name == "style" and HTMLReferences.enabled?(opts, "css") ->
-        %{content_type: "text/css"}
+        style_source(tag)
 
-      tag.name == "script" and HTMLReferences.enabled?(opts, "js") and
+      tag.name == "script" and tag.namespace == :svg and HTMLReferences.enabled?(opts, "js") and
+          HTMLReferences.svg_script_source(attrs) == :inline ->
+        inline_script_options(attrs)
+
+      tag.name == "script" and tag.namespace != :svg and HTMLReferences.enabled?(opts, "js") and
           HTMLReferences.script_source(attrs) == :inline ->
-        %{
-          content_type: "application/javascript",
-          javascript_goal: HTMLReferences.script_goal(attrs)
-        }
+        inline_script_options(attrs)
 
       true ->
         nil
     end
+  end
+
+  defp style_source(%{namespace: :svg}), do: %{content_type: "text/css", svg_style: true}
+  defp style_source(_tag), do: %{content_type: "text/css"}
+
+  defp inline_script_options(attrs) do
+    %{
+      content_type: "application/javascript",
+      javascript_goal: HTMLReferences.script_goal(attrs)
+    }
   end
 end
