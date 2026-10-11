@@ -2,6 +2,7 @@
 
 ## master
 
+- [Fixed] Store `__Host-` and `__Secure-` cookies only when the prefix rules pass. An http response cannot create or replace a Secure cookie. The first request keeps caller Cookie, Authorization, and custom headers on the seed hostname only, and a later hop on another host does not receive the caller cookie. A scheme URL in the User-Agent comment does not select a robots group.
 - [Added] Add `:respect_robots` and `:max_body`. The crawler can honour robots.txt and nofollow, keep ordinary links on the seed site, and limit the decoded response size.
 - [Fixed] Keep cookies for one crawl scope. A redirect rebuilds Cookie for the next URL. The same host keeps the caller's Cookie, Authorization, and other custom headers when the scheme or port changes. Another host does not receive them. A response after the scope is reset does not restore the jar. A robots server error blocks that fetch and is requested again. Gzip and deflate responses are read as the decoded page. A missing content type is not treated as HTML. Status 200 and 203 are kept. JavaScript types with a charset parameter are fetched and rewritten.
 - [Fixed] Stop managed queues when Store restarts and prevent old jobs on external queues from updating new crawl state. Initial URL-filter errors return unchanged without fetching or retrying, and error logs omit callback reasons.

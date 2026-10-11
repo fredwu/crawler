@@ -3,6 +3,7 @@ defmodule Crawler.Fetcher.RequesterTest do
 
   alias Crawler.Fetcher.Modifier
   alias Crawler.Fetcher.Requester
+  alias Crawler.HTTP
 
   doctest Requester
 
@@ -260,5 +261,184 @@ defmodule Crawler.Fetcher.RequesterTest do
              })
 
     assert Agent.get(counter, & &1) == 1
+  end
+
+  defmodule CredentialModifier do
+    @behaviour Modifier.Spec
+
+    def headers(_opts) do
+      [
+        {"cookie", "user=from-user"},
+        {"x-secret", "top-secret"},
+        {"accept", "text/html"},
+        {"accept-language", "en"}
+      ]
+    end
+
+    def opts(_opts), do: [auth: {:bearer, "from-modifier"}]
+  end
+
+  test "caller credentials stay on the seed host when the scheme or port changes" do
+    assert HTTP.same_host?("https://Example.com:8443/a", "http://example.com/b")
+    refute HTTP.same_host?("http://example.com/a", "http://www.example.com/a")
+    refute HTTP.same_host?("http://example.com/a", "http://example.com./a")
+    refute HTTP.same_host?("http://example.com/a", "https://cdn.test/a")
+
+    kept = credential_request("https://example.com:8443/port", "http://example.com/start")
+    assert Req.Request.get_header(kept, "cookie") == ["user=from-user"]
+    assert Req.Request.get_header(kept, "x-secret") == ["top-secret"]
+    assert Req.Request.get_header(kept, "authorization") == ["Bearer from-req"]
+    assert Req.Request.get_header(kept, "user-agent") == ["Crawler Test"]
+    assert Req.Request.get_header(kept, "accept") == ["text/html"]
+    assert Req.Request.get_header(kept, "accept-language") == ["en"]
+    assert Req.Request.get_header(kept, "accept-encoding") == ["gzip, deflate"]
+    assert kept.options[:auth] == {:bearer, "from-req"}
+
+    for url <- ["https://cdn.test/app.js", "https://www.example.com/page"] do
+      dropped = credential_request(url, "http://example.com/start")
+      assert Req.Request.get_header(dropped, "cookie") == []
+      assert Req.Request.get_header(dropped, "x-secret") == []
+      assert Req.Request.get_header(dropped, "authorization") == []
+      assert Req.Request.get_header(dropped, "user-agent") == ["Crawler Test"]
+      assert Req.Request.get_header(dropped, "accept") == ["text/html"]
+      assert Req.Request.get_header(dropped, "accept-language") == ["en"]
+      assert Req.Request.get_header(dropped, "accept-encoding") == ["gzip, deflate"]
+      assert dropped.options[:auth] == nil
+    end
+
+    untouched = credential_request("https://cdn.test/app.js", nil)
+    assert Req.Request.get_header(untouched, "authorization") == ["Bearer from-req"]
+    assert Req.Request.get_header(untouched, "cookie") == ["user=from-user"]
+  end
+
+  test "a foreign host does not regain caller credentials on a later same-host redirect" do
+    owner = self()
+
+    adapter = fn request ->
+      send(owner, {
+        :hop,
+        URI.to_string(request.url),
+        Req.Request.get_header(request, "cookie"),
+        Req.Request.get_header(request, "authorization"),
+        Req.Request.get_header(request, "x-secret")
+      })
+
+      if request.url.host == "cdn.test" and request.url.path == "/app.js" do
+        {request,
+         Req.Response.new(status: 302, headers: [{"location", "https://cdn.test/next.js"}])}
+      else
+        {request, Req.Response.new(status: 200, body: "ok")}
+      end
+    end
+
+    assert {:ok, %Req.Response{status: 200}} =
+             Requester.make(%{
+               url: "https://cdn.test/app.js",
+               site: "http://example.com/start",
+               user_agent: "Crawler Test",
+               modifier: CredentialModifier,
+               url_filter: Crawler.AllowFilter,
+               req_options: [adapter: adapter, auth: {:bearer, "from-req"}]
+             })
+
+    assert_received {:hop, "https://cdn.test/app.js", [], [], []}
+    assert_received {:hop, "https://cdn.test/next.js", [], [], []}
+
+    same_host = fn request ->
+      send(owner, {
+        :hop,
+        URI.to_string(request.url),
+        Req.Request.get_header(request, "cookie"),
+        Req.Request.get_header(request, "authorization"),
+        Req.Request.get_header(request, "x-secret")
+      })
+
+      if request.url.port == 8443 do
+        {request,
+         Req.Response.new(status: 302, headers: [{"location", "https://example.com/land"}])}
+      else
+        {request, Req.Response.new(status: 200, body: "ok")}
+      end
+    end
+
+    assert {:ok, %Req.Response{status: 200}} =
+             Requester.make(%{
+               url: "https://example.com:8443/port",
+               site: "http://example.com/start",
+               user_agent: "Crawler Test",
+               modifier: CredentialModifier,
+               req_options: [adapter: same_host, auth: {:bearer, "from-req"}]
+             })
+
+    assert_received {:hop, "https://example.com:8443/port", ["user=from-user"],
+                     ["Bearer from-req"], ["top-secret"]}
+
+    assert_received {:hop, "https://example.com/land", ["user=from-user"], ["Bearer from-req"],
+                     ["top-secret"]}
+  end
+
+  test "leaving the seed host does not restore caller credentials on the next foreign hop" do
+    owner = self()
+
+    adapter = fn request ->
+      send(owner, {
+        :hop,
+        URI.to_string(request.url),
+        Req.Request.get_header(request, "cookie"),
+        Req.Request.get_header(request, "authorization"),
+        Req.Request.get_header(request, "x-secret")
+      })
+
+      cond do
+        request.url.host == "example.com" and request.url.path == "/start" ->
+          {request,
+           Req.Response.new(status: 302, headers: [{"location", "https://cdn.test/app.js"}])}
+
+        request.url.host == "cdn.test" and request.url.path == "/app.js" ->
+          {request,
+           Req.Response.new(status: 302, headers: [{"location", "https://cdn.test/next.js"}])}
+
+        true ->
+          {request, Req.Response.new(status: 200, body: "ok")}
+      end
+    end
+
+    assert {:ok, %Req.Response{status: 200}} =
+             Requester.make(%{
+               url: "http://example.com/start",
+               site: "http://example.com/start",
+               user_agent: "Crawler Test",
+               modifier: CredentialModifier,
+               url_filter: Crawler.AllowFilter,
+               req_options: [adapter: adapter, auth: {:bearer, "from-req"}]
+             })
+
+    assert_received {:hop, "http://example.com/start", ["user=from-user"], ["Bearer from-req"],
+                     ["top-secret"]}
+
+    assert_received {:hop, "https://cdn.test/app.js", [], [], []}
+    assert_received {:hop, "https://cdn.test/next.js", [], [], []}
+  end
+
+  defp credential_request(url, site) do
+    owner = self()
+
+    adapter = fn request ->
+      send(owner, {:request, request})
+      {request, Req.Response.new(status: 200, body: "ok")}
+    end
+
+    opts = %{
+      url: url,
+      user_agent: "Crawler Test",
+      modifier: CredentialModifier,
+      req_options: [adapter: adapter, auth: {:bearer, "from-req"}]
+    }
+
+    opts = if site, do: Map.put(opts, :site, site), else: opts
+
+    assert {:ok, %Req.Response{status: 200}} = Requester.make(opts)
+    assert_received {:request, request}
+    request
   end
 end

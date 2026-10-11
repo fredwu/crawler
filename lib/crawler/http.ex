@@ -5,7 +5,9 @@ defmodule Crawler.HTTP do
   Redirect logging defaults to disabled. Set `:redirect_log_level` explicitly
   to enable it. A redirect rebuilds `Cookie` for the next URL. The same host
   keeps the caller's `Cookie`, `Authorization`, and other custom headers when
-  the scheme or port changes. Another host does not receive them.
+  the scheme or port changes. Another host does not receive them. Leaving the
+  host also drops the stored caller cookie, so a later hop there does not
+  copy it back.
   """
 
   defmodule RedirectRejected do
@@ -42,6 +44,17 @@ defmodule Crawler.HTTP do
       :skip -> {:error, %InvalidURL{url: url}}
     end
   end
+
+  @doc false
+  def same_host?(left, right) do
+    case {hostname(left), hostname(right)} do
+      {host, host} when is_binary(host) -> true
+      _ -> false
+    end
+  end
+
+  @doc false
+  def drop_caller_credentials(request), do: keep_headers(request)
 
   defp request(url, headers, opts, allow_redirect) do
     {explicit_headers, opts} = Keyword.pop(opts, :headers, [])
@@ -194,21 +207,32 @@ defmodule Crawler.HTTP do
   defp capture_cookies(result), do: result
 
   defp redirect_headers(request, next) do
-    request = if host_changed?(request.url, next), do: keep_headers(request), else: request
+    request =
+      if host_changed?(request.url, next) do
+        # The caller cookie belongs to the host that sent it. Drop the option
+        # with the header so a later hop on the new host does not copy it back.
+        request
+        |> keep_headers()
+        |> Req.Request.merge_options(crawler_user_cookie: nil)
+      else
+        request
+      end
+
     put_cookie(request, next)
   end
 
-  defp host_changed?(%URI{host: current}, next) when is_binary(current) do
-    case URI.parse(next) do
-      %URI{host: host} when is_binary(host) ->
-        String.downcase(current) != String.downcase(host)
+  defp host_changed?(current, next), do: not same_host?(current, next)
 
-      _ ->
-        true
+  defp hostname(%URI{host: host}) when is_binary(host) and host != "", do: String.downcase(host)
+
+  defp hostname(url) when is_binary(url) do
+    case URI.parse(url) do
+      %URI{host: host} when is_binary(host) and host != "" -> String.downcase(host)
+      _ -> nil
     end
   end
 
-  defp host_changed?(_current, _next), do: true
+  defp hostname(_value), do: nil
 
   defp keep_headers(request) do
     names =

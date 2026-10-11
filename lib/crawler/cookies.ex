@@ -54,7 +54,7 @@ defmodule Crawler.Cookies do
   defp accept(jar, name, value, attrs, uri) do
     case build(name, value, attrs, uri) do
       :reject -> jar
-      cookie -> keep(jar, cookie, attrs)
+      cookie -> if allow_store?(jar, cookie, uri), do: keep(jar, cookie, attrs), else: jar
     end
   end
 
@@ -65,7 +65,7 @@ defmodule Crawler.Cookies do
     end
   end
 
-  defp build(name, value, attrs, %URI{host: host, path: uri_path}) do
+  defp build(name, value, attrs, %URI{scheme: scheme, host: host, path: uri_path}) do
     # Trailing dots are removed so replace and delete use the host send compares.
     host = host |> String.trim() |> String.trim_trailing(".") |> String.downcase()
 
@@ -74,7 +74,7 @@ defmodule Crawler.Cookies do
         :reject
 
       {domain, host_only?} ->
-        %{
+        cookie = %{
           name: name,
           value: value,
           domain: domain,
@@ -82,8 +82,37 @@ defmodule Crawler.Cookies do
           path: cookie_path(attrs, default_path(uri_path)),
           secure?: Map.has_key?(attrs, "secure")
         }
+
+        if prefix_ok?(cookie, scheme), do: cookie, else: :reject
     end
   end
+
+  # `__Host-` and `__Secure-` are case-sensitive. An http response cannot plant
+  # or replace a Secure cookie; https can.
+  defp allow_store?(_jar, %{secure?: true}, %URI{scheme: scheme}) when scheme != "https",
+    do: false
+
+  defp allow_store?(jar, %{secure?: false} = cookie, %URI{scheme: scheme})
+       when scheme != "https" do
+    not secure_identity?(jar, cookie)
+  end
+
+  defp allow_store?(_jar, _cookie, _uri), do: true
+
+  defp secure_identity?(jar, cookie) do
+    Enum.any?(jar, fn item ->
+      item.secure? and item.name == cookie.name and item.path == cookie.path and
+        same_host?(item.domain, cookie.domain)
+    end)
+  end
+
+  defp prefix_ok?(%{name: "__Host-" <> _} = cookie, scheme) do
+    cookie.secure? and cookie.host_only? and cookie.path == "/" and scheme == "https"
+  end
+
+  defp prefix_ok?(%{name: "__Secure-" <> _, secure?: secure?}, _scheme), do: secure?
+
+  defp prefix_ok?(_cookie, _scheme), do: true
 
   defp cookie_path(attrs, default) do
     case Map.get(attrs, "path") do

@@ -293,6 +293,93 @@ defmodule Crawler.CookiesTest do
     assert Cookies.merge_header(nil, nil) == nil
   end
 
+  test "a host-prefix cookie stays on the exact host that set it" do
+    nested = "https://www.example.com/account/x"
+
+    assert Cookies.store([], nested, ["__Host-session=1; Domain=example.com; Path=/; Secure"]) ==
+             []
+
+    assert Cookies.store([], nested, ["__Host-session=1; Path=/admin; Secure"]) == []
+    assert Cookies.store([], nested, ["__Host-session=1; Secure"]) == []
+
+    assert Cookies.store([], "http://www.example.com/", ["__Host-session=1; Path=/; Secure"]) ==
+             []
+
+    explicit =
+      Cookies.store([], nested, ["__Host-session=1; Path=/; Secure"])
+
+    assert [%{host_only?: true, secure?: true, path: "/", domain: "www.example.com"}] = explicit
+    assert Cookies.header(explicit, "https://www.example.com/admin/y") == "__Host-session=1"
+    assert Cookies.header(explicit, "https://example.com/") == nil
+    assert Cookies.header(explicit, "https://shop.example.com/") == nil
+    assert Cookies.header(explicit, "http://www.example.com/") == nil
+
+    rooted = Cookies.store([], "https://example.com/", ["__Host-id=1; Secure"])
+    assert [%{host_only?: true, path: "/", domain: "example.com"}] = rooted
+    assert Cookies.header(rooted, "https://example.com/account") == "__Host-id=1"
+    assert Cookies.header(rooted, "https://www.example.com/") == nil
+  end
+
+  test "a secure-prefix cookie is stored only with the secure flag and sent only over https" do
+    assert Cookies.store([], "https://example.com/", ["__Secure-id=1"]) == []
+    assert Cookies.store([], "http://example.com/", ["__Secure-ok=1; Secure"]) == []
+
+    jar =
+      Cookies.store([], "https://www.example.com/account", [
+        "__Secure-ok=1; Domain=example.com; Path=/; Secure"
+      ])
+
+    assert [%{name: "__Secure-ok", secure?: true, host_only?: false}] = jar
+    assert Cookies.header(jar, "https://shop.example.com/account") == "__Secure-ok=1"
+    assert Cookies.header(jar, "http://shop.example.com/account") == nil
+    assert Cookies.header(jar, "http://www.example.com/") == nil
+  end
+
+  test "an http response cannot plant or replace a secure cookie" do
+    jar = Cookies.store([], "https://example.com/", ["id=good; Secure; Path=/"])
+    assert Cookies.header(jar, "https://example.com/account") == "id=good"
+    assert Cookies.header(jar, "http://example.com/account") == nil
+
+    assert Cookies.store([], "http://example.com/", ["id=planted; Secure; Path=/"]) == []
+
+    replaced = Cookies.store(jar, "http://example.com/", ["id=evil; Path=/"])
+    assert [%{name: "id", value: "good", secure?: true}] = replaced
+
+    domain_shaped =
+      Cookies.store(replaced, "http://example.com/", ["id=evil; Domain=example.com; Path=/"])
+
+    assert [%{name: "id", value: "good", host_only?: true}] = domain_shaped
+
+    deleted = Cookies.store(domain_shaped, "http://example.com/", ["id=good; Max-Age=0; Path=/"])
+    assert Cookies.header(deleted, "https://example.com/") == "id=good"
+
+    kept =
+      Cookies.store(deleted, "http://example.com/admin", ["side=1; Path=/admin"])
+
+    assert pairs(Cookies.header(kept, "http://example.com/admin")) == %{"side" => "1"}
+    assert Cookies.header(kept, "https://example.com/") == "id=good"
+
+    updated = Cookies.store(kept, "https://example.com/", ["id=better; Secure; Path=/"])
+    assert Cookies.header(updated, "https://example.com/") == "id=better"
+    assert pairs(Cookies.header(updated, "http://example.com/admin")) == %{"side" => "1"}
+  end
+
+  test "a lowercase host or secure prefix is an ordinary cookie" do
+    jar =
+      Cookies.store([], "https://www.example.com/", [
+        "__host-id=1; Domain=example.com; Path=/; Secure"
+      ])
+
+    assert [%{name: "__host-id", host_only?: false, secure?: true}] = jar
+    assert Cookies.header(jar, "https://shop.example.com/") == "__host-id=1"
+    assert Cookies.header(jar, "http://shop.example.com/") == nil
+
+    plain = Cookies.store([], "https://example.com/", ["__secure-id=1; Path=/"])
+    assert [%{name: "__secure-id", secure?: false, host_only?: true}] = plain
+    assert Cookies.header(plain, "http://example.com/account") == "__secure-id=1"
+    assert Cookies.header(plain, "http://www.example.com/") == nil
+  end
+
   defp wait_until_expired([%{expires_at: %DateTime{} = deadline} | _]) do
     delay = DateTime.diff(deadline, DateTime.utc_now(), :millisecond) + 50
     if delay > 0, do: Process.sleep(delay)

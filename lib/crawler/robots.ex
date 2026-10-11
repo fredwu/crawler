@@ -216,12 +216,23 @@ defmodule Crawler.Robots do
   defp product_tokens(nil), do: ["crawler"]
 
   defp product_tokens(user_agent) when is_binary(user_agent) do
-    ~r/[A-Za-z0-9_-]+/
-    |> Regex.scan(user_agent)
-    |> Enum.map(fn [token] -> String.downcase(token) end)
+    # A homepage URL in the comment is not a product. github and https must
+    # not select a group for the default agent. Real product names stay, and
+    # the later name still wins when two lengths are equal.
+    user_agent |> strip_urls() |> token_list()
   end
 
   defp product_tokens(_user_agent), do: ["crawler"]
+
+  defp token_list(text) do
+    ~r/[A-Za-z0-9_-]+/
+    |> Regex.scan(text)
+    |> Enum.map(fn [token] -> String.downcase(token) end)
+  end
+
+  defp strip_urls(text) do
+    Regex.replace(~r/[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>)]+/, text, " ")
+  end
 
   defp token_set(user_agent), do: MapSet.new(product_tokens(user_agent))
 

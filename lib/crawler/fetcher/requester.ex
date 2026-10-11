@@ -23,6 +23,9 @@ defmodule Crawler.Fetcher.Requester do
   Header names are case-insensitive. Default headers are overridden by
   modifier headers, modifier options, and `:req_options` headers, in that order.
   Use `:redirect` to control redirects; `:follow_redirects` is not supported.
+  Caller `Cookie`, `Authorization`, and other custom headers stay on the seed
+  hostname when the scheme or port changes. Another hostname receives the safe
+  headers and its own jar cookies.
 
   ## Examples
 
@@ -42,11 +45,12 @@ defmodule Crawler.Fetcher.Requester do
   def make(opts) do
     modifier_opts = opts[:modifier].opts(opts)
     request = prepared_request(opts, modifier_opts)
+    {request, user_cookie, modifier_opts} = scope_credentials(request, opts, modifier_opts)
 
     HTTP.get(
       opts[:url],
-      request |> put_cookie(opts) |> Map.fetch!(:headers),
-      fetch_opts(opts, modifier_opts, cookie_value(request)),
+      request |> put_cookie(opts, user_cookie) |> Map.fetch!(:headers),
+      fetch_opts(opts, modifier_opts, user_cookie),
       &allow_redirect?(&1, opts)
     )
   end
@@ -64,15 +68,36 @@ defmodule Crawler.Fetcher.Requester do
   end
 
   defp fetch_opts(opts, modifier_opts, user_cookie) do
-    @fetch_opts
-    |> Keyword.merge(timeout_opts(opts[:timeout]))
-    |> Keyword.merge(Keyword.delete(modifier_opts, :headers))
-    |> Keyword.merge(Keyword.delete(req_options(opts), :headers))
+    fetch_opts =
+      @fetch_opts
+      |> Keyword.merge(timeout_opts(opts[:timeout]))
+      |> Keyword.merge(Keyword.delete(modifier_opts, :headers))
+      |> Keyword.merge(Keyword.delete(req_options(opts), :headers))
+
+    fetch_opts =
+      if credential_host?(opts), do: fetch_opts, else: Keyword.delete(fetch_opts, :auth)
+
+    fetch_opts
     |> Keyword.put(:into, &Body.stream/2)
     |> Keyword.put(:crawler_scope, opts[:scope])
     |> Keyword.put(:crawler_max_body, max_body(opts))
     |> Keyword.put(:crawler_user_cookie, user_cookie)
     |> Keyword.put(:crawler_generation, opts[:generation])
+  end
+
+  # The seed host keeps caller headers when the scheme or port changes.
+  # Another host gets its own jar cookies and the safe headers only.
+  defp scope_credentials(request, opts, modifier_opts) do
+    if credential_host?(opts) do
+      {request, cookie_value(request), modifier_opts}
+    else
+      {HTTP.drop_caller_credentials(request), nil, Keyword.delete(modifier_opts, :auth)}
+    end
+  end
+
+  defp credential_host?(opts) do
+    url = to_string(opts[:url] || "")
+    HTTP.same_host?(opts[:site] || url, url)
   end
 
   defp req_options(opts), do: opts[:req_options] || []
@@ -84,11 +109,11 @@ defmodule Crawler.Fetcher.Requester do
     end
   end
 
-  defp put_cookie(request, opts) do
+  defp put_cookie(request, opts, user_cookie) do
     jar = Store.cookie_header(opts[:scope], opts[:url], opts[:generation])
 
-    case Cookies.merge_header(cookie_value(request), jar) do
-      nil -> request
+    case Cookies.merge_header(user_cookie, jar) do
+      nil -> Req.Request.delete_header(request, "cookie")
       header -> Req.Request.put_header(request, "cookie", header)
     end
   end

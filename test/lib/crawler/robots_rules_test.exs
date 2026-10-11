@@ -356,4 +356,52 @@ defmodule Crawler.RobotsRulesTest do
              "Crawler/1"
            )
   end
+
+  test "words from a url in the user-agent comment do not select a group" do
+    ua = Crawler.Options.assign_defaults(%{}).user_agent
+    assert ua =~ "https://github.com/fredwu/crawler"
+
+    rules =
+      Robots.parse("""
+      User-agent: *
+      Disallow: /blocked
+
+      User-agent: github
+      Disallow: /docs
+
+      User-agent: https
+      Disallow: /
+
+      User-agent: fredwu
+      Disallow: /private
+      """)
+
+    assert Robots.allowed?(rules, "http://example.com/docs", ua)
+    assert Robots.allowed?(rules, "http://example.com/secret", ua)
+    assert Robots.allowed?(rules, "http://example.com/private", ua)
+    refute Robots.allowed?(rules, "http://example.com/blocked", ua)
+
+    refute Robots.allowed?(rules, "http://example.com/docs", "github/1.0")
+    refute Robots.allowed?(rules, "http://example.com/anywhere", "https/1.0")
+
+    named =
+      Robots.parse("""
+      User-agent: *
+      Disallow: /
+
+      User-agent: Crawler
+      Disallow: /hidden
+      """)
+
+    assert Robots.allowed?(named, "http://example.com/docs", ua)
+    refute Robots.allowed?(named, "http://example.com/hidden", ua)
+
+    refute Robots.header_nofollow?([{"x-robots-tag", "github: nofollow"}], ua)
+    refute Robots.header_nofollow?([{"x-robots-tag", "https: nofollow"}], ua)
+    refute Robots.header_nofollow?([{"x-robots-tag", "fredwu: nofollow"}], ua)
+    assert Robots.header_nofollow?([{"x-robots-tag", "crawler: nofollow"}], ua)
+
+    assert Robots.meta_nofollow?(~s|<meta name="crawler" content="nofollow">|, ua)
+    refute Robots.meta_nofollow?(~s|<meta name="github" content="nofollow">|, ua)
+  end
 end

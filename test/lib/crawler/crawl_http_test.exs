@@ -731,6 +731,112 @@ defmodule Crawler.CrawlHTTPTest do
     refute Store.find({"#{context.url}/scripts/nope.js", opts.scope})
   end
 
+  test "a direct fetch keeps caller credentials only on the seed host" do
+    hits = hits()
+
+    adapter = fn request ->
+      record(hits, request)
+
+      cond do
+        request.url.host == "example.com" and request.url.path == "/robots.txt" ->
+          {request,
+           Req.Response.new(
+             status: 200,
+             body: "User-agent: *\nAllow: /\n\nSitemap: https://files.test/sitemap.xml\n"
+           )}
+
+        request.url.host == "files.test" and request.url.path == "/sitemap.xml" ->
+          {request, Req.Response.new(status: 200, body: sitemap_document())}
+
+        request.url.host == "example.com" and request.url.path == "/start" ->
+          {request, credential_page()}
+
+        request.url.host == "cdn.test" and request.url.path == "/app.js" ->
+          {request, script_cookie("cdn=1; Path=/")}
+
+        request.url.host == "cdn.test" and request.url.path == "/next.js" ->
+          {request, typed("text/javascript", "")}
+
+        request.url.host == "example.com" and request.url.path == "/secure.js" ->
+          {request, typed("text/javascript", "")}
+
+        request.url.host == "www.example.com" and request.url.path == "/page" ->
+          {request, typed("text/html", "www")}
+
+        request.url.host == "example.com" and request.url.path == "/port" ->
+          {request, typed("text/html", "port")}
+
+        request.url.host == "example.com" and request.url.path == "/from-sitemap" ->
+          {request, typed("text/html", "from-sitemap")}
+
+        request.url.path == "/robots.txt" ->
+          {request, Req.Response.new(status: 404, body: "")}
+
+        true ->
+          {request, typed("text/plain", "unexpected")}
+      end
+    end
+
+    crawl("http://example.com/start", adapter_context(adapter),
+      assets: ["js"],
+      modifier: SecretModifier,
+      url_filter: AllowAll
+    )
+
+    assert hop(hits, "example.com", "/start") == %{
+             cookie: %{"user" => "from-user"},
+             secret: "top-secret",
+             authorization: "Bearer from-auth"
+           }
+
+    assert hop(hits, "example.com", "/robots.txt").secret == "top-secret"
+    assert hop(hits, "example.com", "/robots.txt").authorization == "Bearer from-auth"
+
+    for path <- ["/secure.js", "/port", "/from-sitemap"] do
+      assert hop(hits, "example.com", path) == %{
+               cookie: %{"user" => "from-user", "shared" => "yes"},
+               secret: "top-secret",
+               authorization: "Bearer from-auth"
+             }
+    end
+
+    assert hop(hits, "www.example.com", "/page") == %{
+             cookie: %{"shared" => "yes"},
+             secret: nil,
+             authorization: nil
+           }
+
+    assert hop(hits, "www.example.com", "/robots.txt") == %{
+             cookie: %{"shared" => "yes"},
+             secret: nil,
+             authorization: nil
+           }
+
+    assert hop(hits, "cdn.test", "/robots.txt") == %{
+             cookie: %{},
+             secret: nil,
+             authorization: nil
+           }
+
+    assert hop(hits, "cdn.test", "/app.js") == %{
+             cookie: %{},
+             secret: nil,
+             authorization: nil
+           }
+
+    assert hop(hits, "cdn.test", "/next.js") == %{
+             cookie: %{"cdn" => "1"},
+             secret: nil,
+             authorization: nil
+           }
+
+    assert hop(hits, "files.test", "/sitemap.xml") == %{
+             cookie: %{},
+             secret: nil,
+             authorization: nil
+           }
+  end
+
   defp crawl(url, context, extra \\ []) do
     scope = extra[:scope] || unique_scope("http")
 
@@ -776,6 +882,43 @@ defmodule Crawler.CrawlHTTPTest do
       [name, value] = piece |> String.trim() |> String.split("=", parts: 2)
       {name, value}
     end)
+  end
+
+  defp credential_page do
+    Req.Response.new(
+      status: 200,
+      headers: [
+        {"content-type", "text/html"},
+        {"set-cookie", "shared=yes; Domain=example.com; Path=/"}
+      ],
+      body: """
+      <script src="https://cdn.test/app.js"></script>
+      <script src="https://cdn.test/next.js"></script>
+      <script src="https://example.com/secure.js"></script>
+      <a href="https://www.example.com/page">w</a>
+      <a href="https://example.com:8443/port">p</a>
+      """
+    )
+  end
+
+  defp sitemap_document do
+    """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <urlset>
+      <url><loc>https://example.com/from-sitemap</loc></url>
+    </urlset>
+    """
+  end
+
+  defp script_cookie(set_cookie) do
+    Req.Response.new(
+      status: 200,
+      headers: [
+        {"content-type", "text/javascript"},
+        {"set-cookie", set_cookie}
+      ],
+      body: ""
+    )
   end
 
   defp cookie_page do
