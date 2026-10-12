@@ -28,7 +28,6 @@ defmodule Crawler.Example.GoogleSearch.ScraperTest do
   } do
     for url <- [
           "https://github.com/fredwu/crawler",
-          "HTTPS://GITHUB.COM./fredwu/crawler",
           "https://github.com:8443/fredwu/crawler"
         ] do
       page = %Page{url: url, body: @body}
@@ -49,6 +48,7 @@ defmodule Crawler.Example.GoogleSearch.ScraperTest do
           "https://github.com@evil.test/project",
           "https://evil.test@github.com/project",
           "https://github.com../project",
+          "HTTPS://GITHUB.COM./fredwu/crawler",
           "https://www.google.com/search",
           "https://api.github.com/project",
           "http://github.com/project",

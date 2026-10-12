@@ -16,9 +16,6 @@ defmodule Crawler.HTTP.Stream do
       {:ok, acc} ->
         acc
 
-      {:error, exception} ->
-        {req, normalize_error(exception)}
-
       {:error, exception, acc} ->
         Body.release(acc)
         {req, normalize_error(exception)}
@@ -68,18 +65,6 @@ defmodule Crawler.HTTP.Stream do
     Enum.reduce(fields, %{}, fn {name, value}, acc ->
       Map.update(acc, field_name(name), [field_value(value)], &(&1 ++ [field_value(value)]))
     end)
-  end
-
-  defp normalize_error(%Mint.TransportError{reason: reason}) do
-    %Req.TransportError{reason: reason}
-  end
-
-  defp normalize_error(%Mint.HTTPError{module: Mint.HTTP1, reason: reason}) do
-    %Req.HTTPError{protocol: :http1, reason: reason}
-  end
-
-  defp normalize_error(%Mint.HTTPError{module: Mint.HTTP2, reason: reason}) do
-    %Req.HTTPError{protocol: :http2, reason: reason}
   end
 
   defp normalize_error(%Finch.Error{reason: reason}) do

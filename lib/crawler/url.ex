@@ -10,7 +10,7 @@ defmodule Crawler.URL do
     case prepare(url) do
       {:http, uri} -> uri |> fold_uri() |> URI.to_string()
       {:plain, plain} -> plain_normalize(plain)
-      {:invalid, invalid} -> invalid |> split_piece("#") |> elem(0)
+      {:invalid, invalid} -> invalid
     end
   end
 
@@ -25,8 +25,11 @@ defmodule Crawler.URL do
         |> URI.to_string()
         |> strip_trailing_slash()
 
-      {kind, plain} when kind in [:plain, :invalid] ->
+      {:plain, plain} ->
         plain_canonical(plain)
+
+      {:invalid, invalid} ->
+        invalid
     end
   end
 
@@ -86,9 +89,9 @@ defmodule Crawler.URL do
     })
   end
 
-  # Userinfo case is a different page. Only the hex digits inside `%HH` fold.
+  # Letter case stays a different page. `@` and other userinfo delimiters are encoded.
   defp fold_userinfo(nil), do: nil
-  defp fold_userinfo(userinfo), do: Percent.lowercase_hex(userinfo)
+  defp fold_userinfo(userinfo), do: Percent.userinfo(userinfo)
 
   defp fold_path(nil), do: nil
 
@@ -102,7 +105,22 @@ defmodule Crawler.URL do
     path
     |> :binary.replace("\\", "/", [:global])
     |> Percent.canonicalize(:path)
+    |> decode_dot_segments()
   end
+
+  # `%2e` stays inside a longer segment. A segment that is only a dot is `.`
+  # or `..` before merge, so a relative parent still climbs out of the base.
+  defp decode_dot_segments(path) do
+    path
+    |> String.split("/")
+    |> Enum.map_join("/", &dot_segment/1)
+  end
+
+  defp dot_segment("%2e"), do: "."
+  defp dot_segment("%2e."), do: ".."
+  defp dot_segment(".%2e"), do: ".."
+  defp dot_segment("%2e%2e"), do: ".."
+  defp dot_segment(segment), do: segment
 
   defp fold_query(nil), do: nil
   defp fold_query(query), do: Percent.canonicalize(query, :query)
@@ -134,8 +152,9 @@ defmodule Crawler.URL do
     trim_optional_slash(base) <> query
   end
 
-  # Drop `.` and `..`, including a dot that was written as `%2e`. `...` stays a
-  # segment. `%2F` is one segment, not a slash.
+  # Drop a segment that is only `.` or `..`. `canonicalize_path/1` already
+  # rewrote a whole-segment `%2e` into those spellings. `...` and `foo%2ehtml`
+  # stay. `%2F` is one segment, not a slash.
   defp remove_dot_segments(path) when is_binary(path) do
     absolute? = String.starts_with?(path, "/")
 
@@ -158,13 +177,23 @@ defmodule Crawler.URL do
   defp drop_one_leading_slash(path, _absolute?), do: path
 
   defp final_dot_segment?(path) do
-    path in [".", ".."] or String.ends_with?(path, "/.") or String.ends_with?(path, "/..")
+    path |> String.split("/") |> List.last() |> segment_kind() != :segment
   end
 
-  defp push_segment(".", acc), do: acc
-  defp push_segment("..", []), do: []
-  defp push_segment("..", [_segment | acc]), do: acc
-  defp push_segment(segment, acc), do: [segment | acc]
+  defp push_segment(segment, acc) do
+    case segment_kind(segment) do
+      :dot -> acc
+      :dot_dot -> drop_segment(acc)
+      :segment -> [segment | acc]
+    end
+  end
+
+  defp drop_segment([]), do: []
+  defp drop_segment([_segment | acc]), do: acc
+
+  defp segment_kind("."), do: :dot
+  defp segment_kind(".."), do: :dot_dot
+  defp segment_kind(_segment), do: :segment
 
   defp format_path(segments, absolute?) do
     body = Enum.join(segments, "/")

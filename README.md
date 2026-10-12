@@ -58,7 +58,7 @@ page = Crawler.Store.find_processed({url, opts[:scope]})
 
 This returns `nil` if the page was not processed. The default `store: nil` keeps crawl metadata without retaining response bodies. Enable `store: Crawler.Store` to read bodies through the Store API or its `Crawler.Store.DB` registry. You can also use a [custom scraper or parser](#custom-modules), or set `:save_to` to save pages to disk.
 
-Page identity normalizes browser-equivalent domain and IPv4 spellings. Raw bytes that require request escaping share an identity with their escaped form; escaped separators remain distinct. HTTP requests encode Unicode and unsafe path or query bytes into ASCII while preserving valid escapes and an explicit empty query (`?`). Saved links keep fragments after URL sanitization and escape delimiter bytes so those fragments preserve HTML, CSS, and JavaScript source boundaries.
+Page identity keeps one trailing DNS dot and normalizes other browser-equivalent domain and IPv4 spellings. A path pipe, a bare percent sign, and the query characters backtick, brace, pipe, backslash, and caret stay literal and do not share a page with the percent-encoded form. Other bytes that require escaping share an identity with that form; escaped separators remain distinct. HTTP requests encode Unicode and the remaining unsafe path or query bytes into ASCII while preserving valid escapes and an explicit empty query (`?`). Saved links keep fragments after URL sanitization and escape delimiter bytes so those fragments preserve HTML, CSS, and JavaScript source boundaries.
 
 ## Configurations
 

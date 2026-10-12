@@ -14,11 +14,24 @@ defmodule Crawler.URL.Percent do
     text |> encode_bytes(context, []) |> IO.iodata_to_binary()
   end
 
+  # Split on the first colon, then encode each part. An `@` inside the name or
+  # password must not stay a second host separator.
+  def userinfo(text) when is_binary(text) do
+    case :binary.split(text, ":") do
+      [name] -> userinfo_part(name)
+      [name, password] -> userinfo_part(name) <> ":" <> userinfo_part(password)
+    end
+  end
+
   defp encode_bytes(<<>>, _context, acc), do: acc
 
   defp encode_bytes(<<"%", high, low, rest::binary>>, context, acc)
        when is_hex(high) and is_hex(low) do
     encode_bytes(rest, context, [acc, "%", high, low])
+  end
+
+  defp encode_bytes(<<"%", rest::binary>>, context, acc) when context in [:path, :query] do
+    encode_bytes(rest, context, [acc, "%"])
   end
 
   defp encode_bytes(<<byte, rest::binary>>, context, acc) do
@@ -27,18 +40,37 @@ defmodule Crawler.URL.Percent do
     encode_bytes(rest, context, [acc, encoded])
   end
 
-  @doc false
-  def lowercase_hex(text) when is_binary(text) do
-    text
-    |> lower_hex([])
-    |> IO.iodata_to_binary()
+  defp userinfo_part(part) do
+    part |> userinfo_bytes([]) |> IO.iodata_to_binary()
+  end
+
+  defp userinfo_bytes(<<>>, acc), do: acc
+
+  defp userinfo_bytes(<<"%", high, low, rest::binary>>, acc) when is_hex(high) and is_hex(low) do
+    userinfo_bytes(rest, [acc, "%", lower_hex_digit(high), lower_hex_digit(low)])
+  end
+
+  defp userinfo_bytes(<<byte, rest::binary>>, acc) do
+    encoded = if userinfo_literal?(byte), do: <<byte>>, else: percent(byte)
+    userinfo_bytes(rest, [acc, encoded])
   end
 
   defp scan(<<>>, _context, pending, acc), do: [acc, flush(pending)]
 
   defp scan(<<"%", high, low, rest::binary>>, context, pending, acc)
        when is_hex(high) and is_hex(low) do
-    scan(rest, context, <<pending::binary, hex_byte(high, low)>>, acc)
+    byte = hex_byte(high, low)
+
+    if preserve_escape?(byte, context) do
+      escaped = ["%", lower_hex_digit(high), lower_hex_digit(low)]
+      scan(rest, context, <<>>, [acc, flush(pending), escaped])
+    else
+      scan(rest, context, <<pending::binary, byte>>, acc)
+    end
+  end
+
+  defp scan(<<"%", rest::binary>>, context, pending, acc) when context in [:path, :query] do
+    scan(rest, context, <<>>, [acc, flush(pending), "%"])
   end
 
   defp scan(<<byte, rest::binary>>, context, pending, acc) when byte < 0x80 do
@@ -54,16 +86,6 @@ defmodule Crawler.URL.Percent do
         <<byte, rest::binary>> = binary
         scan(rest, context, <<>>, [acc, flush(pending), percent(byte)])
     end
-  end
-
-  defp lower_hex(<<>>, acc), do: acc
-
-  defp lower_hex(<<"%", high, low, rest::binary>>, acc) when is_hex(high) and is_hex(low) do
-    lower_hex(rest, [acc, "%", lower_hex_digit(high), lower_hex_digit(low)])
-  end
-
-  defp lower_hex(<<byte, rest::binary>>, acc) do
-    lower_hex(rest, [acc, byte])
   end
 
   defp flush(<<>>), do: []
@@ -87,15 +109,32 @@ defmodule Crawler.URL.Percent do
   end
 
   defp raw_ascii(byte, context) do
-    if encode_ascii?(byte, context) or not URI.char_unescaped?(byte),
-      do: percent(byte),
-      else: <<byte>>
+    cond do
+      literal?(byte, context) -> <<byte>>
+      encode_ascii?(byte, context) or not URI.char_unescaped?(byte) -> percent(byte)
+      true -> <<byte>>
+    end
   end
+
+  # A browser leaves these characters written as themselves. Their `%HH` form
+  # is a different page, so it is kept as an escape too.
+  defp literal?(?|, :path), do: true
+  defp literal?(byte, :query), do: byte in ~c"`{}|\\^"
+  defp literal?(_byte, _context), do: false
+
+  defp preserve_escape?(?., _context), do: true
+  defp preserve_escape?(byte, context), do: literal?(byte, context)
 
   defp encode_ascii?(byte, _context) when byte <= 0x20 or byte == 0x7F, do: true
   defp encode_ascii?(byte, :path), do: byte in ~c"\"#<>?^`{}"
-  defp encode_ascii?(byte, :query), do: byte in ~c"\"#<>\\'"
+  defp encode_ascii?(byte, :query), do: byte in ~c"\"#<>'"
   defp encode_ascii?(byte, :fragment), do: byte in ~c"\"'`\\()&${}<>#%"
+
+  defp userinfo_literal?(?%), do: true
+
+  defp userinfo_literal?(byte) do
+    URI.char_unreserved?(byte) or byte in ~c"!$&'()*+,"
+  end
 
   defp emit_ascii(byte) do
     if unreserved?(byte), do: <<byte>>, else: percent(byte)

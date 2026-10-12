@@ -50,7 +50,7 @@ defmodule Crawler.URLMergeTest do
     assert URL.resolve("a/b/%2e%2e/../target", base) == {:ok, "http://host/a/target"}
 
     assert URL.resolve("%2e%2e/../target?x=%2e%2e/../&y=%2F#part%2Ftwo", base) ==
-             {:ok, "http://host/target?x=../../&y=%2f"}
+             {:ok, "http://host/target?x=%2e%2e/../&y=%2f"}
 
     assert URL.resolve("%2e%2e/../target?", base) == {:ok, "http://host/target?"}
     assert URL.resolve("%2e%2e/../target", base) == {:ok, "http://host/target"}

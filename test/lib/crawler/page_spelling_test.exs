@@ -20,7 +20,6 @@ defmodule Crawler.PageSpellingTest do
         wire: space,
         spellings: [
           "http://ex.com/spell/a/%2e%2e/my%20page#part",
-          "http://EX.com./spell/my page",
           "http://ex.com/spell/my%20page",
           "http://ex.com/spell/sub\\..\\my page",
           "http:\\\\ex.com\\spell\\my page",
@@ -62,7 +61,7 @@ defmodule Crawler.PageSpellingTest do
   test "a unicode host and its punycode spelling share one file", %{site: _site} do
     hub = "http://ex.com/idn/hub"
     page = "http://xn--xample-9ua.com/p"
-    spellings = ["http://éxample.com/p", "http://ÉXAMPLE.COM./p#top"]
+    spellings = ["http://éxample.com/p", "http://ÉXAMPLE.COM/p#top"]
     scope = "spell-idn"
     root = tmp("spell-idn")
     seen = RequestLog.new()
@@ -80,7 +79,7 @@ defmodule Crawler.PageSpellingTest do
       assert_link_opens(root, hub, spelling)
     end)
 
-    assert Linker.offline_link(hub, "http://ÉXAMPLE.COM./p#top") =~ "#top"
+    assert Linker.offline_link(hub, "http://ÉXAMPLE.COM/p#top") =~ "#top"
   end
 
   test "ipv6 spellings share one fetch and one file", %{site: _site} do

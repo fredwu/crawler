@@ -303,7 +303,7 @@ defmodule Crawler.HTTP.Body do
     try do
       case :zlib.safeInflate(zlib, data) do
         {status, output} when status in [:finished, :continue] -> {status, output}
-        {:need_dictionary, _output} -> {:error, Atom.to_string(encoding)}
+        {:need_dictionary, _dictionary, _output} -> {:error, Atom.to_string(encoding)}
       end
     catch
       _, _ -> {:error, Atom.to_string(encoding)}

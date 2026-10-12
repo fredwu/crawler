@@ -85,12 +85,7 @@ defmodule Crawler.HTTP.BodyTest do
   test "layered overflow closes every inflate stream" do
     gzip = :zlib.gzip(:zlib.gzip(:binary.copy(<<0>>, 200_000)))
 
-    closes =
-      :global.trans({:crawler_zlib_close_trace, :lock}, fn ->
-        trace_overflow(gzip)
-      end)
-
-    assert closes == 2
+    assert trace_overflow(gzip) == 2
   end
 
   test "an encoded body with no bytes is rejected" do
@@ -130,14 +125,19 @@ defmodule Crawler.HTTP.BodyTest do
     assert {_request, %{body: "ok"}} = Body.finish({request, response})
   end
 
+  # StreamHeadersTest traces this same global pattern. :global.trans/2
+  # reads {ResourceId, LockRequesterId}. A shared requester id grants the
+  # lock to every caller, so this process has to be the requester.
   defp trace_overflow(gzip) do
-    :erlang.trace_pattern({:zlib, :close, 1}, true, [])
+    :global.trans({:crawler_zlib_close_trace, self()}, fn ->
+      :erlang.trace_pattern({:zlib, :close, 1}, true, [])
 
-    try do
-      count_overflow(gzip)
-    after
-      :erlang.trace_pattern({:zlib, :close, 1}, false, [])
-    end
+      try do
+        count_overflow(gzip)
+      after
+        :erlang.trace_pattern({:zlib, :close, 1}, false, [])
+      end
+    end)
   end
 
   defp count_overflow(gzip) do

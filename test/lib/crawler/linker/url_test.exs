@@ -27,7 +27,7 @@ defmodule Crawler.Linker.URLTest do
 
   test "absolute targets use the canonical resolver without requiring a source" do
     target = "HTTPS://B.TEST:443/dir/../café?q={}&x=%26#part"
-    expected = "https://b.test/café?q=%7b%7d&x=%26"
+    expected = "https://b.test/café?q={}&x=%26"
 
     for source <- ["http://a.test/page", nil, "invalid"] do
       assert Linker.url(source, target) == expected

@@ -72,8 +72,11 @@ defmodule Crawler.Parser.LinkParser do
       |> HTMLReferences.attributes(attrs, opts, namespace)
       |> Enum.flat_map(fn name -> attribute_links(name, HTMLReferences.attribute(attrs, name)) end)
 
-    (attributes ++ source_links(tag, attrs, children, opts, namespace))
-    |> drop_same_drawing(tag, namespace)
+    drop_same_drawing(
+      attributes ++ source_links(tag, attrs, children, opts, namespace),
+      tag,
+      namespace
+    )
   end
 
   defp drop_same_drawing(links, tag, :svg) do

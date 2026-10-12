@@ -15,7 +15,7 @@ defmodule Crawler.URLHostTest do
   test "maps Unicode separators, width, compatibility characters, and encoded hosts" do
     for {ascii, spellings} <- [
           {"xn--fsq.com", ["例.com", "例。com", "例．com", "例｡com", "%E4%BE%8B%EF%BC%8Ecom"]},
-          {"foo.com", ["foo.com", "ｆoo.com", "ＦＯＯ．ＣＯＭ", "foo。com."]},
+          {"foo.com", ["foo.com", "ｆoo.com", "ＦＯＯ．ＣＯＭ", "foo。com"]},
           {"example.com", ["example.com", "e%78ample.com", "%65xample%2ecom", "EXAMPLE.COM"]},
           {"viii.com", ["Ⅷ.com", "viii.com"]},
           {"xn--caf-dma.com", ["café.com", "cafe\u0301.com", "caf%C3%A9.com"]},
@@ -32,6 +32,8 @@ defmodule Crawler.URLHostTest do
       assert URL.resolve("//#{host}/page", "http://base.com/") == {:ok, expected}
       assert Snapshot.path(url) == Snapshot.path(expected)
     end
+
+    assert URL.normalize("http://foo。com./page") == "http://foo.com./page"
   end
 
   test "keeps non-transitional Unicode domains and distinct IPv6 addresses separate" do
@@ -62,7 +64,14 @@ defmodule Crawler.URLHostTest do
   end
 
   test "preserves browser-permitted ASCII domains" do
-    for host <- ["under_score.com", "-hyphen.com", "example.com..", "xn--8i7caa.com", "."] do
+    for host <- [
+          "under_score.com",
+          "-hyphen.com",
+          "example.com.",
+          "example.com..",
+          "xn--8i7caa.com",
+          "."
+        ] do
       assert URL.resolve("http://#{host}/page", "http://base.com/") ==
                {:ok, "http://#{host}/page"}
     end

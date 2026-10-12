@@ -82,7 +82,20 @@ defmodule Crawler.URLTest do
     assert URL.normalize("http://example.com/a/%2e%2e") == "http://example.com/"
     assert URL.canonical("http://example.com/a/%2e%2e") == "http://example.com"
     assert URL.normalize("http://example.com/a/.../c") == "http://example.com/a/.../c"
-    assert URL.normalize("http://example.com/a/%2e%2e%2e/c") == "http://example.com/a/.../c"
+
+    assert URL.normalize("http://example.com/a/%2e%2e%2e/c") ==
+             "http://example.com/a/%2e%2e%2e/c"
+
+    assert URL.normalize("http://example.com/foo%2ehtml") == "http://example.com/foo%2ehtml"
+
+    refute URL.canonical("http://example.com/foo%2ehtml") ==
+             URL.canonical("http://example.com/foo.html")
+
+    assert URL.normalize("http://example.com/a?q=%2e%2e") == "http://example.com/a?q=%2e%2e"
+
+    refute URL.canonical("http://example.com/a?q=%2e%2e") ==
+             URL.canonical("http://example.com/a?q=..")
+
     assert URL.canonical("http://example.com/a/.../c") == "http://example.com/a/.../c"
     assert URL.normalize("http://example.com//a") == "http://example.com//a"
     assert URL.normalize("http://example.com/a//b/") == "http://example.com/a//b/"
@@ -143,14 +156,26 @@ defmodule Crawler.URLTest do
     assert_one_page([
       "http://éxample.com/a",
       "http://xn--xample-9ua.com/a",
-      "http://ÉXAMPLE.COM./a",
       "HTTP://éxample.com:80/a#section"
     ])
 
     assert_one_page([
-      "http://www.éxample.com/a",
-      "http://www.xn--xample-9ua.com./a"
+      "http://ÉXAMPLE.COM./a",
+      "http://xn--xample-9ua.com./a"
     ])
+
+    assert_one_page([
+      "http://www.éxample.com/a",
+      "http://www.xn--xample-9ua.com/a"
+    ])
+
+    assert_one_page([
+      "http://example.com./a",
+      "http://example.com%2e/a"
+    ])
+
+    assert URL.normalize("http://user:pass@example.com./secret") ==
+             "http://user:pass@example.com./secret"
 
     assert URL.normalize("http://例.com/a") == "http://xn--fsq.com/a"
     assert URL.normalize("http://München.com/a") == "http://xn--mnchen-3ya.com/a"
@@ -158,7 +183,38 @@ defmodule Crawler.URLTest do
     assert_different("http://example.com../a", "http://example.com/a")
     assert_different("http://example.com./a", "http://example.com../a")
     assert URL.normalize("http://./a") == "http://./a"
-    assert URL.normalize("http://example.com./a") == "http://example.com/a"
+    assert URL.normalize("http://example.com./a") == "http://example.com./a"
+    assert URL.normalize("http://example.com%2e/a") == "http://example.com./a"
+    assert URL.normalize("http://127.0.0.1./a") == "http://127.0.0.1/a"
+    assert URL.normalize("http://127.0.0.1%2e/a") == "http://127.0.0.1/a"
+    assert URL.normalize("http://example%2ecom/a") == "http://example.com/a"
+    refute URL.canonical("http://example.com./a") == URL.canonical("http://example.com/a")
+
+    assert URL.normalize("http://user@example.com@evil.com/secret") ==
+             "http://user%40example.com@evil.com/secret"
+
+    assert URL.normalize("http://user:p@ss@example.com/a") ==
+             "http://user:p%40ss@example.com/a"
+
+    assert URL.normalize("http://us er:pa ss@example.com/a") ==
+             "http://us%20er:pa%20ss@example.com/a"
+
+    assert URL.normalize("http://user:name:pass@example.com/a") ==
+             "http://user:name%3apass@example.com/a"
+
+    for rejected <- [
+          "http://user:a#b@example.com/a",
+          "http://user:a/b@example.com/a",
+          "http://user:a?b@example.com/a",
+          "http://user:a\\b@example.com/a",
+          "http://example.com%00.evil.com/a"
+        ] do
+      assert URL.normalize(rejected) == rejected
+      assert URL.canonical(rejected) == rejected
+      assert URL.resolve(rejected, nil) == :skip
+    end
+
+    refute URL.normalize("http://user:a#b@example.com/a") == "http://user:a"
   end
 
   test "treats ipv6 spellings as one page" do
@@ -207,10 +263,11 @@ defmodule Crawler.URLTest do
     assert URL.normalize("  http://ex.com/a  ") == "http://ex.com/a"
     assert URL.normalize("http://ex.com/a\\b") == "http://ex.com/a/b"
     assert URL.normalize("http:\\\\ex.com\\a") == "http://ex.com/a"
-    assert URL.normalize("http://ex.com/a?b\\c") == "http://ex.com/a?b%5cc"
+    assert URL.normalize("http://ex.com/a?b\\c") == "http://ex.com/a?b\\c"
     assert URL.normalize("http://ex.com/a?b%5C") == "http://ex.com/a?b%5c"
+    refute URL.canonical("http://ex.com/a?b\\c") == URL.canonical("http://ex.com/a?b%5C")
     assert URL.normalize("http://ex.com/a?q=%7E") == "http://ex.com/a?q=~"
-    assert URL.normalize("http://ex.com/a?q=%2E%2E") == "http://ex.com/a?q=.."
+    assert URL.normalize("http://ex.com/a?q=%2E%2E") == "http://ex.com/a?q=%2e%2e"
     assert URL.normalize("http://ex.com/a?q=%41") == "http://ex.com/a?q=A"
 
     assert Snapshot.path("http://ex.com/%7E") == "ex.com/~/__index.html"
@@ -231,7 +288,7 @@ defmodule Crawler.URLTest do
     assert_different("http://ex.com/q?q=a+b", "http://ex.com/q?q=a%20b")
     assert_different("http://ex.com/a/...", "http://ex.com/a/..")
     assert URL.normalize("http://ex.com/a?q=foo/../bar") == "http://ex.com/a?q=foo/../bar"
-    assert URL.normalize("http://ex.com/dir?q=%2e%2e") == "http://ex.com/dir?q=.."
+    assert URL.normalize("http://ex.com/dir?q=%2e%2e") == "http://ex.com/dir?q=%2e%2e"
 
     assert Snapshot.path("http://ex.com/search?") == "ex.com/search/__index__q_.html"
     assert Snapshot.path("http://ex.com/search") == "ex.com/search/__index.html"

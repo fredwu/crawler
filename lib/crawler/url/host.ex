@@ -26,7 +26,7 @@ defmodule Crawler.URL.Host do
          {:ok, ascii} <- to_ascii(decoded),
          false <- ascii == "" or Regex.match?(@forbidden, ascii),
          {:ok, host} <- IPv4.normalize(ascii) do
-      {:ok, strip_single_dot(host)}
+      {:ok, host}
     else
       _ -> :error
     end
@@ -51,16 +51,6 @@ defmodule Crawler.URL.Host do
   end
 
   defp ascii?(host), do: Enum.all?(:binary.bin_to_list(host), &(&1 < 128))
-
-  defp strip_single_dot("."), do: "."
-
-  defp strip_single_dot(host) do
-    if String.ends_with?(host, ".") and not String.ends_with?(host, "..") do
-      binary_part(host, 0, byte_size(host) - 1)
-    else
-      host
-    end
-  end
 
   # :inet.ntoa/1 rewrites fe80 and ff02 with a non-zero second hextet into a
   # zone id (`fe80::1%01`). That is a different address, so format RFC 5952 here.

@@ -54,6 +54,29 @@ defmodule Crawler.HTTPTransportTest do
     end
   end
 
+  test "a missing path is requested as /" do
+    {_url, origin} = request_once("")
+    assert origin == "GET / HTTP/1.1"
+
+    {_url, fragment} = request_once("#section")
+    assert fragment == "GET / HTTP/1.1"
+  end
+
+  test "literal path and query characters stay on the request line" do
+    {_url, pipe} = request_once("/a|b")
+    assert pipe == "GET /a|b HTTP/1.1"
+
+    query_target = ~S"/search?q=`{}|\^"
+    {_url, query} = request_once(query_target)
+    assert query == "GET #{query_target} HTTP/1.1"
+
+    {_url, bare} = request_once("/a%zz")
+    assert bare == "GET /a%zz HTTP/1.1"
+
+    {_url, encoded_dot} = request_once("/foo%2ehtml")
+    assert encoded_dot == "GET /foo%2ehtml HTTP/1.1"
+  end
+
   test "transport escaping does not change the final stored URL identity" do
     uri = "http://example.com/café?q=`{}|%ZZ"
     owner = self()
@@ -64,10 +87,10 @@ defmodule Crawler.HTTPTransportTest do
     end
 
     assert {:ok, response} = HTTP.get(uri, [], adapter: adapter, retry: false)
-    assert_received {:wire_uri, "http://example.com/caf%c3%a9?q=%60%7b%7d%7c%25ZZ"}
+    assert_received {:wire_uri, "http://example.com/caf%c3%a9?q=`{}|%ZZ"}
 
     assert Req.Response.get_private(response, :crawler_url) ==
-             "http://example.com/café?q=%60%7b%7d%7c%25ZZ"
+             "http://example.com/café?q=`{}|%ZZ"
   end
 
   test "stream callbacks retain the empty query URI" do
@@ -118,6 +141,76 @@ defmodule Crawler.HTTPTransportTest do
     end
 
     refute_received {:adapter, _, _, _}
+  end
+
+  test "each hop chooses a Finch pool for its own target" do
+    owner = self()
+
+    callback = fn request, _finch, name, _options ->
+      send(owner, {:pool, request.url.host, request.url.path, name, request.options})
+
+      response =
+        case request.url.path do
+          "/a|b" -> redirect("http://[::1]/plain")
+          "/plain" -> redirect("http://example.com/b|c")
+          "/b|c" -> Req.Response.new(status: 200, body: "OK")
+        end
+
+      {request, response}
+    end
+
+    assert {:ok, response} =
+             HTTP.get("http://example.com/a|b", [],
+               connect_options: [timeout: 1_000],
+               finch_request: callback,
+               retry: false,
+               redirect_log_level: false
+             )
+
+    assert_received {:pool, "example.com", "/a|b", first, first_options}
+    assert first != Req.Finch
+    refute Map.has_key?(first_options, :connect_options)
+    refute Map.has_key?(first_options, :inet6)
+
+    assert_received {:pool, "::1", "/plain", second, second_options}
+    assert second != first
+    assert second != Req.Finch
+    assert second_options[:connect_options] == [timeout: 1_000]
+    assert second_options[:inet6]
+
+    assert_received {:pool, "example.com", "/b|c", third, third_options}
+    assert third != second
+    refute Map.has_key?(third_options, :connect_options)
+    refute Map.has_key?(third_options, :inet6)
+    assert Req.Response.get_private(response, :crawler_url) == "http://example.com/b|c"
+    refute_received {:pool, _, _, _, _}
+  end
+
+  test "a caller-supplied Finch pool stays on every hop" do
+    owner = self()
+
+    callback = fn request, _finch, name, _options ->
+      send(owner, {:pool, request.url.path, name})
+
+      response =
+        if request.url.path == "/a|b",
+          do: redirect("/plain"),
+          else: Req.Response.new(status: 200, body: "OK")
+
+      {request, response}
+    end
+
+    assert {:ok, _response} =
+             HTTP.get("http://example.com/a|b", [],
+               finch: :caller_pool,
+               finch_request: callback,
+               retry: false,
+               redirect_log_level: false
+             )
+
+    assert_received {:pool, "/a|b", :caller_pool}
+    assert_received {:pool, "/plain", :caller_pool}
+    refute_received {:pool, _, _}
   end
 
   test "Finch callbacks see each logical hop while request targets are ASCII" do

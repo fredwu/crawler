@@ -9,8 +9,6 @@ defmodule Crawler.Example.GoogleSearch.UrlFilterTest do
           "https://www.google.com/search?q=github",
           "https://github.com/fredwu/crawler?tab=readme#readme",
           "HTTPS://GITHUB.COM/fredwu/crawler",
-          "https://WWW.GOOGLE.COM./search",
-          "https://github.com./fredwu/crawler",
           "https://github.com:443/fredwu/crawler",
           "https://www.google.com:8443/search",
           "https://github.com:8443/fredwu/crawler"
@@ -31,6 +29,8 @@ defmodule Crawler.Example.GoogleSearch.UrlFilterTest do
           "https://user:password@www.google.com/search",
           "https://github.com../project",
           "https://www.google.com../search",
+          "https://WWW.GOOGLE.COM./search",
+          "https://github.com./fredwu/crawler",
           "https://api.github.com/project",
           "https://google.com/search",
           "http://github.com/project",

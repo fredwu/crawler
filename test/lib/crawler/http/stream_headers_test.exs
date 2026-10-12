@@ -153,8 +153,11 @@ defmodule Crawler.HTTP.StreamHeadersTest do
     )
   end
 
+  # BodyTest traces this same global pattern. :global.trans/2 reads
+  # {ResourceId, LockRequesterId}. A shared requester id grants the lock
+  # to every caller, so this process has to be the requester.
   defp closes(kind, fun) do
-    :global.trans({:crawler_zlib_close_trace, :lock}, fn ->
+    :global.trans({:crawler_zlib_close_trace, self()}, fn ->
       traced_closes(kind, fun)
     end)
   end

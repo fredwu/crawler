@@ -321,8 +321,6 @@ defmodule Crawler.Cookies do
     end
   end
 
-  defp cookie_date(_value), do: :error
-
   defp date_tokens(value), do: String.split(value, @date_delimiters, trim: true)
 
   defp take_date_token(token, found) do

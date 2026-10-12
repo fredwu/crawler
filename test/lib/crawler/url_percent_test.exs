@@ -13,8 +13,6 @@ defmodule Crawler.URLPercentTest do
           {"a`b", "a%60b"},
           {"a{b}", "a%7bb%7d"},
           {"a^b", "a%5eb"},
-          {"a|b", "a%7cb"},
-          {"a%ZZ", "a%25ZZ"},
           {"a\0b", "a%00b"},
           {"a\x01b", "a%01b"},
           {"a\x7fb", "a%7fb"}
@@ -28,8 +26,6 @@ defmodule Crawler.URLPercentTest do
           {"a<b", "a%3cb"},
           {~s(a"b), "a%22b"},
           {"a'b", "a%27b"},
-          {"a`{}|b", "a%60%7b%7d%7cb"},
-          {"a%ZZ", "a%25ZZ"},
           {"a\0b", "a%00b"}
         ] do
       assert_same_page(
@@ -39,9 +35,34 @@ defmodule Crawler.URLPercentTest do
     end
 
     assert URL.normalize("http://example.com/search?q=`{}?/:@&=") ==
-             "http://example.com/search?q=%60%7b%7d?/:@&="
+             "http://example.com/search?q=`{}?/:@&="
 
     assert URL.normalize("http://example.com/a'b") == "http://example.com/a'b"
+  end
+
+  test "a browser keeps a literal path pipe, query characters, and a bare percent" do
+    assert URL.normalize("http://example.com/a|b") == "http://example.com/a|b"
+    assert URL.normalize("http://example.com/a%7Cb") == "http://example.com/a%7cb"
+    refute_same("http://example.com/a|b", "http://example.com/a%7cb")
+
+    assert URL.normalize("http://example.com/%zz") == "http://example.com/%zz"
+    assert URL.normalize("http://example.com/%ZZ") == "http://example.com/%ZZ"
+    assert URL.normalize("http://example.com/%25zz") == "http://example.com/%25zz"
+    refute_same("http://example.com/%zz", "http://example.com/%25zz")
+    refute_same("http://example.com/%ZZ", "http://example.com/%25ZZ")
+
+    assert URL.normalize("http://example.com/a?q=`{}|\\^") ==
+             "http://example.com/a?q=`{}|\\^"
+
+    assert URL.normalize("http://example.com/a?q=%60%7B%7D%7C%5C%5E") ==
+             "http://example.com/a?q=%60%7b%7d%7c%5c%5e"
+
+    refute_same("http://example.com/a?q=`{}|\\^", "http://example.com/a?q=%60%7b%7d%7c%5c%5e")
+    assert URL.normalize("http://example.com/a?q=%zz") == "http://example.com/a?q=%zz"
+    refute_same("http://example.com/a?q=%zz", "http://example.com/a?q=%25zz")
+    assert URL.normalize("http://example.com/a?q=it's") == "http://example.com/a?q=it%27s"
+    assert URL.normalize("http://example.com/a`b") == "http://example.com/a%60b"
+    assert URL.normalize("http://example.com/a\\b") == "http://example.com/a/b"
   end
 
   test "reserved escapes and Unicode identities are preserved" do
@@ -59,7 +80,11 @@ defmodule Crawler.URLPercentTest do
   test "the contextual wire encoder preserves valid escapes and encodes raw bytes" do
     assert Percent.encode("café/a%2Fb?q", :path) == "caf%c3%a9/a%2Fb%3fq"
     assert Percent.encode("q=é&x=%26", :query) == "q=%c3%a9&x=%26"
-    assert Percent.encode("%ZZ", :path) == "%25ZZ"
+    assert Percent.encode("%ZZ", :path) == "%ZZ"
+    assert Percent.encode("%ZZ", :query) == "%ZZ"
+    assert Percent.encode("%ZZ", :fragment) == "%25ZZ"
+    assert Percent.encode("a|b", :path) == "a|b"
+    assert Percent.encode("a`{}|\\^b", :query) == "a`{}|\\^b"
   end
 
   test "canonical and wire escaping agree for ASCII bytes without double encoding" do
@@ -93,5 +118,11 @@ defmodule Crawler.URLPercentTest do
     assert URL.canonical(left) == URL.canonical(right)
     assert URL.resolve(left, nil) == {:ok, right}
     assert Snapshot.path(left) == Snapshot.path(right)
+  end
+
+  defp refute_same(left, right) do
+    refute URL.normalize(left) == URL.normalize(right)
+    refute URL.canonical(left) == URL.canonical(right)
+    refute Snapshot.path(left) == Snapshot.path(right)
   end
 end

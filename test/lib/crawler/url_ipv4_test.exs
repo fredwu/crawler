@@ -82,8 +82,10 @@ defmodule Crawler.URLIPv4Test do
                {:ok, "http://#{host}/page"}
     end
 
-    assert Host.domain("example.com.") == {:ok, "example.com"}
+    assert Host.domain("example.com.") == {:ok, "example.com."}
     assert Host.domain("example.com..") == {:ok, "example.com.."}
+    assert Host.domain("127.0.0.1.") == {:ok, "127.0.0.1"}
+    assert Host.domain("127.0.0.1%2e") == {:ok, "127.0.0.1"}
     assert Host.ipv6("::ffff:127.0.0.1") == {:ok, "::ffff:7f00:1"}
     assert URL.normalize("http://[::1]/page") == "http://[::1]/page"
     refute Snapshot.path("http://127.0.0.1/page") == Snapshot.path("http://127.0.0.1../page")

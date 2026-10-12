@@ -70,6 +70,6 @@ defmodule Crawler.URLAuthorityTest do
     assert URL.resolve("\\\\other.com:bad\\child", @base) == :skip
 
     assert URL.resolve("a\\b?q=\\tail", @base) ==
-             {:ok, "http://example.com/dir/a/b?q=%5ctail"}
+             {:ok, "http://example.com/dir/a/b?q=\\tail"}
   end
 end
