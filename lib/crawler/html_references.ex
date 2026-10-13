@@ -4,14 +4,30 @@ defmodule Crawler.HTMLReferences do
   alias Crawler.MediaType
 
   @svg_paint ~w(image use feimage lineargradient radialgradient pattern filter)
+  @svg_presentation ~w(fill stroke filter clip-path mask marker marker-start marker-mid marker-end cursor)
   @math_inert @svg_paint ++ ~w(base script style svg)
 
   def attributes(tag, attrs, opts, namespace \\ :html) do
     names = element_attributes(tag, attrs, opts, namespace)
+    names = if style_attribute?(attrs, opts), do: names ++ ["style"], else: names
 
-    if enabled?(opts, "css") and attribute(attrs, "style") != nil,
-      do: names ++ ["style"],
+    if namespace == :svg,
+      do: names ++ presentation_attributes(attrs, opts),
       else: names
+  end
+
+  def presentation_attribute?(name), do: name in @svg_presentation
+
+  def css_style_element?(attrs) do
+    case attribute(attrs, "type") do
+      nil -> true
+      "" -> true
+      type -> String.downcase(to_string(type), :ascii) == "text/css"
+    end
+  end
+
+  def srcdoc_frame?(tag, attrs, namespace) do
+    tag == "iframe" and namespace == :html and attribute(attrs, "srcdoc") != nil
   end
 
   def enabled?(opts, channel), do: channel in List.wrap(opts[:assets])
@@ -70,6 +86,7 @@ defmodule Crawler.HTMLReferences do
 
   def role(_tag, "style", _attrs), do: "link"
   def role(_tag, "style_text", _attrs), do: "link"
+  def role(_tag, name, _attrs) when name in @svg_presentation, do: "link"
   def role("script", _attr, _attrs), do: "script"
 
   def role(tag, _attr, _attrs) when tag in ["a", "area", "iframe", "object", "embed", "meta"],
@@ -133,7 +150,11 @@ defmodule Crawler.HTMLReferences do
     if skip_link?(attrs, opts), do: [], else: ["href"]
   end
 
-  defp element_attributes(tag, _attrs, _opts, :html) when tag in ["iframe", "embed"], do: ["src"]
+  defp element_attributes("iframe", attrs, _opts, :html) do
+    if attribute(attrs, "srcdoc") == nil, do: ["src"], else: []
+  end
+
+  defp element_attributes("embed", _attrs, _opts, :html), do: ["src"]
   defp element_attributes("object", _attrs, _opts, :html), do: ["data"]
 
   defp element_attributes("meta", attrs, opts, :html) do
@@ -188,13 +209,29 @@ defmodule Crawler.HTMLReferences do
     as = normalized(attrs, "as")
 
     cond do
-      "modulepreload" in rel -> enabled?(opts, "js")
-      "stylesheet" in rel -> enabled?(opts, "css")
-      "preload" in rel and as in ["style", "font"] -> enabled?(opts, "css")
-      "preload" in rel and as == "script" -> enabled?(opts, "js")
-      "preload" in rel and as == "image" -> enabled?(opts, "images")
-      icon_rel?(rel) -> enabled?(opts, "images")
-      true -> false
+      "modulepreload" in rel ->
+        enabled?(opts, "js")
+
+      "stylesheet" in rel ->
+        enabled?(opts, "css") and acceptable_style_type?(attrs)
+
+      "preload" in rel and as == "style" ->
+        enabled?(opts, "css") and acceptable_style_type?(attrs)
+
+      "preload" in rel and as == "font" ->
+        enabled?(opts, "css")
+
+      "preload" in rel and as == "script" ->
+        enabled?(opts, "js")
+
+      "preload" in rel and as == "image" ->
+        enabled?(opts, "images")
+
+      icon_rel?(rel) ->
+        enabled?(opts, "images")
+
+      true ->
+        false
     end
   end
 
@@ -213,6 +250,22 @@ defmodule Crawler.HTMLReferences do
   end
 
   defp icon_rel?(rel), do: Enum.any?(rel, &(&1 in ["icon", "apple-touch-icon", "mask-icon"]))
+
+  defp style_attribute?(attrs, opts),
+    do: enabled?(opts, "css") and attribute(attrs, "style") != nil
+
+  defp presentation_attributes(attrs, opts) do
+    if enabled?(opts, "css"),
+      do: Enum.filter(@svg_presentation, &(attribute(attrs, &1) != nil)),
+      else: []
+  end
+
+  defp acceptable_style_type?(attrs) do
+    case attribute(attrs, "type") do
+      nil -> true
+      type -> MediaType.css?(type)
+    end
+  end
 
   defp skip_link?(attrs, opts) do
     opts[:respect_robots] != false and

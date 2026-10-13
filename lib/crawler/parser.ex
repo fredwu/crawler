@@ -127,6 +127,9 @@ defmodule Crawler.Parser do
     |> do_parse_links(body, opts, link_handler)
   end
 
+  @doc false
+  def with_document_base(body, opts), do: put_base_href(body, opts)
+
   defp put_robots_nofollow(body, opts) do
     cond do
       opts[:respect_robots] == false ->
@@ -226,7 +229,17 @@ defmodule Crawler.Parser do
         JsParser.elements(body, Map.get(opts, :javascript_goal, :module))
 
       true ->
-        HtmlParser.references(body, opts)
+        xml_stylesheets(body, opts) ++ HtmlParser.references(body, opts)
+    end
+  end
+
+  defp xml_stylesheets(body, opts) do
+    if MediaType.svg?(opts[:content_type]) do
+      Enum.map(HTMLSpans.css_xml_stylesheets(body), fn sheet ->
+        {"link", [{"rel", "stylesheet"}, {"href", sheet.href}, {"type", sheet.type}], []}
+      end)
+    else
+      []
     end
   end
 end

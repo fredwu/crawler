@@ -50,6 +50,30 @@ defmodule Crawler.HTTP.DocumentHeadersTest do
            ]
   end
 
+  test "keeps a link type parameter, including an empty type" do
+    headers = [
+      {"link",
+       ~s|</typed.css>; rel="stylesheet"; type="text/css; charset=utf-8", </empty.css>; rel="stylesheet"; type=""|},
+      {"Link", ~s|</plain.css>; rel=stylesheet; type=text/plain|},
+      {"link", ~s|</app.css>; rel=preload; type="text/css"; as=style|}
+    ]
+
+    assert DocumentHeaders.elements(headers) == [
+             {"link",
+              [
+                {"rel", "stylesheet"},
+                {"href", "/typed.css"},
+                {"type", "text/css; charset=utf-8"}
+              ], []},
+             {"link", [{"rel", "stylesheet"}, {"href", "/empty.css"}, {"type", ""}], []},
+             {"link", [{"rel", "stylesheet"}, {"href", "/plain.css"}, {"type", "text/plain"}],
+              []},
+             {"link",
+              [{"rel", "preload"}, {"href", "/app.css"}, {"as", "style"}, {"type", "text/css"}],
+              []}
+           ]
+  end
+
   test "link parameter names are matched without changing their values" do
     headers = [{"link", ~s|</app.css>; AS=Style|}]
 

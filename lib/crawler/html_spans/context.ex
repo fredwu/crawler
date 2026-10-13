@@ -11,7 +11,14 @@ defmodule Crawler.HTMLSpans.Context do
   @foreign_breakout ~w(b big blockquote body br center code dd div dl dt em embed h1 h2 h3 h4 h5 h6 head hr i img li listing menu meta nobr ol p pre ruby s small span strong strike sub sup table tt u ul var)
 
   def in_template?(stack) do
-    Enum.any?(stack, &(&1.name == "template" and &1.namespace == :html))
+    Enum.any?(stack, fn node ->
+      node.name == "template" and node.namespace == :html and
+        not Map.get(node, :shadow_root?, false)
+    end)
+  end
+
+  def in_shadow_root?(stack) do
+    Enum.any?(stack, &Map.get(&1, :shadow_root?, false))
   end
 
   def foreign?([%{namespace: namespace} | _]), do: namespace != :html
@@ -65,10 +72,32 @@ defmodule Crawler.HTMLSpans.Context do
          (namespace == :html and tag.name in @html_void) do
       stack
     else
-      [
-        %{name: tag.name, namespace: namespace, html_children?: html_children?(tag, namespace)}
-        | stack
-      ]
+      [stack_node(tag, namespace, stack) | stack]
+    end
+  end
+
+  defp stack_node(tag, namespace, stack) do
+    node = %{name: tag.name, namespace: namespace, html_children?: html_children?(tag, namespace)}
+
+    if shadow_root?(tag, namespace, stack), do: Map.put(node, :shadow_root?, true), else: node
+  end
+
+  defp shadow_root?(tag, :html, stack) do
+    tag.name == "template" and shadow_mode?(tag) and not in_template?(stack)
+  end
+
+  defp shadow_root?(_tag, _namespace, _stack), do: false
+
+  defp shadow_mode?(tag) do
+    tag
+    |> Map.get(:attributes, [])
+    |> Enum.find_value(fn
+      %{name: "shadowrootmode", decoded: value} when is_binary(value) -> value
+      _attr -> nil
+    end)
+    |> case do
+      value when is_binary(value) -> String.downcase(value, :ascii) in ["open", "closed"]
+      _value -> false
     end
   end
 

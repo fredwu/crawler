@@ -4,6 +4,7 @@ defmodule Crawler.HTMLSpans do
   alias Crawler.HTMLSpans.Context
   alias Crawler.HTMLSpans.Markup
   alias Crawler.HTMLSpans.ScriptData
+  alias Crawler.MediaType
 
   @name ~r/^<(\/?)([A-Za-z][^\t\n\f\r \/>]*)/
   @text_elements ~w(script style textarea title xmp iframe noembed noframes plaintext)
@@ -37,9 +38,23 @@ defmodule Crawler.HTMLSpans do
     |> tags()
     |> Enum.filter(fn tag ->
       tag.name == "base" and not tag.closing? and tag.namespace == :html and
-        not tag.in_template? and attribute(tag, "href") != nil
+        not tag.in_template? and not tag.in_shadow_root? and attribute(tag, "href") != nil
     end)
   end
+
+  def css_xml_stylesheets(body) when is_binary(body) do
+    body
+    |> collect(0, [], [declarations: true], [])
+    |> Enum.flat_map(fn
+      %{declaration?: true, in_template?: false, span: {start, _length}} ->
+        css_xml_stylesheet(body, start)
+
+      _other ->
+        []
+    end)
+  end
+
+  def css_xml_stylesheets(_body), do: []
 
   defp collect(body, offset, acc, opts, context) do
     case next_tag(body, offset, opts, context) do
@@ -67,7 +82,8 @@ defmodule Crawler.HTMLSpans do
               Map.merge(tag, %{
                 content_span: content,
                 namespace: namespace,
-                in_template?: Context.in_template?(context)
+                in_template?: Context.in_template?(context),
+                in_shadow_root?: Context.in_shadow_root?(context)
               })
 
             {tag, consumed + skip, Context.advance(tag, namespace, context)}
@@ -79,11 +95,15 @@ defmodule Crawler.HTMLSpans do
   end
 
   defp non_tag(body, {start, length, kind}, opts, context) do
-    consumed = start + length
+    consumed = declaration_end(body, start, length, kind)
 
     cond do
       kind == :declaration and Keyword.get(opts, :declarations, false) ->
-        {%{declaration?: true, span: {start, length}}, consumed, context}
+        {%{
+           declaration?: true,
+           span: {start, consumed - start},
+           in_template?: Context.in_template?(context)
+         }, consumed, context}
 
       kind == :comment and Keyword.get(opts, :comments, false) ->
         {%{comment?: true, span: {start, length}}, consumed, context}
@@ -280,6 +300,183 @@ defmodule Crawler.HTMLSpans do
     do: raise(ArgumentError, "HTML edits must contain a byte span and a binary replacement")
 
   def slice(body, {start, length}), do: binary_part(body, start, length)
+
+  @pi_space ~c" \t\n\f\r"
+  @pi_stop @pi_space ++ ~c"?>="
+
+  defp css_xml_stylesheet(body, start) do
+    case xml_stylesheet_boundary(body, start) do
+      {:pi, finish} ->
+        sheets_in(start, binary_part(body, start, finish - start))
+
+      _other ->
+        []
+    end
+  end
+
+  defp sheets_in(start, source) do
+    case xml_stylesheet(source) do
+      %{"type" => type, "href" => href} ->
+        css_sheet(start, type, href)
+
+      _other ->
+        []
+    end
+  end
+
+  defp css_sheet(start, type, href) do
+    if MediaType.css?(type.value) do
+      {href_start, href_length} = href.span
+      [%{href: href.value, type: type.value, href_span: {start + href_start, href_length}}]
+    else
+      []
+    end
+  end
+
+  # Resume after an xml-stylesheet. Quoted values can contain ">" and "?>",
+  # so the HTML declaration end is too early and those bytes are not markup.
+  # "?>" outside quotes ends the instruction. ">" outside quotes does not:
+  # resume after it, do not read a sheet, and leave the next instruction.
+  # A quote that never closes runs to the end of the page.
+  defp declaration_end(body, start, length, :declaration) do
+    case xml_stylesheet_boundary(body, start) do
+      {_kind, finish} when finish > start + length -> finish
+      _other -> start + length
+    end
+  end
+
+  defp declaration_end(_body, start, length, _kind), do: start + length
+
+  defp xml_stylesheet_boundary(body, start) do
+    size = byte_size(body)
+
+    with true <- start + 2 <= size,
+         "<?" <- binary_part(body, start, 2),
+         {name, offset} <- take_pi_name(body, start + 2, size, <<>>),
+         true <- String.downcase(name, :ascii) == "xml-stylesheet",
+         {kind, finish} when kind in [:pi, :gt, :open] <- pi_boundary(body, offset, size, nil) do
+      {kind, finish}
+    else
+      _miss -> nil
+    end
+  end
+
+  defp pi_boundary(body, offset, size, delimiter) when offset < size do
+    byte = :binary.at(body, offset)
+
+    cond do
+      delimiter == nil and byte == ?? and offset + 1 < size and
+          :binary.at(body, offset + 1) == ?> ->
+        {:pi, offset + 2}
+
+      delimiter == nil and byte == ?> ->
+        {:gt, offset + 1}
+
+      delimiter == nil and byte in ~c"\"'" ->
+        pi_boundary(body, offset + 1, size, byte)
+
+      delimiter != nil and byte == delimiter ->
+        pi_boundary(body, offset + 1, size, nil)
+
+      true ->
+        pi_boundary(body, offset + 1, size, delimiter)
+    end
+  end
+
+  defp pi_boundary(_body, _offset, size, delimiter) when is_integer(delimiter), do: {:open, size}
+
+  defp pi_boundary(_body, _offset, _size, _delimiter), do: nil
+
+  defp xml_stylesheet(<<"<?", _rest::binary>> = source) do
+    {name, offset} = take_pi_name(source, 2, byte_size(source), <<>>)
+
+    if String.downcase(name, :ascii) == "xml-stylesheet",
+      do: read_pseudo_attributes(source, offset, %{}),
+      else: nil
+  end
+
+  defp xml_stylesheet(_source), do: nil
+
+  defp read_pseudo_attributes(source, offset, acc) do
+    offset = skip_pi_space(source, offset)
+    size = byte_size(source)
+
+    cond do
+      offset >= size ->
+        acc
+
+      :binary.at(source, offset) in ~c"?>" ->
+        acc
+
+      true ->
+        case read_pseudo_attribute(source, offset) do
+          {name, value, span, next} ->
+            acc = Map.put_new(acc, String.downcase(name, :ascii), %{value: value, span: span})
+            read_pseudo_attributes(source, next, acc)
+
+          :error ->
+            acc
+        end
+    end
+  end
+
+  defp read_pseudo_attribute(source, offset) do
+    size = byte_size(source)
+
+    case take_pi_name(source, offset, size, <<>>) do
+      {"", _offset} ->
+        :error
+
+      {name, offset} ->
+        offset = skip_pi_space(source, offset)
+
+        if offset < size and :binary.at(source, offset) == ?= do
+          read_pseudo_value(source, skip_pi_space(source, offset + 1), name)
+        else
+          :error
+        end
+    end
+  end
+
+  defp read_pseudo_value(source, offset, name) when offset < byte_size(source) do
+    delimiter = :binary.at(source, offset)
+
+    if delimiter in ~c"\"'" do
+      value_start = offset + 1
+      scope = {value_start, byte_size(source) - value_start}
+
+      case :binary.match(source, <<delimiter>>, scope: scope) do
+        {finish, 1} ->
+          value = binary_part(source, value_start, finish - value_start)
+          {name, value, {value_start, finish - value_start}, finish + 1}
+
+        :nomatch ->
+          :error
+      end
+    else
+      :error
+    end
+  end
+
+  defp read_pseudo_value(_source, _offset, _name), do: :error
+
+  defp take_pi_name(_source, offset, size, acc) when offset >= size, do: {acc, offset}
+
+  defp take_pi_name(source, offset, size, acc) do
+    char = :binary.at(source, offset)
+
+    if char in @pi_stop,
+      do: {acc, offset},
+      else: take_pi_name(source, offset + 1, size, <<acc::binary, char>>)
+  end
+
+  defp skip_pi_space(source, offset) when offset >= byte_size(source), do: offset
+
+  defp skip_pi_space(source, offset) do
+    if :binary.at(source, offset) in @pi_space,
+      do: skip_pi_space(source, offset + 1),
+      else: offset
+  end
 
   defp shift({start, length}, offset), do: {start + offset, length}
   defp remaining(body, start), do: binary_part(body, start, byte_size(body) - start)

@@ -42,6 +42,7 @@ defmodule Crawler.HTTP.DocumentHeaders do
     [{"rel", rel}, {"href", url}]
     |> param("as", attrs)
     |> param("imagesrcset", attrs)
+    |> param("type", attrs)
   end
 
   defp param(attributes, name, attrs) do
@@ -77,10 +78,12 @@ defmodule Crawler.HTTP.DocumentHeaders do
     end
   end
 
+  defp named_param("type", nil), do: {"type", ""}
   defp named_param(_name, nil), do: nil
   defp named_param("rel", value), do: {"rel", value}
   defp named_param("as", value), do: {"as", value}
   defp named_param("imagesrcset", value), do: {"imagesrcset", value}
+  defp named_param("type", value), do: {"type", value}
   defp named_param(_name, _value), do: nil
 
   defp uri_and_params(<<"<", rest::binary>>) do

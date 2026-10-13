@@ -7,9 +7,11 @@ defmodule Crawler.Snapper.LinkReplacer do
   """
 
   alias Crawler.HTMLReferences
+  alias Crawler.HTMLSpans
   alias Crawler.Linker
   alias Crawler.MediaType
   alias Crawler.Parser
+  alias Crawler.Parser.Guarder
   alias Crawler.Snapper.LinkReplacer.Css
   alias Crawler.Snapper.LinkReplacer.Html
   alias Crawler.Snapper.LinkReplacer.Javascript
@@ -78,6 +80,7 @@ defmodule Crawler.Snapper.LinkReplacer do
 
     new_body =
       body
+      |> rewrite_srcdocs(opts)
       |> rewrite_body(document_links, opts)
       |> Html.drop_base(opts)
       |> RawText.restore(saved, fn source, source_opts ->
@@ -110,6 +113,77 @@ defmodule Crawler.Snapper.LinkReplacer do
   end
 
   defp source_links(links, _source_opts), do: links
+
+  defp rewrite_srcdocs(body, opts) do
+    if srcdoc_document?(body, opts) do
+      nested = srcdoc_opts(body, opts)
+
+      edits =
+        body
+        |> HTMLSpans.tags()
+        |> Enum.flat_map(&srcdoc_edit(body, &1, nested))
+
+      HTMLSpans.rewrite(body, edits)
+    else
+      body
+    end
+  end
+
+  defp srcdoc_document?(body, opts) when is_binary(body) do
+    Guarder.pass?(opts) and
+      (MediaType.html?(opts[:content_type]) or MediaType.svg?(opts[:content_type]))
+  end
+
+  defp srcdoc_document?(_body, _opts), do: false
+
+  defp srcdoc_opts(body, opts) do
+    base = Parser.with_document_base(body, opts)
+
+    opts
+    |> Map.put(:content_type, "text/html")
+    |> Map.put(:html_tag, "a")
+    |> Map.put(:referrer_url, base[:referrer_url] || opts[:url])
+    |> Map.delete(:robots_nofollow)
+    |> Map.delete(:headers)
+    |> Map.delete(:javascript_goal)
+  end
+
+  defp srcdoc_edit(
+         body,
+         %{name: "iframe", namespace: :html, closing?: false, in_template?: false} = tag,
+         opts
+       ) do
+    case HTMLSpans.attribute(tag, "srcdoc") do
+      %{value_span: span, decoded: decoded} when is_tuple(span) ->
+        {:ok, rewritten} = replace_links(decoded, opts)
+        if rewritten == decoded, do: [], else: [{span, srcdoc_value(body, span, rewritten)}]
+
+      _attr ->
+        []
+    end
+  end
+
+  defp srcdoc_edit(_body, _tag, _opts), do: []
+
+  # An unquoted value cannot contain the spaces in the decoded document.
+  defp srcdoc_value(body, {start, _length}, rewritten) do
+    escaped = escape_attribute(rewritten)
+
+    if start > 0 and :binary.at(body, start - 1) in [?", ?'] do
+      escaped
+    else
+      "\"" <> escaped <> "\""
+    end
+  end
+
+  defp escape_attribute(value) do
+    value
+    |> String.replace("&", "&amp;")
+    |> String.replace("<", "&lt;")
+    |> String.replace(">", "&gt;")
+    |> String.replace("\"", "&quot;")
+    |> String.replace("'", "&#39;")
+  end
 
   defp rewrite_body(body, [], _opts), do: body
 

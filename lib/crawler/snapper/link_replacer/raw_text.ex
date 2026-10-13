@@ -45,7 +45,8 @@ defmodule Crawler.Snapper.LinkReplacer.RawText do
     attrs = Enum.map(tag.attributes, &{&1.name, &1.decoded})
 
     cond do
-      tag.name == "style" and HTMLReferences.enabled?(opts, "css") ->
+      tag.name == "style" and HTMLReferences.enabled?(opts, "css") and
+          HTMLReferences.css_style_element?(attrs) ->
         style_source(tag)
 
       tag.name == "script" and tag.namespace == :svg and HTMLReferences.enabled?(opts, "js") and

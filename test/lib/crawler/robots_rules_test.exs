@@ -355,6 +355,16 @@ defmodule Crawler.RobotsRulesTest do
              ~s|<template><meta name="robots" content="nofollow"></template>|,
              "Crawler/1"
            )
+
+    refute Robots.meta_nofollow?(
+             ~s|<template shadowrootmode="open"><meta name="robots" content="nofollow"></template>|,
+             "Crawler/1"
+           )
+
+    refute Robots.meta_nofollow?(
+             ~s|<template shadowrootmode="closed"><meta name="crawler" content="nofollow"></template>|,
+             "Crawler/1"
+           )
   end
 
   test "words from a url in the user-agent comment do not select a group" do

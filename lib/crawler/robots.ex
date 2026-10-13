@@ -67,7 +67,7 @@ defmodule Crawler.Robots do
     |> HTMLSpans.tags()
     |> Enum.any?(fn tag ->
       tag.name == "meta" and not tag.closing? and not tag.in_template? and
-        meta_blocks?(tag, tokens)
+        not tag.in_shadow_root? and meta_blocks?(tag, tokens)
     end)
   end
 

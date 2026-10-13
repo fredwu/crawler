@@ -15,7 +15,7 @@ defmodule Crawler.Snapper.LinkReplacer.Html do
       |> Enum.reject(&(&1.closing? or &1.in_template?))
       |> Enum.flat_map(&replace_tag(&1, variant, offline, opts))
 
-    HTMLSpans.rewrite(body, edits)
+    HTMLSpans.rewrite(body, edits ++ instruction_edits(body, variant, offline, opts))
   end
 
   defp replace_tag(tag, variant, offline, opts) do
@@ -79,7 +79,27 @@ defmodule Crawler.Snapper.LinkReplacer.Html do
     HTMLRefresh.replace(value, variant, offline)
   end
 
+  defp replace_value(%{namespace: :svg}, %{name: name, value: value}, variant, offline) do
+    if HTMLReferences.presentation_attribute?(name) do
+      if HTMLReferences.local_reference?(variant),
+        do: value,
+        else: Css.replace(value, variant, offline)
+    else
+      value
+    end
+  end
+
   defp replace_value(_tag, attr, _variant, _offline), do: attr.value
+
+  defp instruction_edits(body, variant, offline, opts) do
+    if MediaType.svg?(opts[:content_type]) and HTMLReferences.enabled?(opts, "css") do
+      for sheet <- HTMLSpans.css_xml_stylesheets(body), sheet.href == variant do
+        {sheet.href_span, offline}
+      end
+    else
+      []
+    end
+  end
 
   defp href_replacement(%{terminal_slash?: true}, offline), do: "\"" <> offline <> "\""
   defp href_replacement(_attr, offline), do: offline

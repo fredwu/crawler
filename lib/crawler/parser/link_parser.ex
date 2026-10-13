@@ -59,12 +59,20 @@ defmodule Crawler.Parser.LinkParser do
         handler.(element, handler_opts(opts, role, goal, reference_tag))
       end)
 
-    case results do
-      [] -> nil
-      [result] -> result
-      results -> results
+    case srcdoc_links(tag, attrs, opts, handler, namespace) do
+      [] -> normalize_results(results)
+      extra -> combine_results(normalize_results(results), extra)
     end
   end
+
+  defp normalize_results([]), do: nil
+  defp normalize_results([result]), do: result
+  defp normalize_results(results), do: results
+
+  defp combine_results(nil, [result]), do: result
+  defp combine_results(nil, extra), do: extra
+  defp combine_results(result, extra) when not is_list(result), do: [result | extra]
+  defp combine_results(results, extra), do: results ++ extra
 
   defp links(tag, attrs, children, opts, namespace) do
     attributes =
@@ -87,13 +95,14 @@ defmodule Crawler.Parser.LinkParser do
 
   defp same_drawing?({attr, value}, tag) do
     HTMLReferences.local_reference?(value) and
-      (attr in ["style", "style_text"] or HTMLReferences.role(tag, attr, []) == "img")
+      (attr in ["style", "style_text"] or HTMLReferences.presentation_attribute?(attr) or
+         HTMLReferences.role(tag, attr, []) == "img")
   end
 
   defp same_drawing?(_link, _tag), do: false
 
-  defp source_links("style", _attrs, children, opts, namespace) when namespace in [:html, :svg] do
-    if HTMLReferences.enabled?(opts, "css"),
+  defp source_links("style", attrs, children, opts, namespace) when namespace in [:html, :svg] do
+    if HTMLReferences.enabled?(opts, "css") and HTMLReferences.css_style_element?(attrs),
       do: children |> raw_text() |> style_links("style_text"),
       else: []
   end
@@ -115,6 +124,26 @@ defmodule Crawler.Parser.LinkParser do
   end
 
   defp source_links(_tag, _attrs, _children, _opts, _namespace), do: []
+
+  defp srcdoc_links("iframe", attrs, opts, handler, :html) do
+    case HTMLReferences.attribute(attrs, "srcdoc") do
+      nil ->
+        []
+
+      srcdoc ->
+        opts =
+          opts
+          |> Map.delete(:robots_nofollow)
+          |> Map.delete(:headers)
+          |> Map.delete(:javascript_goal)
+          |> Map.put(:content_type, "text/html")
+          |> Map.put(:html_tag, "a")
+
+        Crawler.Parser.parse_links(srcdoc, opts, handler)
+    end
+  end
+
+  defp srcdoc_links(_tag, _attrs, _opts, _handler, _namespace), do: []
 
   defp inline_script_links(attrs, children) do
     children
@@ -140,7 +169,11 @@ defmodule Crawler.Parser.LinkParser do
     end
   end
 
-  defp attribute_links(name, value), do: [{name, value}]
+  defp attribute_links(name, value) do
+    if HTMLReferences.presentation_attribute?(name),
+      do: style_links(value, name),
+      else: [{name, value}]
+  end
 
   defp style_links(nil, _attr), do: []
   defp style_links("", _attr), do: []
