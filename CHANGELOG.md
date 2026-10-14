@@ -2,6 +2,7 @@
 
 ## master
 
+- [Fixed] Crawl pages named by a robots sitemap, including prefixed XML, text lists, RSS and Atom feeds, and language versions. Image and video files are fetched when image assets are collected. A sitemap index keeps going while page budget remains, without counting a finished page twice or reserving a disallowed or repeated URL. A failed sitemap is retried, and a UTF-16 sitemap is read.
 - [Fixed] Keep the browser address as the request and the stored page. One trailing DNS dot stays, so `example.com.` is a different host from `example.com`. Userinfo is encoded, and a rejected authority is not fetched. A bare percent sign, a path pipe, and the query characters backtick, brace, pipe, backslash, and caret stay literal and do not share a page with their percent-encoded forms. `%2e` is a dot only as a whole path segment.
 - [Fixed] Store `__Host-` and `__Secure-` cookies only when the prefix rules pass. An http response cannot create or replace a Secure cookie. The first request keeps caller Cookie, Authorization, and custom headers on the seed hostname only, and a later hop on another host does not receive the caller cookie. A scheme URL in the User-Agent comment does not select a robots group.
 - [Added] Add `:respect_robots` and `:max_body`. The crawler can honour robots.txt and nofollow, keep ordinary links on the seed site, and limit the decoded response size.
