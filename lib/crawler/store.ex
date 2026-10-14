@@ -157,21 +157,24 @@ defmodule Crawler.Store do
   end
 
   @doc false
-  def save_cookies(scope, url, headers, generation \\ nil)
+  def save_cookies(scope, url, headers, generation \\ nil, context \\ %{})
 
-  def save_cookies(nil, _url, _headers, _generation), do: :ok
+  def save_cookies(nil, _url, _headers, _generation, _context), do: :ok
 
-  def save_cookies(scope, url, headers, generation) do
-    GenServer.call(__MODULE__, {:save_cookies, scope, url, List.wrap(headers), generation})
+  def save_cookies(scope, url, headers, generation, context) do
+    GenServer.call(
+      __MODULE__,
+      {:save_cookies, scope, url, List.wrap(headers), generation, context}
+    )
   end
 
   @doc false
-  def cookie_header(scope, url, generation \\ nil)
+  def cookie_header(scope, url, generation \\ nil, context \\ %{})
 
-  def cookie_header(nil, _url, _generation), do: nil
+  def cookie_header(nil, _url, _generation, _context), do: nil
 
-  def cookie_header(scope, url, generation) do
-    GenServer.call(__MODULE__, {:cookie_header, scope, url, generation})
+  def cookie_header(scope, url, generation, context) do
+    GenServer.call(__MODULE__, {:cookie_header, scope, url, generation, context})
   end
 
   @doc """

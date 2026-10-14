@@ -83,6 +83,45 @@ defmodule Crawler.Cookies.PublicSuffix do
 
   def public_suffix?(_domain), do: false
 
+  def registrable_domain(domain) when is_binary(domain) do
+    domain = normalize(domain)
+
+    cond do
+      invalid_host?(domain) -> ""
+      ip?(domain) -> ip_host(domain)
+      true -> registrable(domain, suffix(domain))
+    end
+  end
+
+  def registrable_domain(_domain), do: ""
+
+  defp invalid_host?(domain) do
+    domain == "" or not String.valid?(domain) or String.contains?(domain, "..")
+  end
+
+  defp registrable(domain, suffix) when domain == suffix, do: domain
+
+  defp registrable(domain, suffix) do
+    labels = String.split(domain, ".", trim: true)
+    count = length(String.split(suffix, ".", trim: true))
+
+    if length(labels) > count do
+      labels |> Enum.take(-(count + 1)) |> Enum.join(".")
+    else
+      domain
+    end
+  end
+
+  defp ip?(domain) do
+    bare = ip_host(domain)
+
+    String.valid?(bare) and
+      match?({:ok, _address}, :inet.parse_address(String.to_charlist(bare)))
+  end
+
+  defp ip_host("[" <> rest), do: String.trim_trailing(rest, "]")
+  defp ip_host(domain), do: domain
+
   def normalize(domain) when is_binary(domain) do
     domain
     |> String.trim()

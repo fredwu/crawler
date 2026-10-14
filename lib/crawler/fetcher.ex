@@ -6,6 +6,7 @@ defmodule Crawler.Fetcher do
   require Logger
 
   alias Crawler.Charset
+  alias Crawler.Cookies
   alias Crawler.Diagnostics
   alias Crawler.Fetcher.HeaderPreparer
   alias Crawler.Fetcher.Policer
@@ -144,12 +145,15 @@ defmodule Crawler.Fetcher do
 
   # `depth` matches a normal fetch: Recorder increments it once before parsing.
   defp document_opts(opts, stored) do
+    landed = stored[:referrer_url] || opts[:url]
+
     opts =
       opts
       |> Map.put(:content_type, stored[:content_type])
-      |> Map.put(:referrer_url, stored[:referrer_url] || opts[:url])
+      |> Map.put(:referrer_url, landed)
       |> Map.put(:headers, stored[:headers])
       |> Map.replace!(:depth, opts[:depth] + 1)
+      |> Cookies.assign_landed_site(landed)
 
     case stored[:alias_url] do
       final when is_binary(final) -> Map.put(opts, :alias_url, final)
@@ -295,7 +299,11 @@ defmodule Crawler.Fetcher do
 
   defp record_referrer_url(response, body, opts) do
     final = final_url(response, opts[:url])
-    opts = Map.put(opts, :referrer_url, final)
+
+    opts =
+      opts
+      |> Map.put(:referrer_url, final)
+      |> Cookies.assign_landed_site(final)
 
     remember_alias(final, body, opts)
   end

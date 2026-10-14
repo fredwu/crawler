@@ -25,7 +25,8 @@ defmodule Crawler.Fetcher.Requester do
   Use `:redirect` to control redirects; `:follow_redirects` is not supported.
   Caller `Cookie`, `Authorization`, and other custom headers stay on the seed
   hostname when the scheme or port changes. Another hostname receives the safe
-  headers and its own jar cookies.
+  headers and its own jar cookies. Jar cookies use the page that caused the
+  request, and a redirect keeps that page and the request kind.
 
   ## Examples
 
@@ -77,12 +78,16 @@ defmodule Crawler.Fetcher.Requester do
     fetch_opts =
       if credential_host?(opts), do: fetch_opts, else: Keyword.delete(fetch_opts, :auth)
 
+    context = cookie_context(opts)
+
     fetch_opts
     |> Keyword.put(:into, &Body.stream/2)
     |> Keyword.put(:crawler_scope, opts[:scope])
     |> Keyword.put(:crawler_max_body, max_body(opts))
     |> Keyword.put(:crawler_user_cookie, user_cookie)
     |> Keyword.put(:crawler_generation, opts[:generation])
+    |> Keyword.put(:crawler_cookie_site, context.site)
+    |> Keyword.put(:crawler_cookie_navigation, context.navigation)
   end
 
   # The seed host keeps caller headers when the scheme or port changes.
@@ -110,12 +115,20 @@ defmodule Crawler.Fetcher.Requester do
   end
 
   defp put_cookie(request, opts, user_cookie) do
-    jar = Store.cookie_header(opts[:scope], opts[:url], opts[:generation])
+    context = cookie_context(opts)
+    jar = Store.cookie_header(opts[:scope], opts[:url], opts[:generation], context)
 
     case Cookies.merge_header(user_cookie, jar) do
       nil -> Req.Request.delete_header(request, "cookie")
       header -> Req.Request.put_header(request, "cookie", header)
     end
+  end
+
+  defp cookie_context(opts) do
+    %{
+      site: opts[:cookie_site] || opts[:url],
+      navigation: Cookies.request_navigation?(opts)
+    }
   end
 
   defp cookie_value(request) do

@@ -207,12 +207,12 @@ defmodule Crawler.Store.Server do
     {:reply, :ok, state}
   end
 
-  def handle_call({:save_cookies, scope, url, headers, generation}, _from, state) do
-    {:reply, :ok, State.save_cookies(state, scope, url, headers, generation)}
+  def handle_call({:save_cookies, scope, url, headers, generation, context}, _from, state) do
+    {:reply, :ok, State.save_cookies(state, scope, url, headers, generation, context)}
   end
 
-  def handle_call({:cookie_header, scope, url, generation}, _from, state) do
-    {:reply, State.cookie_header(state, scope, url, generation), state}
+  def handle_call({:cookie_header, scope, url, generation, context}, _from, state) do
+    {:reply, State.cookie_header(state, scope, url, generation, context), state}
   end
 
   def handle_call({:generation, scope}, _from, state) do

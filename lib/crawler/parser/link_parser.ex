@@ -220,6 +220,7 @@ defmodule Crawler.Parser.LinkParser do
     opts =
       opts
       |> Map.delete(:javascript_goal)
+      |> Map.delete(:cookie_navigation)
       |> Map.put(:html_tag, role)
       |> Map.put(:reference_tag, tag)
 

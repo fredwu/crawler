@@ -100,8 +100,10 @@ defmodule Crawler.Sitemap do
 
   defp sitemap_opts(opts, url) do
     opts
+    |> Map.put(:cookie_site, document_site(opts))
     |> Map.put(:url, url)
     |> Map.put(:sitemap_fetch, true)
+    |> Map.put(:cookie_navigation, false)
     |> Map.delete(:reference_tag)
   end
 
@@ -340,6 +342,7 @@ defmodule Crawler.Sitemap do
     opts
     |> shared_opts()
     |> Map.put(:html_tag, "a")
+    |> Map.put(:cookie_site, document_site(opts))
   end
 
   defp image_opts(opts) do
@@ -347,7 +350,11 @@ defmodule Crawler.Sitemap do
     |> shared_opts()
     |> Map.put(:html_tag, "img")
     |> Map.put(:reference_tag, "img")
+    |> Map.put(:cookie_site, document_site(opts))
   end
+
+  # Capture the page before :url becomes the sitemap or image address.
+  defp document_site(opts), do: opts[:cookie_site] || opts[:url]
 
   defp shared_opts(opts) do
     opts
@@ -358,6 +365,7 @@ defmodule Crawler.Sitemap do
       :before_publish,
       :content_type,
       :headers,
+      :cookie_navigation,
       :reference_tag,
       :referrer_url,
       :robots_fetch,

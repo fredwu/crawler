@@ -105,6 +105,7 @@ defmodule Crawler.Robots do
       opts
       |> Map.put(:url, origin <> "/robots.txt")
       |> Map.put(:robots_fetch, true)
+      |> Map.put(:cookie_navigation, false)
       |> Map.put(:respect_robots, false)
 
     case Requester.make(robots_opts) do

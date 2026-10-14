@@ -177,24 +177,24 @@ defmodule Crawler.Store.State do
     {waiters, state}
   end
 
-  def save_cookies(state, nil, _url, _headers, _generation), do: state
+  def save_cookies(state, nil, _url, _headers, _generation, _context), do: state
 
-  def save_cookies(state, scope, url, headers, generation) do
+  def save_cookies(state, scope, url, headers, generation, context) do
     if current?(state, scope, generation) do
-      jar = Cookies.store(Map.get(state.cookies, scope, []), url, headers)
+      jar = Cookies.store(Map.get(state.cookies, scope, []), url, headers, context)
       %{state | cookies: Map.put(state.cookies, scope, jar)}
     else
       state
     end
   end
 
-  def cookie_header(_state, nil, _url, _generation), do: nil
+  def cookie_header(_state, nil, _url, _generation, _context), do: nil
 
-  def cookie_header(state, scope, url, generation) do
+  def cookie_header(state, scope, url, generation, context) do
     if current?(state, scope, generation) do
       state.cookies
       |> Map.get(scope, [])
-      |> Cookies.header(url)
+      |> Cookies.header(url, context)
     end
   end
 

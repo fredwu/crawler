@@ -3,7 +3,8 @@ defmodule Crawler.HTTP do
   Project-owned HTTP boundary.
 
   Redirect logging defaults to disabled. Set `:redirect_log_level` explicitly
-  to enable it. A redirect rebuilds `Cookie` for the next URL. The same host
+  to enable it. A redirect rebuilds `Cookie` for the next URL and keeps the
+  document site and navigation kind from the first request. The same host
   keeps the caller's `Cookie`, `Authorization`, and other custom headers when
   the scheme or port changes. Another host does not receive them. Leaving the
   host also drops the stored caller cookie, so a later hop there does not
@@ -62,6 +63,8 @@ defmodule Crawler.HTTP do
     {max_body, opts} = Keyword.pop(opts, :crawler_max_body)
     {user_cookie, opts} = Keyword.pop(opts, :crawler_user_cookie)
     {generation, opts} = Keyword.pop(opts, :crawler_generation)
+    {cookie_site, opts} = Keyword.pop(opts, :crawler_cookie_site)
+    {cookie_navigation, opts} = Keyword.pop(opts, :crawler_cookie_navigation, true)
 
     opts
     |> Keyword.put_new(:redirect_log_level, false)
@@ -72,13 +75,17 @@ defmodule Crawler.HTTP do
       :crawler_scope,
       :crawler_max_body,
       :crawler_user_cookie,
-      :crawler_generation
+      :crawler_generation,
+      :crawler_cookie_site,
+      :crawler_cookie_navigation
     ])
     |> Req.Request.merge_options(
       crawler_scope: scope,
       crawler_max_body: max_body,
       crawler_user_cookie: user_cookie,
-      crawler_generation: generation
+      crawler_generation: generation,
+      crawler_cookie_site: cookie_site,
+      crawler_cookie_navigation: cookie_navigation
     )
     |> validate_redirect_option()
     |> Req.merge(headers: explicit_headers)
@@ -198,7 +205,13 @@ defmodule Crawler.HTTP do
     headers = Req.Response.get_header(response, "set-cookie")
 
     if scope && headers != [] do
-      Store.save_cookies(scope, URI.to_string(request.url), headers, generation)
+      Store.save_cookies(
+        scope,
+        URI.to_string(request.url),
+        headers,
+        generation,
+        cookie_context(request)
+      )
     end
 
     result
@@ -257,12 +270,19 @@ defmodule Crawler.HTTP do
   defp put_cookie(request, url) do
     scope = Req.Request.get_option(request, :crawler_scope)
     generation = Req.Request.get_option(request, :crawler_generation)
-    jar = scope && Store.cookie_header(scope, url, generation)
+    jar = scope && Store.cookie_header(scope, url, generation, cookie_context(request))
 
     case Cookies.merge_header(user_cookie(request, url), jar) do
       nil -> Req.Request.delete_header(request, "cookie")
       header -> Req.Request.put_header(request, "cookie", header)
     end
+  end
+
+  defp cookie_context(request) do
+    %{
+      site: Req.Request.get_option(request, :crawler_cookie_site),
+      navigation: Req.Request.get_option(request, :crawler_cookie_navigation, true)
+    }
   end
 
   defp user_cookie(request, url) do

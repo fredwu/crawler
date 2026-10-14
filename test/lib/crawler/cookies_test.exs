@@ -2,6 +2,7 @@ defmodule Crawler.CookiesTest do
   use ExUnit.Case, async: true
 
   alias Crawler.Cookies
+  alias Crawler.Cookies.PublicSuffix
 
   test "host-only cookies follow the request path and stay on that host" do
     jar =
@@ -378,6 +379,174 @@ defmodule Crawler.CookiesTest do
     assert [%{name: "__secure-id", secure?: false, host_only?: true}] = plain
     assert Cookies.header(plain, "http://example.com/account") == "__secure-id=1"
     assert Cookies.header(plain, "http://www.example.com/") == nil
+  end
+
+  test "the registrable domain is the public suffix plus one label" do
+    assert PublicSuffix.registrable_domain("example.com") == "example.com"
+    assert PublicSuffix.registrable_domain("www.example.com") == "example.com"
+    assert PublicSuffix.registrable_domain("WWW.Example.CO.UK.") == "example.co.uk"
+    assert PublicSuffix.registrable_domain("foo.a.github.io") == "a.github.io"
+    assert PublicSuffix.registrable_domain("b.github.io") == "b.github.io"
+    assert PublicSuffix.registrable_domain("github.io") == "github.io"
+    assert PublicSuffix.registrable_domain("www.ck") == "www.ck"
+    assert PublicSuffix.registrable_domain("other.ck") == "other.ck"
+    assert PublicSuffix.registrable_domain("shop.bar.foo.ck") == "bar.foo.ck"
+    assert PublicSuffix.registrable_domain("127.0.0.1") == "127.0.0.1"
+    assert PublicSuffix.registrable_domain("2001:db8::1") == "2001:db8::1"
+    assert PublicSuffix.registrable_domain("") == ""
+    assert PublicSuffix.registrable_domain(nil) == ""
+    assert PublicSuffix.registrable_domain("foo..com") == ""
+  end
+
+  test "no samesite or an unknown samesite is lax and is withheld from a cross-site subresource" do
+    jar =
+      Cookies.store([], "https://cdn.test/app.js", [
+        "plain=1; Path=/",
+        "odd=1; Path=/; SameSite=Invalid"
+      ])
+
+    cross = %{site: "http://example.com/start", navigation: false}
+    assert Cookies.header(jar, "https://cdn.test/next.js", cross) == nil
+
+    same = %{site: "https://www.cdn.test/page", navigation: false}
+    assert Cookies.header(jar, "https://cdn.test/next.js", same) == "plain=1; odd=1"
+
+    opened = %{site: "http://example.com/start", navigation: true}
+    assert Cookies.header(jar, "https://cdn.test/next.js", opened) == "plain=1; odd=1"
+  end
+
+  test "samesite none is stored only with secure on https and is sent across sites" do
+    jar =
+      Cookies.store([], "https://cdn.test/app.js", ["cdn=1; Path=/; Secure; SameSite=NONE"])
+
+    cross = %{site: "http://example.com/start", navigation: false}
+    assert Cookies.header(jar, "https://cdn.test/next.js", cross) == "cdn=1"
+    assert Cookies.header(jar, "http://cdn.test/next.js", cross) == nil
+
+    assert Cookies.store([], "https://cdn.test/app.js", ["cdn=1; Path=/; SameSite=None"]) == []
+
+    assert Cookies.store([], "http://cdn.test/app.js", ["cdn=1; Path=/; Secure; SameSite=None"]) ==
+             []
+  end
+
+  test "strict stays on the same site and lax can cross on a document navigation" do
+    jar =
+      Cookies.store([], "https://other.test/", [
+        "strict=1; SameSite=Strict; Path=/",
+        "lax=1; Path=/"
+      ])
+
+    navigation = %{site: "https://example.com/start", navigation: true}
+    assert Cookies.header(jar, "https://other.test/land", navigation) == "lax=1"
+
+    script = %{site: "https://example.com/start", navigation: false}
+    assert Cookies.header(jar, "https://other.test/app.js", script) == nil
+
+    same = %{site: "https://www.other.test/page", navigation: false}
+    assert Cookies.header(jar, "https://other.test/app.js", same) == "strict=1; lax=1"
+  end
+
+  test "a partitioned cookie belongs to the page site and does not replace an unpartitioned cookie" do
+    page = %{site: "https://example.com/start", navigation: false}
+    other = %{site: "https://other.test/page", navigation: false}
+    url = "https://cdn.test/app.js"
+
+    jar =
+      Cookies.store(nil, url, ["part=1; Path=/; Secure; SameSite=None; Partitioned"], page)
+
+    jar = Cookies.store(jar, url, ["part=2; Path=/; Secure; SameSite=None"], page)
+
+    jar =
+      Cookies.store(jar, url, ["part=3; Path=/; Secure; SameSite=None; Partitioned"], page)
+
+    assert Cookies.header(jar, "https://cdn.test/next.js", page) == "part=3; part=2"
+
+    assert Cookies.header(jar, "https://cdn.test/next.js", %{
+             site: "http://www.example.com:8443/side",
+             navigation: false
+           }) == "part=3; part=2"
+
+    assert Cookies.header(jar, "https://cdn.test/next.js", other) == "part=2"
+    assert Cookies.header(jar, "https://www.example.com/next.js", page) == nil
+
+    plain = Cookies.store([], url, ["cdn=1; Path=/; Secure; SameSite=None"], page)
+    assert Cookies.header(plain, "https://cdn.test/next.js", other) == "cdn=1"
+  end
+
+  test "matching cookies are sent longest path first and an update keeps its place" do
+    url = "https://example.com/account/x"
+
+    jar =
+      Cookies.store([], url, [
+        "id=1; Path=/",
+        "id=2; Path=/account",
+        "session=old; Path=/",
+        "theme=1; Path=/"
+      ])
+
+    assert Cookies.header(jar, url) == "id=2; id=1; session=old; theme=1"
+
+    updated = Cookies.store(jar, url, ["session=new; Path=/"])
+    assert Cookies.header(updated, url) == "id=2; id=1; session=new; theme=1"
+  end
+
+  test "lax cookies use the registrable domain and ignore scheme and port" do
+    jar =
+      Cookies.store([], "http://example.com/start", [
+        "shared=1; Domain=example.com; Path=/",
+        "local=1; Path=/"
+      ])
+
+    page = %{site: "http://example.com/start", navigation: false}
+    assert Cookies.header(jar, "https://cdn.example.com/app.js", page) == "shared=1"
+    assert Cookies.header(jar, "https://cdn.test/app.js", page) == nil
+    assert Cookies.header(jar, "https://example.com/secure.js", page) == "shared=1; local=1"
+    assert Cookies.header(jar, "http://example.com:8443/port.js", page) == "shared=1; local=1"
+
+    linked = %{site: "http://example.com/start", navigation: true}
+    assert Cookies.header(jar, "https://www.example.com/page", linked) == "shared=1"
+
+    pages = Cookies.store([], "https://a.github.io/", ["id=1; Domain=a.github.io; Path=/"])
+
+    assert Cookies.header(pages, "https://a.github.io/next.js", %{
+             site: "https://b.github.io/home",
+             navigation: false
+           }) == nil
+
+    assert Cookies.header(pages, "https://foo.a.github.io/next.js", %{
+             site: "https://a.github.io/home",
+             navigation: false
+           }) == "id=1"
+
+    assert Cookies.header(pages, "https://b.github.io/", %{
+             site: "https://a.github.io/",
+             navigation: true
+           }) == nil
+
+    suffix = Cookies.store([], "https://other.ck/", ["id=1; Path=/"])
+
+    assert Cookies.header(suffix, "https://other.ck/a", %{
+             site: "https://www.ck/",
+             navigation: false
+           }) == nil
+
+    assert Cookies.header(suffix, "https://other.ck/a", %{
+             site: "https://other.ck:8443/",
+             navigation: false
+           }) == "id=1"
+
+    nested =
+      Cookies.store([], "https://bar.foo.ck/", ["id=1; Domain=bar.foo.ck; Path=/"])
+
+    assert Cookies.header(nested, "https://shop.bar.foo.ck/a", %{
+             site: "https://bar.foo.ck/",
+             navigation: false
+           }) == "id=1"
+
+    assert Cookies.header(nested, "https://shop.bar.foo.ck/a", %{
+             site: "https://other.foo.ck/",
+             navigation: false
+           }) == nil
   end
 
   defp wait_until_expired([%{expires_at: %DateTime{} = deadline} | _]) do

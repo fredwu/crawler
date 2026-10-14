@@ -825,7 +825,7 @@ defmodule Crawler.CrawlHTTPTest do
            }
 
     assert hop(hits, "cdn.test", "/next.js") == %{
-             cookie: %{"cdn" => "1"},
+             cookie: %{},
              secret: nil,
              authorization: nil
            }
@@ -835,6 +835,335 @@ defmodule Crawler.CrawlHTTPTest do
              secret: nil,
              authorization: nil
            }
+  end
+
+  test "a cross-site document redirect sends lax cookies but not strict cookies" do
+    scope = unique_scope("samesite-redirect")
+
+    Store.save_cookies(scope, "https://other.test/", [
+      "strict=1; SameSite=Strict; Path=/",
+      "lax=1; Path=/"
+    ])
+
+    hits = hits()
+
+    adapter = fn request ->
+      record(hits, request)
+
+      cond do
+        request.url.host == "example.com" and request.url.path == "/start" ->
+          {request, redirect_to("https://other.test/land")}
+
+        request.url.host == "other.test" and request.url.path == "/land" ->
+          {request, typed("text/html", "land")}
+
+        true ->
+          {request, typed("text/plain", "unexpected")}
+      end
+    end
+
+    crawl("https://example.com/start", adapter_context(adapter),
+      scope: scope,
+      respect_robots: false,
+      url_filter: AllowAll
+    )
+
+    assert hop(hits, "other.test", "/land").cookie == %{"lax" => "1"}
+  end
+
+  test "a cross-site script redirect and frame do not send a lax cookie" do
+    scope = unique_scope("samesite-script")
+    hits = hits()
+
+    adapter = fn request ->
+      record(hits, request)
+
+      cond do
+        request.url.host == "example.com" and request.url.path == "/start" ->
+          {request, typed("text/html", cross_site_document())}
+
+        request.url.host == "cdn.test" and request.url.path == "/app.js" ->
+          {request, redirect("https://cdn.test/next.js", "cdn=1; Path=/")}
+
+        request.url.host == "cdn.test" and
+            request.url.path in ["/next.js", "/frame", "/object", "/embed"] ->
+          {request, typed("text/plain", "")}
+
+        true ->
+          {request, typed("text/plain", "unexpected")}
+      end
+    end
+
+    crawl("https://example.com/start", adapter_context(adapter),
+      assets: ["js"],
+      scope: scope,
+      respect_robots: false
+    )
+
+    assert Store.cookie_header(scope, "https://cdn.test/next.js") == "cdn=1"
+
+    for path <- ["/next.js", "/frame", "/object", "/embed"] do
+      assert hop(hits, "cdn.test", path).cookie == %{}
+    end
+  end
+
+  test "a partitioned cookie follows the page site rather than the host that set it" do
+    scope = unique_scope("partition")
+    hits = hits()
+
+    adapter = fn request ->
+      record(hits, request)
+
+      cond do
+        request.url.host == "example.com" and request.url.path == "/start" ->
+          {request, typed("text/html", partition_document())}
+
+        request.url.host == "cdn.test" and request.url.path == "/app.js" ->
+          {request, partition_script()}
+
+        request.url.host == "other.test" and request.url.path == "/page" ->
+          {request, typed("text/html", ~s|<script src="https://cdn.test/later.js"></script>|)}
+
+        request.url.host == "www.example.com" and request.url.path == "/side" ->
+          {request, typed("text/html", ~s|<script src="https://cdn.test/www.js"></script>|)}
+
+        request.url.host == "example.com" and request.url.port == 8443 ->
+          {request, typed("text/html", ~s|<script src="https://cdn.test/port.js"></script>|)}
+
+        request.url.host == "cdn.test" ->
+          {request, typed("text/javascript", "")}
+
+        true ->
+          {request, typed("text/plain", "unexpected")}
+      end
+    end
+
+    crawl("https://example.com/start", adapter_context(adapter),
+      assets: ["js"],
+      scope: scope,
+      respect_robots: false,
+      url_filter: AllowAll
+    )
+
+    assert Store.cookie_header(scope, "https://cdn.test/next.js") == "plain=1"
+
+    assert Store.cookie_header(scope, "https://cdn.test/next.js", nil, %{
+             site: "https://example.com/start",
+             navigation: false
+           }) == "part=1; plain=1"
+
+    assert hop(hits, "cdn.test", "/next.js").cookie == %{"part" => "1", "plain" => "1"}
+    assert hop(hits, "cdn.test", "/later.js").cookie == %{"plain" => "1"}
+    assert hop(hits, "cdn.test", "/www.js").cookie == %{"part" => "1", "plain" => "1"}
+    assert hop(hits, "cdn.test", "/port.js").cookie == %{"part" => "1", "plain" => "1"}
+  end
+
+  test "a lax cookie follows the registrable domain across host, scheme, and port" do
+    hits = hits()
+
+    adapter = fn request ->
+      record(hits, request)
+
+      cond do
+        request.url.host == "example.com" and request.url.path == "/start" ->
+          {request, same_site_page()}
+
+        request.url.host == "www.example.com" and request.url.path == "/page" ->
+          {request, typed("text/html", "www")}
+
+        true ->
+          {request, typed("text/javascript", "")}
+      end
+    end
+
+    crawl("http://example.com/start", adapter_context(adapter),
+      assets: ["js"],
+      respect_robots: false,
+      url_filter: AllowAll
+    )
+
+    assert hop(hits, "cdn.example.com", "/app.js").cookie == %{"shared" => "1"}
+    assert hop(hits, "cdn.test", "/app.js").cookie == %{}
+    assert hop(hits, "example.com", "/secure.js").cookie == %{"local" => "1", "shared" => "1"}
+    assert hop(hits, "example.com", "/port.js").cookie == %{"local" => "1", "shared" => "1"}
+    assert hop(hits, "www.example.com", "/page").cookie == %{"shared" => "1"}
+  end
+
+  test "robots and sitemap fetches are not document navigations" do
+    scope = unique_scope("cookie-fetch-kind")
+
+    Store.save_cookies(scope, "https://cdn.test/", ["cdn=1; Path=/"])
+
+    Store.save_cookies(scope, "https://other.test/", [
+      "strict=1; SameSite=Strict; Path=/",
+      "lax=1; Path=/"
+    ])
+
+    hits = hits()
+
+    adapter = fn request ->
+      record(hits, request)
+
+      cond do
+        request.url.host == "www.example.com" and request.url.path == "/robots.txt" ->
+          {request,
+           Req.Response.new(
+             status: 200,
+             body: "User-agent: *\nAllow: /\nSitemap: https://cdn.test/sitemap.xml\n"
+           )}
+
+        request.url.path == "/robots.txt" ->
+          {request, Req.Response.new(status: 404, body: "")}
+
+        request.url.host == "example.com" and request.url.path == "/start" ->
+          {request, typed("text/html", fetch_kind_document())}
+
+        request.url.host == "cdn.test" and request.url.path == "/sitemap.xml" ->
+          {request, Req.Response.new(status: 200, body: "ok")}
+
+        true ->
+          {request, typed("text/html", "land")}
+      end
+    end
+
+    crawl("https://example.com/start", adapter_context(adapter),
+      scope: scope,
+      url_filter: AllowAll
+    )
+
+    assert hop(hits, "other.test", "/robots.txt").cookie == %{}
+    assert hop(hits, "other.test", "/land").cookie == %{"lax" => "1"}
+    assert hop(hits, "cdn.test", "/sitemap.xml").cookie == %{}
+  end
+
+  test "a seed sitemap keeps the page as the cookie document" do
+    scope = unique_scope("seed-sitemap-cookies")
+
+    Store.save_cookies(scope, "https://cdn.test/", ["cdn=1; Path=/"])
+
+    hits = hits()
+
+    adapter = fn request ->
+      record(hits, request)
+
+      cond do
+        request.url.host == "example.com" and request.url.path == "/robots.txt" ->
+          {request,
+           Req.Response.new(
+             status: 200,
+             body: "User-agent: *\nAllow: /\nSitemap: https://cdn.test/sitemap.xml\n"
+           )}
+
+        request.url.host == "example.com" and request.url.path == "/start" ->
+          {request, typed("text/html", "start")}
+
+        request.url.host == "cdn.test" and request.url.path == "/sitemap.xml" ->
+          {request, sitemap_with_image()}
+
+        request.url.host == "cdn.test" and request.url.path == "/pic.png" ->
+          {request, typed("image/png", "img")}
+
+        request.url.path == "/robots.txt" ->
+          {request, Req.Response.new(status: 404, body: "")}
+
+        true ->
+          {request, typed("text/html", "land")}
+      end
+    end
+
+    crawl("https://example.com/start", adapter_context(adapter),
+      assets: ["images"],
+      scope: scope
+    )
+
+    assert hop(hits, "cdn.test", "/sitemap.xml").cookie == %{}
+    assert hop(hits, "cdn.test", "/pic.png").cookie == %{"part" => "1"}
+    assert hop(hits, "cdn.test", "/robots.txt").cookie == %{"part" => "1"}
+
+    assert Store.cookie_header(scope, "https://cdn.test/pic.png", nil, %{
+             site: "https://example.com/start",
+             navigation: false
+           }) == "part=1"
+
+    assert Store.cookie_header(scope, "https://cdn.test/pic.png", nil, %{
+             site: "https://other.test/page",
+             navigation: false
+           }) == nil
+  end
+
+  defp cross_site_document do
+    """
+    <script src="https://cdn.test/app.js"></script>
+    <iframe src="https://cdn.test/frame"></iframe>
+    <object data="https://cdn.test/object"></object>
+    <embed src="https://cdn.test/embed"></embed>
+    """
+  end
+
+  defp partition_document do
+    """
+    <script src="https://cdn.test/app.js"></script>
+    <script src="https://cdn.test/next.js"></script>
+    <a href="https://other.test/page">o</a>
+    <a href="https://www.example.com/side">w</a>
+    <a href="https://example.com:8443/port">p</a>
+    """
+  end
+
+  defp partition_script do
+    Req.Response.new(
+      status: 200,
+      headers: [
+        {"content-type", "text/javascript"},
+        {"set-cookie", "part=1; Path=/; Secure; SameSite=None; Partitioned"},
+        {"set-cookie", "plain=1; Path=/; Secure; SameSite=None"}
+      ],
+      body: ""
+    )
+  end
+
+  defp same_site_page do
+    Req.Response.new(
+      status: 200,
+      headers: [
+        {"content-type", "text/html"},
+        {"set-cookie", "shared=1; Domain=example.com; Path=/"},
+        {"set-cookie", "local=1; Path=/"}
+      ],
+      body: """
+      <script src="https://cdn.example.com/app.js"></script>
+      <script src="https://cdn.test/app.js"></script>
+      <script src="https://example.com/secure.js"></script>
+      <script src="http://example.com:8443/port.js"></script>
+      <a href="https://www.example.com/page">w</a>
+      """
+    )
+  end
+
+  defp sitemap_with_image do
+    Req.Response.new(
+      status: 200,
+      headers: [
+        {"content-type", "application/xml"},
+        {"set-cookie", "part=1; Path=/; Secure; SameSite=None; Partitioned"}
+      ],
+      body: """
+      <?xml version="1.0" encoding="UTF-8"?>
+      <urlset>
+        <url>
+          <loc>https://example.com/from-sitemap</loc>
+          <image:image><image:loc>https://cdn.test/pic.png</image:loc></image:image>
+        </url>
+      </urlset>
+      """
+    )
+  end
+
+  defp fetch_kind_document do
+    """
+    <a href="https://other.test/land">o</a>
+    <a href="https://www.example.com/next">w</a>
+    """
   end
 
   defp crawl(url, context, extra \\ []) do

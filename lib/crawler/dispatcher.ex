@@ -24,6 +24,7 @@ defmodule Crawler.Dispatcher do
         :alias_candidate,
         :headers,
         :content_type,
+        :cookie_navigation,
         :referrer_url,
         :robots_nofollow,
         :before_publish
