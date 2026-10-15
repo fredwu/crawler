@@ -14,6 +14,8 @@ defmodule Crawler.Parser do
   alias Crawler.Parser.HtmlParser
   alias Crawler.Parser.LinkParser
   alias Crawler.Parser.ScriptReferences
+  alias Crawler.Parser.SpeculationRules
+  alias Crawler.Parser.WebManifest
   alias Crawler.Robots
   alias Crawler.URL
 
@@ -122,11 +124,20 @@ defmodule Crawler.Parser do
   when the page cannot be parsed. This function does not call the scraper.
   """
   def parse_links(body, opts, link_handler) do
-    opts = put_base_href(body, put_robots_nofollow(body, opts))
+    cond do
+      opts[:fetch_kind] == :manifest ->
+        manifest_links(body, opts, link_handler)
 
-    opts
-    |> Guarder.pass?()
-    |> do_parse_links(body, opts, link_handler)
+      opts[:fetch_kind] == :speculation_rules ->
+        speculation_file_links(body, opts, link_handler)
+
+      true ->
+        opts = put_base_href(body, put_robots_nofollow(body, opts))
+
+        opts
+        |> Guarder.pass?()
+        |> do_parse_links(body, opts, link_handler)
+    end
   end
 
   @doc false
@@ -224,14 +235,82 @@ defmodule Crawler.Parser do
   end
 
   defp walk_document(elements, opts, link_handler) do
-    {results, _map} =
-      Enum.map_reduce(elements, ImportMap.empty(), fn element, map ->
-        opts = Map.put(opts, :import_map, map)
-        {LinkParser.parse(element, opts, link_handler), register_import_map(element, map, opts)}
+    {results, _state} =
+      Enum.map_reduce(elements, %{map: ImportMap.empty(), manifest: false}, fn element, state ->
+        opts = Map.put(opts, :import_map, state.map)
+        {result, manifest} = parse_document_element(element, opts, link_handler, state.manifest)
+
+        {result, %{map: register_import_map(element, state.map, opts), manifest: manifest}}
       end)
 
     results
   end
+
+  defp parse_document_element(element, opts, link_handler, manifest_seen) do
+    if manifest_candidate?(element) and manifest_seen do
+      {nil, true}
+    else
+      {LinkParser.parse(element, opts, link_handler),
+       manifest_seen or manifest_candidate?(element)}
+    end
+  end
+
+  defp manifest_candidate?(%{name: "link", namespace: :html, attributes: attrs}) do
+    match?(%{fetch_kind: :manifest}, HTMLReferences.link_choice(attrs))
+  end
+
+  defp manifest_candidate?(_element), do: false
+
+  defp manifest_links(body, opts, handler) do
+    body
+    |> WebManifest.entries(manifest_base(opts))
+    |> Enum.map(&emit_manifest(&1, opts, handler))
+  end
+
+  # referrer_url is the response. url remains the request that was redirected.
+  defp manifest_base(%{referrer_url: url}) when is_binary(url) and url != "", do: url
+  defp manifest_base(%{url: url}) when is_binary(url), do: url
+  defp manifest_base(_opts), do: ""
+
+  defp emit_manifest({:page, raw, url, start, length}, opts, handler) do
+    handler.(linked(raw, url), with_span(page_opts(opts), start, length))
+  end
+
+  defp emit_manifest({:image, raw, url, start, length}, opts, handler) do
+    if HTMLReferences.enabled?(opts, "images") do
+      handler.(linked(raw, url), with_span(child_opts(opts, "img", "img"), start, length))
+    end
+  end
+
+  defp speculation_file_links(body, opts, handler) do
+    body
+    |> SpeculationRules.entries(opts)
+    |> Enum.map(fn {raw, url, start, length} ->
+      handler.(linked(raw, url), with_span(page_opts(opts), start, length))
+    end)
+  end
+
+  defp linked(raw, url) when raw == url, do: {"href", url}
+  defp linked(raw, url), do: {"link", raw, "href", url}
+
+  defp child_opts(opts, html_tag, reference_tag) do
+    opts
+    |> Map.drop([:fetch_kind, :document_base, :json_span])
+    |> Map.put(:html_tag, html_tag)
+    |> Map.put(:reference_tag, reference_tag)
+  end
+
+  # Recorder has already counted this file. Its pages belong with the document's links.
+  defp page_opts(opts) do
+    opts = child_opts(opts, "a", "a")
+
+    case opts[:depth] do
+      depth when is_integer(depth) -> Map.put(opts, :depth, max(depth - 1, 0))
+      _depth -> opts
+    end
+  end
+
+  defp with_span(opts, start, length), do: Map.put(opts, :json_span, {start, length})
 
   defp register_import_map(
          %{name: "script", namespace: :html, in_shadow_root?: false} = tag,
@@ -260,10 +339,34 @@ defmodule Crawler.Parser do
 
   defp prepend_document_headers(elements, opts) do
     if html?(opts) do
-      DocumentHeaders.elements(opts[:headers]) ++ elements
+      header_elements(opts) ++ elements
     else
       elements
     end
+  end
+
+  defp header_elements(opts) do
+    links = Enum.map(DocumentHeaders.elements(opts[:headers]), &mark_header_element/1)
+    links ++ speculation_header_elements(opts)
+  end
+
+  defp mark_header_element({"link", attrs, children}) do
+    {"link", attrs ++ [{"crawler-from-header", "true"}], children}
+  end
+
+  defp mark_header_element(element), do: element
+
+  defp speculation_header_elements(opts) do
+    opts[:headers]
+    |> SpeculationRules.header_urls()
+    |> Enum.map(fn url ->
+      {"link",
+       [
+         {"href", url},
+         {"crawler-speculation-rules", "true"},
+         {"crawler-from-header", "true"}
+       ], []}
+    end)
   end
 
   defp parse_file(body, opts) do

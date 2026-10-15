@@ -15,6 +15,101 @@ defmodule Crawler.ImportMap.JSON do
 
   def decode(_input), do: :error
 
+  def decode_located(input) when is_binary(input) do
+    {input, shift} = strip_bom(input)
+    size = byte_size(input) + shift
+
+    case located_value(skip(input), size) do
+      {:ok, decoded, rest} ->
+        if skip(rest) == "", do: {:ok, decoded}, else: :error
+
+      :error ->
+        :error
+    end
+  end
+
+  def decode_located(_input), do: :error
+
+  # JSON objects keep the last duplicate key. The first key stays in place.
+  def collapse_pairs(pairs) do
+    values = Enum.reduce(pairs, %{}, fn {key, value}, acc -> Map.put(acc, key, value) end)
+
+    pairs
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.uniq()
+    |> Enum.map(fn key -> {key, Map.fetch!(values, key)} end)
+  end
+
+  defp strip_bom(<<"\uFEFF", rest::binary>>), do: {rest, 3}
+  defp strip_bom(input), do: {input, 0}
+
+  defp located_value(<<?", _rest::binary>> = input, size) do
+    start = size - byte_size(input)
+
+    case take_string(input) do
+      {:ok, value, rest} ->
+        {:ok, {:str, value, start, byte_size(input) - byte_size(rest)}, rest}
+
+      :error ->
+        :error
+    end
+  end
+
+  defp located_value(<<"{", rest::binary>>, size), do: located_object(skip(rest), size, [])
+  defp located_value(<<"[", rest::binary>>, size), do: located_array(skip(rest), size, [])
+  defp located_value(<<"null", rest::binary>>, _size), do: {:ok, nil, rest}
+  defp located_value(<<"true", rest::binary>>, _size), do: {:ok, true, rest}
+  defp located_value(<<"false", rest::binary>>, _size), do: {:ok, false, rest}
+
+  defp located_value(<<char, _rest::binary>> = input, _size) when char in ~c"-0123456789" do
+    number(input)
+  end
+
+  defp located_value(_input, _size), do: :error
+
+  defp located_object(<<"}", rest::binary>>, _size, []), do: {:ok, {:object, []}, rest}
+
+  defp located_object(input, size, acc) do
+    with {:ok, key, rest} <- key(input),
+         {:ok, rest} <- colon(skip(rest)),
+         {:ok, decoded, rest} <- located_value(skip(rest), size) do
+      case skip(rest) do
+        <<",", rest::binary>> ->
+          located_object(skip(rest), size, [{key, decoded} | acc])
+
+        <<"}", rest::binary>> ->
+          pairs = [{key, decoded} | acc] |> Enum.reverse() |> collapse_pairs()
+          {:ok, {:object, pairs}, rest}
+
+        _rest ->
+          :error
+      end
+    else
+      _other -> :error
+    end
+  end
+
+  defp located_array(<<"]", rest::binary>>, _size, []), do: {:ok, [], rest}
+
+  defp located_array(input, size, acc) do
+    with {:ok, decoded, rest} <- located_value(input, size) do
+      case skip(rest) do
+        <<",", rest::binary>> -> located_array(skip(rest), size, [decoded | acc])
+        <<"]", rest::binary>> -> {:ok, Enum.reverse([decoded | acc]), rest}
+        _rest -> :error
+      end
+    else
+      _other -> :error
+    end
+  end
+
+  defp take_string(<<?", rest::binary>>) do
+    case string(rest, []) do
+      {:ok, value, rest} -> {:ok, value, rest}
+      :error -> :error
+    end
+  end
+
   defp value(<<"null", rest::binary>>), do: {:ok, nil, rest}
   defp value(<<"true", rest::binary>>), do: {:ok, true, rest}
   defp value(<<"false", rest::binary>>), do: {:ok, false, rest}

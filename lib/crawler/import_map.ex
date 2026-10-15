@@ -249,14 +249,7 @@ defmodule Crawler.ImportMap do
     do: Enum.sort_by(scopes, fn {prefix, _imports} -> -byte_size(prefix) end)
 
   # JSON objects keep the last duplicate key. Later normalization keeps the first address.
-  defp collapse(pairs) do
-    values = Enum.reduce(pairs, %{}, fn {key, value}, acc -> Map.put(acc, key, value) end)
-
-    pairs
-    |> Enum.map(&elem(&1, 0))
-    |> Enum.uniq()
-    |> Enum.map(fn key -> {key, Map.fetch!(values, key)} end)
-  end
+  defp collapse(pairs), do: JSON.collapse_pairs(pairs)
 
   defp url_like?(specifier) do
     String.starts_with?(specifier, "/") or String.starts_with?(specifier, "./") or

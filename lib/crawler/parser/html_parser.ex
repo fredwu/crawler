@@ -68,6 +68,10 @@ defmodule Crawler.Parser.HtmlParser do
   defp text_source?(tag, opts) do
     tag.namespace in [:html, :svg] and
       cond do
+        tag.name == "script" and tag.namespace == :html and
+            HTMLReferences.speculation_rules?(tag.attributes) ->
+          true
+
         tag.name == "script" ->
           HTMLReferences.enabled?(opts, "js")
 

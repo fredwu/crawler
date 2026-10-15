@@ -76,6 +76,9 @@ defmodule Crawler.Snapper.LinkReplacer.RawText do
           HTMLReferences.css_style_element?(attrs) ->
         style_source(tag)
 
+      speculation_inline?(tag, attrs) ->
+        speculation_source(base)
+
       tag.name == "script" and tag.namespace == :svg and HTMLReferences.enabled?(opts, "js") and
           HTMLReferences.svg_script_source(attrs) == :inline ->
         inline_script_options(attrs, map, base)
@@ -91,6 +94,23 @@ defmodule Crawler.Snapper.LinkReplacer.RawText do
 
   defp style_source(%{namespace: :svg}), do: %{content_type: "text/css", svg_style: true}
   defp style_source(_tag), do: %{content_type: "text/css"}
+
+  defp speculation_inline?(tag, attrs) do
+    tag.name == "script" and tag.namespace == :html and
+      HTMLReferences.speculation_rules?(attrs) and
+      is_nil(HTMLReferences.attribute(attrs, "src"))
+  end
+
+  defp speculation_source(base) do
+    put_referrer(
+      %{
+        content_type: "application/speculationrules+json",
+        fetch_kind: :speculation_rules,
+        document_base: base
+      },
+      base
+    )
+  end
 
   defp inline_script_options(attrs, map, base) do
     put_referrer(

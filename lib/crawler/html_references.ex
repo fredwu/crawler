@@ -66,6 +66,25 @@ defmodule Crawler.HTMLReferences do
     end
   end
 
+  def speculation_rules?(attrs) do
+    case attribute(attrs, "type") do
+      type when is_binary(type) ->
+        trimmed = Regex.replace(~r/^[\t\n\f\r ]+|[\t\n\f\r ]+$/, type, "")
+        String.downcase(trimmed, :ascii) == "speculationrules"
+
+      _type ->
+        false
+    end
+  end
+
+  def link_choice(attrs) do
+    if attribute(attrs, "crawler-speculation-rules") != nil do
+      choice("link", "link", :speculation_rules, false, :always)
+    else
+      classify(considered_rels(attrs), normalized(attrs, "as"))
+    end
+  end
+
   def executable_script?(attrs) do
     type = attrs |> script_type() |> String.downcase(:ascii)
 
@@ -177,11 +196,25 @@ defmodule Crawler.HTMLReferences do
   end
 
   defp element_attributes("script", attrs, opts, :html) do
-    if enabled?(opts, "js") and script_source(attrs) == :external, do: ["src"], else: []
+    cond do
+      speculation_rules?(attrs) and attribute(attrs, "src") != nil ->
+        ["src"]
+
+      enabled?(opts, "js") and script_source(attrs) == :external ->
+        ["src"]
+
+      true ->
+        []
+    end
   end
 
   defp element_attributes("link", attrs, opts, :html) do
-    href = if document_links?(opts) or link_enabled?(attrs, opts), do: ["href"], else: []
+    href =
+      cond do
+        document_links?(opts) -> ["href"]
+        link_enabled?(attrs, opts) and not blocked_navigation?(attrs, opts) -> ["href"]
+        true -> []
+      end
 
     images =
       if image_preload?(attrs), do: channel_attributes(opts, "images", ["imagesrcset"]), else: []
@@ -216,49 +249,107 @@ defmodule Crawler.HTMLReferences do
     do: MediaType.css?(opts[:content_type]) or MediaType.javascript?(opts[:content_type])
 
   defp link_enabled?(attrs, opts) do
-    rel = rel_tokens(attrs)
-    as = normalized(attrs, "as")
-
-    cond do
-      "modulepreload" in rel ->
-        enabled?(opts, "js")
-
-      "stylesheet" in rel ->
-        enabled?(opts, "css") and acceptable_style_type?(attrs)
-
-      "preload" in rel and as == "style" ->
-        enabled?(opts, "css") and acceptable_style_type?(attrs)
-
-      "preload" in rel and as == "font" ->
-        enabled?(opts, "css")
-
-      "preload" in rel and as == "script" ->
-        enabled?(opts, "js")
-
-      "preload" in rel and as == "image" ->
-        enabled?(opts, "images")
-
-      icon_rel?(rel) ->
-        enabled?(opts, "images")
-
-      true ->
-        false
+    case link_choice(attrs) do
+      :skip -> false
+      %{channel: channel} -> channel_open?(channel, attrs, opts)
     end
   end
 
   defp link_role(attrs) do
-    rel = rel_tokens(attrs)
-    as = normalized(attrs, "as")
-
-    cond do
-      "modulepreload" in rel -> "script"
-      "preload" in rel and as == "script" -> "script"
-      "preload" in rel and as == "font" -> "font"
-      "preload" in rel and as == "image" -> "img"
-      icon_rel?(rel) -> "img"
-      true -> "link"
+    case link_choice(attrs) do
+      %{html_tag: tag} -> tag
+      :skip -> "link"
     end
   end
+
+  defp classify(rels, as) do
+    cond do
+      "modulepreload" in rels ->
+        choice("script", "link", nil, false, {:asset, "js"})
+
+      "stylesheet" in rels ->
+        choice("link", "link", nil, false, {:style, "css"})
+
+      "preload" in rels and as == "style" ->
+        choice("link", "link", nil, false, {:style, "css"})
+
+      "preload" in rels and as == "font" ->
+        choice("font", "link", nil, false, {:asset, "css"})
+
+      "preload" in rels and as == "script" ->
+        choice("script", "link", nil, false, {:asset, "js"})
+
+      "preload" in rels and as == "image" ->
+        choice("img", "link", nil, false, {:asset, "images"})
+
+      # "link" is a parsable document tag. A fetch preload is only the response bytes.
+      "preload" in rels and as == "fetch" ->
+        choice("fetch", "link", nil, false, :any)
+
+      "preload" in rels and as == "track" ->
+        choice("track", "link", nil, false, {:track, "images"})
+
+      icon_rel?(rels) ->
+        choice("img", "link", nil, false, {:asset, "images"})
+
+      "manifest" in rels ->
+        choice("link", "link", :manifest, false, :always)
+
+      "prefetch" in rels or "prerender" in rels ->
+        choice("a", "a", nil, false, :always)
+
+      "next" in rels or "prev" in rels or "previous" in rels ->
+        choice("a", "a", nil, true, :always)
+
+      true ->
+        :skip
+    end
+  end
+
+  defp choice(html_tag, reference_tag, fetch_kind, nofollow, channel) do
+    %{
+      html_tag: html_tag,
+      reference_tag: reference_tag,
+      fetch_kind: fetch_kind,
+      nofollow: nofollow,
+      channel: channel
+    }
+  end
+
+  defp considered_rels(attrs) do
+    rels = rel_tokens(attrs)
+    rels = if disabled?(attrs), do: Enum.reject(rels, &(&1 == "stylesheet")), else: rels
+
+    if from_header?(attrs),
+      do: Enum.reject(rels, &(&1 in ["prefetch", "prerender", "manifest"])),
+      else: rels
+  end
+
+  defp channel_open?(:always, _attrs, _opts), do: true
+
+  defp channel_open?(:any, _attrs, opts) do
+    enabled?(opts, "css") or enabled?(opts, "js") or enabled?(opts, "images")
+  end
+
+  defp channel_open?({:asset, channel}, _attrs, opts), do: enabled?(opts, channel)
+
+  defp channel_open?({:style, channel}, attrs, opts) do
+    enabled?(opts, channel) and acceptable_style_type?(attrs)
+  end
+
+  defp channel_open?({:track, channel}, attrs, opts) do
+    enabled?(opts, channel) and acceptable_track_type?(attrs)
+  end
+
+  defp blocked_navigation?(attrs, opts) do
+    case link_choice(attrs) do
+      %{nofollow: true} -> skip_link?(attrs, opts)
+      _choice -> false
+    end
+  end
+
+  defp disabled?(attrs), do: attribute(attrs, "disabled") != nil
+  defp from_header?(attrs), do: attribute(attrs, "crawler-from-header") != nil
 
   defp icon_rel?(rel), do: Enum.any?(rel, &(&1 in ["icon", "apple-touch-icon", "mask-icon"]))
 
@@ -275,6 +366,14 @@ defmodule Crawler.HTMLReferences do
     case attribute(attrs, "type") do
       nil -> true
       type -> MediaType.css?(type)
+    end
+  end
+
+  defp acceptable_track_type?(attrs) do
+    case attribute(attrs, "type") do
+      nil -> true
+      "" -> true
+      type -> type |> String.downcase(:ascii) |> ascii_essence() == "text/vtt"
     end
   end
 

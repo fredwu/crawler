@@ -2,6 +2,7 @@
 
 ## master
 
+- [Fixed] Follow prefetch, prerender, next, prev, manifest, preload fetch and track, and speculation rules, and save those files. A disabled stylesheet stays as written. Nofollow still skips next and prev, not these subresources.
 - [Fixed] Follow import maps, `new URL(..., import.meta.url)`, workers, and `importScripts`, and save those same files. A later map can add a name but cannot replace one. Classic scripts fetch `import()` only. Workers do not use the page import map.
 - [Fixed] Send cookies with SameSite and partition rules for the page that caused the request. The default is Lax. SameSite=None is stored only when the cookie is Secure and the response is https. A document navigation to another site sends Lax and not Strict. A script, image, stylesheet, font, frame, object, or embed on another site does not. A partitioned cookie follows that page's registrable domain. Longer paths are sent first, and replacing a cookie keeps its earlier place.
 - [Fixed] Crawl pages named by a robots sitemap, including prefixed XML, text lists, RSS and Atom feeds, and language versions. Image and video files are fetched when image assets are collected. A sitemap index keeps going while page budget remains, without counting a finished page twice or reserving a disallowed or repeated URL. A failed sitemap is retried, and a UTF-16 sitemap is read.

@@ -13,8 +13,10 @@ defmodule Crawler.Snapper.LinkReplacer do
   alias Crawler.Parser
   alias Crawler.Parser.Guarder
   alias Crawler.Parser.ScriptReferences
+  alias Crawler.Parser.SpeculationRules
   alias Crawler.Snapper.LinkReplacer.Css
   alias Crawler.Snapper.LinkReplacer.Html
+  alias Crawler.Snapper.LinkReplacer.Json
   alias Crawler.Snapper.LinkReplacer.RawText
   alias Crawler.Snapper.LinkReplacer.Tokens
   alias Crawler.URL
@@ -74,10 +76,15 @@ defmodule Crawler.Snapper.LinkReplacer do
       {:ok, "<a href='../../../main.domain/dir/page2.html'></a>"}
   """
   def replace_links(body, opts) do
-    if MediaType.javascript?(opts[:content_type]) do
-      {:ok, javascript_body(body, opts)}
-    else
-      {:ok, html_body(body, opts)}
+    cond do
+      opts[:fetch_kind] in [:manifest, :speculation_rules] ->
+        {:ok, Json.replace_spans(body, located_replacements(body, opts))}
+
+      MediaType.javascript?(opts[:content_type]) ->
+        {:ok, javascript_body(body, opts)}
+
+      true ->
+        {:ok, html_body(body, opts)}
     end
   end
 
@@ -89,16 +96,29 @@ defmodule Crawler.Snapper.LinkReplacer do
     body
     |> rewrite_srcdocs(opts)
     |> rewrite_body(document_links, opts)
-    |> Html.drop_base(opts)
+    |> drop_parsed_base(opts)
     |> RawText.restore(saved, fn source, source_opts ->
       rewrite_opts = opts |> Map.delete(:javascript_goal) |> Map.merge(source_opts)
 
-      if MediaType.javascript?(source_opts[:content_type]) do
-        javascript_body(source, rewrite_opts)
-      else
-        rewrite_body(source, source_links(raw_links, source_opts), rewrite_opts)
+      cond do
+        # An unparsed response keeps the original script bytes.
+        source_opts[:fetch_kind] == :speculation_rules and Guarder.pass?(opts) ->
+          rewrite_inline_rules(source, opts, source_opts)
+
+        MediaType.javascript?(source_opts[:content_type]) ->
+          javascript_body(source, rewrite_opts)
+
+        true ->
+          rewrite_body(source, source_links(raw_links, source_opts), rewrite_opts)
       end
     end)
+  end
+
+  # A parsed page drops base because its addresses now point at saved files.
+  # An unparsed response keeps base so the addresses that were left unchanged
+  # still resolve against the document.
+  defp drop_parsed_base(body, opts) do
+    if Guarder.pass?(opts), do: Html.drop_base(body, opts), else: body
   end
 
   defp javascript_body(body, opts) do
@@ -163,6 +183,8 @@ defmodule Crawler.Snapper.LinkReplacer do
     |> Map.delete(:import_map)
     |> Map.delete(:document_base)
     |> Map.delete(:worker_base)
+    |> Map.delete(:fetch_kind)
+    |> Map.delete(:json_span)
   end
 
   defp srcdoc_edit(
@@ -220,6 +242,41 @@ defmodule Crawler.Snapper.LinkReplacer do
     body
     |> Html.drop_rewritten_integrity(tokens, opts)
     |> String.replace(tokens, &Map.fetch!(replacements, &1))
+  end
+
+  defp located_replacements(body, opts) do
+    body
+    |> Parser.parse_links(opts, &located_link/2)
+    |> List.flatten()
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp located_link(link, link_opts) do
+    case link_opts[:json_span] do
+      {start, length} ->
+        {raw, resolved} = get_link(link, link_opts)
+        offline = Linker.offline_link(link_opts[:url], with_fragment(resolved, raw))
+        {start, length, offline}
+
+      _span ->
+        nil
+    end
+  end
+
+  # Inline rules belong to the document. A ruleset base applies only to a rules file.
+  defp rewrite_inline_rules(source, page_opts, source_opts) do
+    rules_opts = %{
+      url: page_opts[:url],
+      referrer_url: source_opts[:referrer_url] || source_opts[:document_base],
+      document_base: source_opts[:document_base]
+    }
+
+    spans =
+      Enum.map(SpeculationRules.entries(source, rules_opts), fn {raw, resolved, start, length} ->
+        {start, length, Linker.offline_link(page_opts[:url], with_fragment(resolved, raw))}
+      end)
+
+    Json.replace_spans(source, spans)
   end
 
   defp get_link({_, url}, _opts), do: {url, url}

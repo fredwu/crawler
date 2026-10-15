@@ -27,7 +27,8 @@ defmodule Crawler.Dispatcher do
         :cookie_navigation,
         :referrer_url,
         :robots_nofollow,
-        :before_publish
+        :before_publish,
+        :json_span
       ])
 
     case request do

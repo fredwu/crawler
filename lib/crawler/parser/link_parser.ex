@@ -9,6 +9,7 @@ defmodule Crawler.Parser.LinkParser do
   alias Crawler.Parser.CssParser
   alias Crawler.Parser.LinkParser.LinkExpander
   alias Crawler.Parser.ScriptReferences
+  alias Crawler.Parser.SpeculationRules
   alias Crawler.Parser.Srcset
 
   @doc """
@@ -53,16 +54,18 @@ defmodule Crawler.Parser.LinkParser do
     results =
       plain
       |> Enum.map(fn {attr, link} ->
-        {role, reference_tag} = reference_identity(tag, attr, attrs, namespace)
+        {role, reference_tag, fetch_kind} = reference_identity(tag, attr, attrs, namespace)
         goal = reference_goal(tag, attr, link, attrs, opts, namespace)
-        {role, reference_tag, goal, LinkExpander.expand({attr_name(attr), link}, opts)}
+        goal = if fetch_kind, do: nil, else: goal
+        expanded = LinkExpander.expand({attr_name(attr), link}, opts)
+        {role, reference_tag, goal, fetch_kind, expanded}
       end)
-      |> Enum.reject(&match?({_role, _reference_tag, _goal, nil}, &1))
-      |> Enum.uniq_by(fn {role, reference_tag, goal, element} ->
-        {role, reference_tag, goal, raw_link(element)}
+      |> Enum.reject(&match?({_role, _reference_tag, _goal, _fetch_kind, nil}, &1))
+      |> Enum.uniq_by(fn {role, reference_tag, goal, fetch_kind, element} ->
+        {role, reference_tag, goal, fetch_kind, raw_link(element)}
       end)
-      |> Enum.map(fn {role, reference_tag, goal, element} ->
-        handler.(element, handler_opts(opts, role, goal, reference_tag))
+      |> Enum.map(fn {role, reference_tag, goal, fetch_kind, element} ->
+        handler.(element, handler_opts(opts, role, goal, reference_tag, fetch_kind))
       end)
 
     results = results ++ Enum.map(refs, fn {:ref, ref} -> ref_result(ref, opts, handler) end)
@@ -116,10 +119,19 @@ defmodule Crawler.Parser.LinkParser do
   end
 
   defp source_links("script", attrs, children, opts, :html) do
-    if HTMLReferences.enabled?(opts, "js") and HTMLReferences.script_source(attrs) == :inline do
-      inline_script_links(attrs, children, opts)
-    else
-      []
+    cond do
+      HTMLReferences.speculation_rules?(attrs) ->
+        if HTMLReferences.attribute(attrs, "src") == nil do
+          speculation_links(children, opts)
+        else
+          []
+        end
+
+      HTMLReferences.enabled?(opts, "js") and HTMLReferences.script_source(attrs) == :inline ->
+        inline_script_links(attrs, children, opts)
+
+      true ->
+        []
     end
   end
 
@@ -147,6 +159,8 @@ defmodule Crawler.Parser.LinkParser do
           |> Map.delete(:import_map)
           |> Map.delete(:document_base)
           |> Map.delete(:worker_base)
+          |> Map.delete(:fetch_kind)
+          |> Map.delete(:json_span)
           |> Map.put(:content_type, "text/html")
           |> Map.put(:html_tag, "a")
 
@@ -166,6 +180,26 @@ defmodule Crawler.Parser.LinkParser do
     |> raw_text()
     |> ScriptReferences.list(opts)
     |> Enum.map(&{:ref, &1})
+  end
+
+  defp speculation_links(children, opts) do
+    children
+    |> raw_text()
+    |> SpeculationRules.entries(opts)
+    |> Enum.map(fn {raw, url, _start, _length} -> {:ref, page_ref(raw, url)} end)
+  end
+
+  defp page_ref(raw, url) do
+    %{
+      spec: raw,
+      url: url,
+      goal: nil,
+      html_tag: "a",
+      reference_tag: "a",
+      import_map: nil,
+      document_base: nil,
+      worker_base: nil
+    }
   end
 
   defp attribute_links(_name, nil), do: []
@@ -227,12 +261,30 @@ defmodule Crawler.Parser.LinkParser do
   end
 
   defp reference_identity(_tag, attr, _attrs, :math) when attr in ["href", "xlink:href"],
-    do: {"a", "a"}
+    do: {"a", "a", nil}
+
+  defp reference_identity("link", "href", attrs, :html) do
+    case HTMLReferences.link_choice(attrs) do
+      %{html_tag: html_tag, reference_tag: reference_tag, fetch_kind: fetch_kind} ->
+        {html_tag, reference_tag, fetch_kind}
+
+      :skip ->
+        {"link", "link", nil}
+    end
+  end
+
+  defp reference_identity("script", "src", attrs, :html) do
+    if HTMLReferences.speculation_rules?(attrs) do
+      {"link", "link", :speculation_rules}
+    else
+      {"script", "script", nil}
+    end
+  end
 
   defp reference_identity(tag, attr, attrs, _namespace),
-    do: {HTMLReferences.role(tag, attr, attrs), tag}
+    do: {HTMLReferences.role(tag, attr, attrs), tag, nil}
 
-  defp handler_opts(opts, role, goal, tag) do
+  defp handler_opts(opts, role, goal, tag, fetch_kind) do
     carried = if role == "script" or tag == "script", do: script_context(opts), else: %{}
 
     opts
@@ -240,8 +292,16 @@ defmodule Crawler.Parser.LinkParser do
     |> Map.put(:html_tag, role)
     |> Map.put(:reference_tag, tag)
     |> put_opt(:javascript_goal, goal)
+    |> put_opt(:fetch_kind, fetch_kind)
+    |> put_opt(:document_base, rules_document_base(fetch_kind, opts))
     |> Map.merge(carried)
   end
+
+  defp rules_document_base(:speculation_rules, opts) do
+    opts[:document_base] || opts[:referrer_url] || opts[:url]
+  end
+
+  defp rules_document_base(_fetch_kind, _opts), do: nil
 
   defp ref_result(%{url: url} = ref, opts, handler) when is_binary(url) do
     handler.(ref_element(ref), ref_opts(opts, ref))
@@ -276,7 +336,9 @@ defmodule Crawler.Parser.LinkParser do
       :import_map,
       :document_base,
       :worker_base,
-      :link_html_tag
+      :link_html_tag,
+      :fetch_kind,
+      :json_span
     ])
   end
 
