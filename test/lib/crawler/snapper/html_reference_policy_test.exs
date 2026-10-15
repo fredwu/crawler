@@ -123,6 +123,7 @@ defmodule Crawler.Snapper.HTMLReferencePolicyTest do
 
   test "script type and language precedence also select saved source rewrites" do
     ignored = ~s|import './shared.js';|
+    classic = ~s|import('./shared.js');|
 
     source =
       ~s|<a href="shared.js">A</a>| <>
@@ -131,9 +132,9 @@ defmodule Crawler.Snapper.HTMLReferencePolicyTest do
         ~s|<script type="&#160;module&#160;" src="shared.js" integrity="keep">#{ignored}</script>| <>
         ~s|<script type="&#160;text/javascript&#160;">#{ignored}</script>| <>
         ~s|<script language="JavaScript" src="shared.js" integrity="remove"></script>| <>
-        ~s|<script language="JavaScript">#{ignored}</script>| <>
+        ~s|<script language="JavaScript">#{classic}</script>| <>
         ~s|<script type="" language="json" src="shared.js" integrity="remove"></script>| <>
-        ~s|<script type="" language="json">#{ignored}</script>|
+        ~s|<script type="" language="json">#{classic}</script>|
 
     target = offline("shared.js")
 
@@ -144,9 +145,9 @@ defmodule Crawler.Snapper.HTMLReferencePolicyTest do
         ~s|<script type="&#160;module&#160;" src="shared.js" integrity="keep">#{ignored}</script>| <>
         ~s|<script type="&#160;text/javascript&#160;">#{ignored}</script>| <>
         ~s|<script language="JavaScript" src="#{target}"></script>| <>
-        ~s|<script language="JavaScript">import '#{target}';</script>| <>
+        ~s|<script language="JavaScript">import('#{target}');</script>| <>
         ~s|<script type="" language="json" src="#{target}"></script>| <>
-        ~s|<script type="" language="json">import '#{target}';</script>|
+        ~s|<script type="" language="json">import('#{target}');</script>|
 
     assert rewrite(source, ["js"]) == expected
   end

@@ -12,9 +12,9 @@ defmodule Crawler.Snapper.LinkReplacer do
   alias Crawler.MediaType
   alias Crawler.Parser
   alias Crawler.Parser.Guarder
+  alias Crawler.Parser.ScriptReferences
   alias Crawler.Snapper.LinkReplacer.Css
   alias Crawler.Snapper.LinkReplacer.Html
-  alias Crawler.Snapper.LinkReplacer.Javascript
   alias Crawler.Snapper.LinkReplacer.RawText
   alias Crawler.Snapper.LinkReplacer.Tokens
   alias Crawler.URL
@@ -74,21 +74,35 @@ defmodule Crawler.Snapper.LinkReplacer do
       {:ok, "<a href='../../../main.domain/dir/page2.html'></a>"}
   """
   def replace_links(body, opts) do
+    if MediaType.javascript?(opts[:content_type]) do
+      {:ok, javascript_body(body, opts)}
+    else
+      {:ok, html_body(body, opts)}
+    end
+  end
+
+  defp html_body(body, opts) do
     raw_links = links(body, opts)
     {body, saved} = RawText.protect(body, opts)
     document_links = if saved == [], do: raw_links, else: links(body, opts)
 
-    new_body =
-      body
-      |> rewrite_srcdocs(opts)
-      |> rewrite_body(document_links, opts)
-      |> Html.drop_base(opts)
-      |> RawText.restore(saved, fn source, source_opts ->
-        rewrite_opts = opts |> Map.delete(:javascript_goal) |> Map.merge(source_opts)
-        rewrite_body(source, source_links(raw_links, source_opts), rewrite_opts)
-      end)
+    body
+    |> rewrite_srcdocs(opts)
+    |> rewrite_body(document_links, opts)
+    |> Html.drop_base(opts)
+    |> RawText.restore(saved, fn source, source_opts ->
+      rewrite_opts = opts |> Map.delete(:javascript_goal) |> Map.merge(source_opts)
 
-    {:ok, new_body}
+      if MediaType.javascript?(source_opts[:content_type]) do
+        javascript_body(source, rewrite_opts)
+      else
+        rewrite_body(source, source_links(raw_links, source_opts), rewrite_opts)
+      end
+    end)
+  end
+
+  defp javascript_body(body, opts) do
+    if Guarder.pass?(opts), do: ScriptReferences.rewrite(body, opts), else: body
   end
 
   defp links(body, opts) do
@@ -146,6 +160,9 @@ defmodule Crawler.Snapper.LinkReplacer do
     |> Map.delete(:robots_nofollow)
     |> Map.delete(:headers)
     |> Map.delete(:javascript_goal)
+    |> Map.delete(:import_map)
+    |> Map.delete(:document_base)
+    |> Map.delete(:worker_base)
   end
 
   defp srcdoc_edit(
@@ -214,9 +231,6 @@ defmodule Crawler.Snapper.LinkReplacer do
     cond do
       MediaType.css?(opts[:content_type]) ->
         Css.replace(body, raw, offline, entity_quotes: false)
-
-      MediaType.javascript?(opts[:content_type]) ->
-        Javascript.replace(body, raw, offline, Map.get(opts, :javascript_goal, :module))
 
       true ->
         Html.replace(body, raw, offline, opts)

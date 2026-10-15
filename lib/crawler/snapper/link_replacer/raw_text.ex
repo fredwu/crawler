@@ -3,21 +3,26 @@ defmodule Crawler.Snapper.LinkReplacer.RawText do
 
   alias Crawler.HTMLReferences
   alias Crawler.HTMLSpans
+  alias Crawler.ImportMap
   alias Crawler.MediaType
+  alias Crawler.Parser
   alias Crawler.Snapper.LinkReplacer.Tokens
 
   def protect(body, opts) do
     if MediaType.css?(opts[:content_type]) or MediaType.javascript?(opts[:content_type]) do
       {body, []}
     else
+      document = Parser.with_document_base(body, opts)
+      base = document[:referrer_url] || document[:url]
+      tags = body |> HTMLSpans.tags() |> Enum.filter(& &1.content_span)
+      maps = maps_before(tags, body, opts, base)
       prefix = Tokens.prefix([body], "R")
 
-      body
-      |> HTMLSpans.tags()
-      |> Enum.filter(& &1.content_span)
+      tags
+      |> Enum.zip(maps)
       |> Enum.reverse()
       |> Enum.with_index()
-      |> Enum.reduce({body, []}, &protect_region(&1, &2, opts, prefix))
+      |> Enum.reduce({body, []}, &protect_region(&1, &2, opts, prefix, base))
     end
   end
 
@@ -28,10 +33,10 @@ defmodule Crawler.Snapper.LinkReplacer.RawText do
     end)
   end
 
-  defp protect_region({tag, index}, {body, saved}, opts, prefix) do
+  defp protect_region({{tag, map}, index}, {body, saved}, opts, prefix, base) do
     {start, length} = tag.content_span
     source = binary_part(body, start, length)
-    source_opts = source_options(tag, opts)
+    source_opts = source_options(tag, opts, map, base)
     token = Tokens.at(prefix, index)
     head = binary_part(body, 0, start)
     tail = binary_part(body, start + length, byte_size(body) - start - length)
@@ -39,10 +44,32 @@ defmodule Crawler.Snapper.LinkReplacer.RawText do
     {head <> token <> tail, [{token, source, source_opts} | saved]}
   end
 
-  defp source_options(%{in_template?: true}, _opts), do: nil
+  defp maps_before(tags, body, opts, base) do
+    {maps, _map} =
+      Enum.map_reduce(tags, ImportMap.empty(), fn tag, map ->
+        next =
+          if import_map_tag?(tag, opts) do
+            ImportMap.merge_source(HTMLSpans.slice(body, tag.content_span), map, base || "")
+          else
+            map
+          end
 
-  defp source_options(tag, opts) do
-    attrs = Enum.map(tag.attributes, &{&1.name, &1.decoded})
+        {map, next}
+      end)
+
+    maps
+  end
+
+  defp import_map_tag?(tag, opts) do
+    tag.name == "script" and tag.namespace == :html and not tag.in_template? and
+      not tag.in_shadow_root? and HTMLReferences.enabled?(opts, "js") and
+      HTMLReferences.import_map?(tuple_attrs(tag))
+  end
+
+  defp source_options(%{in_template?: true}, _opts, _map, _base), do: nil
+
+  defp source_options(tag, opts, map, base) do
+    attrs = tuple_attrs(tag)
 
     cond do
       tag.name == "style" and HTMLReferences.enabled?(opts, "css") and
@@ -51,11 +78,11 @@ defmodule Crawler.Snapper.LinkReplacer.RawText do
 
       tag.name == "script" and tag.namespace == :svg and HTMLReferences.enabled?(opts, "js") and
           HTMLReferences.svg_script_source(attrs) == :inline ->
-        inline_script_options(attrs)
+        inline_script_options(attrs, map, base)
 
       tag.name == "script" and tag.namespace != :svg and HTMLReferences.enabled?(opts, "js") and
           HTMLReferences.script_source(attrs) == :inline ->
-        inline_script_options(attrs)
+        inline_script_options(attrs, map, base)
 
       true ->
         nil
@@ -65,10 +92,20 @@ defmodule Crawler.Snapper.LinkReplacer.RawText do
   defp style_source(%{namespace: :svg}), do: %{content_type: "text/css", svg_style: true}
   defp style_source(_tag), do: %{content_type: "text/css"}
 
-  defp inline_script_options(attrs) do
-    %{
-      content_type: "application/javascript",
-      javascript_goal: HTMLReferences.script_goal(attrs)
-    }
+  defp inline_script_options(attrs, map, base) do
+    put_referrer(
+      %{
+        content_type: "application/javascript",
+        javascript_goal: HTMLReferences.script_goal(attrs),
+        import_map: map,
+        document_base: base
+      },
+      base
+    )
   end
+
+  defp put_referrer(opts, base) when is_binary(base), do: Map.put(opts, :referrer_url, base)
+  defp put_referrer(opts, _base), do: opts
+
+  defp tuple_attrs(tag), do: Enum.map(tag.attributes, &{&1.name, &1.decoded})
 end

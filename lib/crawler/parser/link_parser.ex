@@ -7,8 +7,8 @@ defmodule Crawler.Parser.LinkParser do
   alias Crawler.HTMLRefresh
   alias Crawler.MediaType
   alias Crawler.Parser.CssParser
-  alias Crawler.Parser.JsParser
   alias Crawler.Parser.LinkParser.LinkExpander
+  alias Crawler.Parser.ScriptReferences
   alias Crawler.Parser.Srcset
 
   @doc """
@@ -42,10 +42,16 @@ defmodule Crawler.Parser.LinkParser do
     emit(tag, attrs, children, opts, handler, :html)
   end
 
+  def parse({:ref, ref}, opts, handler), do: ref_result(ref, opts, handler)
+
   defp emit(tag, attrs, children, opts, handler, namespace) do
-    results =
+    {refs, plain} =
       tag
       |> links(attrs, children, opts, namespace)
+      |> Enum.split_with(&match?({:ref, _}, &1))
+
+    results =
+      plain
       |> Enum.map(fn {attr, link} ->
         {role, reference_tag} = reference_identity(tag, attr, attrs, namespace)
         goal = reference_goal(tag, attr, link, attrs, opts, namespace)
@@ -58,6 +64,8 @@ defmodule Crawler.Parser.LinkParser do
       |> Enum.map(fn {role, reference_tag, goal, element} ->
         handler.(element, handler_opts(opts, role, goal, reference_tag))
       end)
+
+    results = results ++ Enum.map(refs, fn {:ref, ref} -> ref_result(ref, opts, handler) end)
 
     case srcdoc_links(tag, attrs, opts, handler, namespace) do
       [] -> normalize_results(results)
@@ -109,7 +117,7 @@ defmodule Crawler.Parser.LinkParser do
 
   defp source_links("script", attrs, children, opts, :html) do
     if HTMLReferences.enabled?(opts, "js") and HTMLReferences.script_source(attrs) == :inline do
-      inline_script_links(attrs, children)
+      inline_script_links(attrs, children, opts)
     else
       []
     end
@@ -117,7 +125,7 @@ defmodule Crawler.Parser.LinkParser do
 
   defp source_links("script", attrs, children, opts, :svg) do
     if HTMLReferences.enabled?(opts, "js") and HTMLReferences.svg_script_source(attrs) == :inline do
-      inline_script_links(attrs, children)
+      inline_script_links(attrs, children, opts)
     else
       []
     end
@@ -136,6 +144,9 @@ defmodule Crawler.Parser.LinkParser do
           |> Map.delete(:robots_nofollow)
           |> Map.delete(:headers)
           |> Map.delete(:javascript_goal)
+          |> Map.delete(:import_map)
+          |> Map.delete(:document_base)
+          |> Map.delete(:worker_base)
           |> Map.put(:content_type, "text/html")
           |> Map.put(:html_tag, "a")
 
@@ -145,11 +156,16 @@ defmodule Crawler.Parser.LinkParser do
 
   defp srcdoc_links(_tag, _attrs, _opts, _handler, _namespace), do: []
 
-  defp inline_script_links(attrs, children) do
+  defp inline_script_links(attrs, children, opts) do
+    opts =
+      opts
+      |> Map.put(:link_html_tag, "script")
+      |> Map.put(:javascript_goal, HTMLReferences.script_goal(attrs))
+
     children
     |> raw_text()
-    |> JsParser.specs(HTMLReferences.script_goal(attrs))
-    |> Enum.map(&{"href", &1})
+    |> ScriptReferences.list(opts)
+    |> Enum.map(&{:ref, &1})
   end
 
   defp attribute_links(_name, nil), do: []
@@ -217,15 +233,55 @@ defmodule Crawler.Parser.LinkParser do
     do: {HTMLReferences.role(tag, attr, attrs), tag}
 
   defp handler_opts(opts, role, goal, tag) do
-    opts =
-      opts
-      |> Map.delete(:javascript_goal)
-      |> Map.delete(:cookie_navigation)
-      |> Map.put(:html_tag, role)
-      |> Map.put(:reference_tag, tag)
+    carried = if role == "script" or tag == "script", do: script_context(opts), else: %{}
 
-    if goal, do: Map.put(opts, :javascript_goal, goal), else: opts
+    opts
+    |> drop_script_context()
+    |> Map.put(:html_tag, role)
+    |> Map.put(:reference_tag, tag)
+    |> put_opt(:javascript_goal, goal)
+    |> Map.merge(carried)
   end
+
+  defp ref_result(%{url: url} = ref, opts, handler) when is_binary(url) do
+    handler.(ref_element(ref), ref_opts(opts, ref))
+  end
+
+  defp ref_result(_ref, _opts, _handler), do: nil
+
+  defp ref_element(%{spec: spec, url: url}) when spec == url, do: {"href", url}
+  defp ref_element(%{spec: spec, url: url}), do: {"link", spec, "href", url}
+
+  defp ref_opts(opts, ref) do
+    opts
+    |> drop_script_context()
+    |> Map.put(:html_tag, ref.html_tag)
+    |> Map.put(:reference_tag, ref.reference_tag)
+    |> put_opt(:javascript_goal, ref.goal)
+    |> put_opt(:import_map, ref.import_map)
+    |> put_opt(:document_base, ref.document_base)
+    |> put_opt(:worker_base, ref.worker_base)
+  end
+
+  defp script_context(opts) do
+    %{}
+    |> put_opt(:import_map, opts[:import_map])
+    |> put_opt(:document_base, opts[:document_base])
+  end
+
+  defp drop_script_context(opts) do
+    Map.drop(opts, [
+      :javascript_goal,
+      :cookie_navigation,
+      :import_map,
+      :document_base,
+      :worker_base,
+      :link_html_tag
+    ])
+  end
+
+  defp put_opt(opts, _key, nil), do: opts
+  defp put_opt(opts, key, value), do: Map.put(opts, key, value)
 
   defp raw_text(children) do
     Enum.map_join(children, fn

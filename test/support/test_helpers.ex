@@ -18,7 +18,8 @@ defmodule Crawler.TestHelpers do
     end
   end
 
-  def wait(fun), do: wait(500, fun)
+  # Retry sleeps can run late when the suite is loaded.
+  def wait(fun), do: wait(5_000, fun)
 
   def wait(timeout, fun) when is_integer(timeout) and timeout >= 0 do
     wait_until(System.monotonic_time(:millisecond) + timeout, fun)

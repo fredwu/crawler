@@ -4,14 +4,16 @@ defmodule Crawler.Parser do
   """
 
   alias Crawler.Dispatcher
+  alias Crawler.HTMLReferences
   alias Crawler.HTMLSpans
   alias Crawler.HTTP.DocumentHeaders
+  alias Crawler.ImportMap
   alias Crawler.MediaType
   alias Crawler.Parser.CssParser
   alias Crawler.Parser.Guarder
   alias Crawler.Parser.HtmlParser
-  alias Crawler.Parser.JsParser
   alias Crawler.Parser.LinkParser
+  alias Crawler.Parser.ScriptReferences
   alias Crawler.Robots
   alias Crawler.URL
 
@@ -204,10 +206,56 @@ defmodule Crawler.Parser do
   defp do_parse_links(false, _body, _opts, _link_handler), do: []
 
   defp do_parse_links(true, body, opts, link_handler) do
-    body
-    |> parse_file(opts)
-    |> prepend_document_headers(opts)
-    |> Enum.map(&LinkParser.parse(&1, opts, link_handler))
+    elements =
+      body
+      |> parse_file(opts)
+      |> prepend_document_headers(opts)
+
+    if document?(opts) do
+      base = opts[:referrer_url] || opts[:url]
+      walk_document(elements, Map.put(opts, :document_base, base), link_handler)
+    else
+      Enum.map(elements, &LinkParser.parse(&1, opts, link_handler))
+    end
+  end
+
+  defp document?(opts) do
+    MediaType.html?(opts[:content_type]) or MediaType.svg?(opts[:content_type])
+  end
+
+  defp walk_document(elements, opts, link_handler) do
+    {results, _map} =
+      Enum.map_reduce(elements, ImportMap.empty(), fn element, map ->
+        opts = Map.put(opts, :import_map, map)
+        {LinkParser.parse(element, opts, link_handler), register_import_map(element, map, opts)}
+      end)
+
+    results
+  end
+
+  defp register_import_map(
+         %{name: "script", namespace: :html, in_shadow_root?: false} = tag,
+         map,
+         opts
+       ) do
+    if import_map_element?(tag.attributes, opts) do
+      ImportMap.merge_source(raw_text(tag.children), map, opts[:document_base] || "")
+    else
+      map
+    end
+  end
+
+  defp register_import_map(_element, map, _opts), do: map
+
+  defp import_map_element?(attrs, opts) do
+    HTMLReferences.enabled?(opts, "js") and HTMLReferences.import_map?(attrs)
+  end
+
+  defp raw_text(children) do
+    Enum.map_join(children, fn
+      text when is_binary(text) -> text
+      _child -> ""
+    end)
   end
 
   defp prepend_document_headers(elements, opts) do
@@ -226,7 +274,7 @@ defmodule Crawler.Parser do
         CssParser.parse(body)
 
       MediaType.javascript?(type) ->
-        JsParser.elements(body, Map.get(opts, :javascript_goal, :module))
+        ScriptReferences.elements(body, opts)
 
       true ->
         xml_stylesheets(body, opts) ++ HtmlParser.references(body, opts)

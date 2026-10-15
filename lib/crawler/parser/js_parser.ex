@@ -38,15 +38,31 @@ defmodule Crawler.Parser.JsParser do
   def spans(body, goal \\ :module)
 
   def spans(body, goal) when is_binary(body) do
-    {masked, strings} = Scanner.scan(body, goal)
-    strings = MapSet.new(strings)
-
-    [@from, @side_effect, @dynamic]
-    |> Enum.flat_map(&span_matches(&1, body, masked, strings))
-    |> Enum.filter(fn {_at, _len, spec} -> local?(spec) end)
+    body
+    |> specifier_spans(goal)
+    |> Enum.flat_map(fn {_kind, at, len, spec} ->
+      if local?(spec), do: [{at, len, spec}], else: []
+    end)
   end
 
   def spans(_body, _goal), do: []
+
+  @doc false
+  def specifier_spans(body, goal \\ :module)
+
+  def specifier_spans(body, goal) when is_binary(body) do
+    {masked, strings} = Scanner.scan(body, goal)
+    strings = MapSet.new(strings)
+
+    Enum.flat_map([{:static, @from}, {:static, @side_effect}, {:dynamic, @dynamic}], fn {kind,
+                                                                                         regex} ->
+      regex
+      |> span_matches(body, masked, strings)
+      |> Enum.map(fn {at, len, spec} -> {kind, at, len, spec} end)
+    end)
+  end
+
+  def specifier_spans(_body, _goal), do: []
 
   defp span_matches(regex, original, masked, strings) do
     regex

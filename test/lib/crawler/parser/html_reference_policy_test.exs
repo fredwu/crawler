@@ -20,7 +20,7 @@ defmodule Crawler.Parser.HTMLReferencePolicyTest do
     <script type="application/ld+json" src="ignored.json">import './ignored.js';</script>
     <script type="module" src="app.js">import './ignored.js';</script>
     <script src="">import './empty-source.js';</script>
-    <script type="Text/JavaScript">import './classic.js';</script>
+    <script type="Text/JavaScript">import('./classic.js');</script>
     <script type="module">import './module.js';</script>
     """
 
@@ -106,9 +106,9 @@ defmodule Crawler.Parser.HTMLReferencePolicyTest do
     <script language="json" src="ignored.json">import './ignored.js';</script>
     <script language="json">import './ignored.js';</script>
     <script language="JavaScript" src="classic.js"></script>
-    <script language="JavaScript">import './language.js';</script>
+    <script language="JavaScript">import('./language.js');</script>
     <script type="" language="json" src="empty-type.js"></script>
-    <script type="" language="json">import './empty-type-inline.js';</script>
+    <script type="" language="json">import('./empty-type-inline.js');</script>
     <script type=" module " language="json">import './module.js';</script>
     <script type="&#160;module&#160;" src="ignored.js">import './ignored.js';</script>
     <script type="&#160;text/javascript&#160;">import './ignored.js';</script>

@@ -37,7 +37,7 @@ defmodule Crawler.Snapper.OfflineLink.RawTextTest do
   test "resolves raw text against a redirect landing referrer" do
     assert {:ok, body} =
              LinkReplacer.replace_links(
-               ~s|<style>.a { background: url("asset.png") }</style><script>import "./app.js";</script>|,
+               ~s|<style>.a { background: url("asset.png") }</style><script>import("./app.js"); import "./stay.js";</script>|,
                %{
                  url: @page,
                  referrer_url: "https://cdn.example/landing/page.html",
@@ -51,6 +51,7 @@ defmodule Crawler.Snapper.OfflineLink.RawTextTest do
 
     assert_points(body, @page, "https://cdn.example/landing/asset.png")
     assert_points(body, @page, "https://cdn.example/landing/app.js")
+    assert body =~ ~s|import "./stay.js"|
   end
 
   test "leaves disabled raw text and non-javascript scripts intact" do
@@ -194,7 +195,7 @@ defmodule Crawler.Snapper.OfflineLink.RawTextTest do
   end
 
   test "rewrites the page when a script contains a non-utf8 byte" do
-    html = "<script>var caf" <> <<0xE9>> <> "=1; import \"./a.js\";</script><a href=\"p.html\">"
+    html = "<script>var caf" <> <<0xE9>> <> "=1; import(\"./a.js\");</script><a href=\"p.html\">"
     body = rewrite(html, @page)
 
     assert_points(body, @page, "http://example.com/blog/p.html")

@@ -55,6 +55,17 @@ defmodule Crawler.HTMLReferences do
 
   def local_reference?(_value), do: false
 
+  def import_map?(attrs) do
+    case attribute(attrs, "type") do
+      type when is_binary(type) ->
+        trimmed = Regex.replace(~r/^[\t\n\f\r ]+|[\t\n\f\r ]+$/, type, "")
+        String.downcase(trimmed, :ascii) == "importmap" and is_nil(attribute(attrs, "src"))
+
+      _type ->
+        false
+    end
+  end
+
   def executable_script?(attrs) do
     type = attrs |> script_type() |> String.downcase(:ascii)
 

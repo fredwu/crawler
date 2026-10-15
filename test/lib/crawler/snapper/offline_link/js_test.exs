@@ -28,8 +28,7 @@ defmodule Crawler.Snapper.OfflineLink.JsTest do
 
   for attrs <- [
         ~s|data-type="application/json" type="module"|,
-        ~s|data-note='type="application/json"' type="module"|,
-        ~s|data-note="type='application/json'"|
+        ~s|data-note='type="application/json"' type="module"|
       ] do
     test "uses actual script type attributes when #{attrs}" do
       attrs = unquote(attrs)
@@ -38,6 +37,14 @@ defmodule Crawler.Snapper.OfflineLink.JsTest do
 
       assert body == ~s|<script #{attrs}>import "#{offline}";</script>|
     end
+  end
+
+  test "uses a missing type, not a type named inside another attribute" do
+    attrs = ~s|data-note="type='application/json'"|
+    body = rewrite(~s|<script #{attrs}>import("./shared.js");</script>|, @page)
+    offline = Linker.offline_link(@page, "http://example.com/blog/shared.js")
+
+    assert body == ~s|<script #{attrs}>import("#{offline}");</script>|
   end
 
   test "keeps non-javascript script text when data-type names a javascript type" do

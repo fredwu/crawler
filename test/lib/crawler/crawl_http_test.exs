@@ -703,7 +703,7 @@ defmodule Crawler.CrawlHTTPTest do
     ReqTestSite.expect_once(context.site, "GET", "/scripts/page", fn conn ->
       html(conn, """
       <script type="text/javascript; charset=utf-8" src="app.js"></script>
-      <script type="text/javascript; charset=utf-8">import './chunk.js';</script>
+      <script type="text/javascript; charset=utf-8">import('./chunk.js');</script>
       <script type="module" src="mod.js"></script>
       <script type=" text/javascript " src="classic.js"></script>
       <script type="module;charset=utf-8" src="nope.js"></script>

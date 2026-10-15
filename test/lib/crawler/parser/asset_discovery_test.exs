@@ -131,7 +131,7 @@ defmodule Crawler.Parser.AssetDiscoveryTest do
     import "./nope.js";
     </script>
     <script type="Text/JavaScript">
-    import "./lib.js";
+    import("./lib.js");
     </script>
     """
 

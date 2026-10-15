@@ -35,12 +35,22 @@ defmodule Crawler.Fetcher do
   def fetch(opts) do
     case fetch_unseen(opts) do
       {:warn, "Fetch failed check 'not_fetched_yet?'" <> _} = warn ->
-        open_stored_svg(opts) || warn
+        seen_url(opts, warn)
+
+      # The seen check and the store claim are separate. A second link can pass
+      # the check, then lose the claim. That link was already fetched.
+      {:error, {:already_registered, _pid}} ->
+        seen_url(
+          opts,
+          {:warn, "Fetch failed check 'not_fetched_yet?', crawl: #{Diagnostics.crawl(opts)}."}
+        )
 
       other ->
         other
     end
   end
+
+  defp seen_url(opts, warn), do: open_stored_svg(opts) || warn
 
   defp fetch_unseen(opts) do
     with {:ok, opts} <- Policer.police(opts),
@@ -303,10 +313,19 @@ defmodule Crawler.Fetcher do
     opts =
       opts
       |> Map.put(:referrer_url, final)
+      |> land_worker_entry(final)
       |> Cookies.assign_landed_site(final)
 
     remember_alias(final, body, opts)
   end
+
+  # The worker entry is the response that was loaded, after a redirect.
+  defp land_worker_entry(%{worker_base: base, url: url} = opts, final)
+       when is_binary(base) and base == url and is_binary(final) do
+    %{opts | worker_base: final}
+  end
+
+  defp land_worker_entry(opts, _final), do: opts
 
   defp remember_alias(final, body, %{url: url} = opts) when final != url do
     case Store.register_alias({final, opts[:scope]}, opts[:generation], opts[:queue]) do
@@ -380,6 +399,7 @@ defmodule Crawler.Fetcher do
           stored
           |> Map.put(:referrer_url, opts[:referrer_url])
           |> put_alias_url(opts[:alias_url])
+          |> put_worker_base(opts[:worker_base])
 
         case Store.add_page_data(key, body, stored) do
           {:error, :stale} = error -> error
@@ -393,6 +413,9 @@ defmodule Crawler.Fetcher do
 
   defp put_alias_url(opts, url) when is_binary(url), do: Map.put(opts, :alias_url, url)
   defp put_alias_url(opts, _url), do: opts
+
+  defp put_worker_base(opts, base) when is_binary(base), do: Map.put(opts, :worker_base, base)
+  defp put_worker_base(opts, _base), do: opts
 
   defp store_alias(body, opts) do
     case Recorder.maybe_store_page(body, %{opts | url: opts[:alias_url]}) do
