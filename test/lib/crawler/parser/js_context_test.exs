@@ -60,7 +60,7 @@ defmodule Crawler.Parser.JsContextTest do
                ["./dynamic.js", "./from.js", "./named.js", "./side.js", "./star.js"]
 
       assert_byte_spans(source)
-      {masked, _strings} = Scanner.scan(source)
+      {masked, _strings, _comments} = Scanner.scan(source)
       if gap != " ", do: refute(masked =~ gap)
     end
   end
@@ -81,7 +81,7 @@ defmodule Crawler.Parser.JsContextTest do
   test "non-ECMAScript spacing characters and whitespace inside literals are preserved" do
     for char <- [0x85, 0x180E, 0x200B] do
       spacing = <<char::utf8>>
-      {masked, _strings} = Scanner.scan(";#{spacing}import \"./real.js\";")
+      {masked, _strings, _comments} = Scanner.scan(";#{spacing}import \"./real.js\";")
       assert masked =~ spacing
     end
 
@@ -118,7 +118,7 @@ defmodule Crawler.Parser.JsContextTest do
   end
 
   defp assert_byte_spans(source) do
-    {masked, _strings} = Scanner.scan(source)
+    {masked, _strings, _comments} = Scanner.scan(source)
     assert byte_size(masked) == byte_size(source)
 
     for {start, length, specifier} <- JsParser.spans(source) do

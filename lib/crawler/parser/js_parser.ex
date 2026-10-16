@@ -51,7 +51,7 @@ defmodule Crawler.Parser.JsParser do
   def specifier_spans(body, goal \\ :module)
 
   def specifier_spans(body, goal) when is_binary(body) do
-    {masked, strings} = Scanner.scan(body, goal)
+    {masked, strings, _comments} = Scanner.scan(body, goal)
     strings = MapSet.new(strings)
 
     Enum.flat_map([{:static, @from}, {:static, @side_effect}, {:dynamic, @dynamic}], fn {kind,

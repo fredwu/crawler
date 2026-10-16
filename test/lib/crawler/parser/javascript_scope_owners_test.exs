@@ -74,7 +74,7 @@ defmodule Crawler.Parser.JavascriptScopeOwnersTest do
       assert_specs(source, goal)
       assert [{at, _length, "./real.js"}] = JsParser.spans(source, goal)
       assert at == byte_size(prefix) + byte_size(~S|import("|)
-      {masked, _strings} = Scanner.scan(source, goal)
+      {masked, _strings, _comments} = Scanner.scan(source, goal)
 
       assert binary_part(masked, 0, byte_size(contents) + 2) ==
                String.duplicate(" ", byte_size(contents) + 2)
@@ -82,7 +82,7 @@ defmodule Crawler.Parser.JavascriptScopeOwnersTest do
 
     for source <- ["#!", ~S|#! import("./phantom.js") '|] do
       assert JsParser.specs(source) == []
-      {masked, strings} = Scanner.scan(source)
+      {masked, strings, _comments} = Scanner.scan(source)
       assert masked == String.duplicate(" ", byte_size(source))
       assert strings == []
     end
@@ -90,7 +90,7 @@ defmodule Crawler.Parser.JavascriptScopeOwnersTest do
 
   test "hashbang recognition requires the first source bytes" do
     for prefix <- [";", "\n", " ", <<0xFEFF::utf8>>] do
-      {masked, _strings} = Scanner.scan(prefix <> ~S|#! import("./real.js");|)
+      {masked, _strings, _comments} = Scanner.scan(prefix <> ~S|#! import("./real.js");|)
       assert binary_part(masked, byte_size(prefix), 2) == "#!"
       assert String.contains?(masked, "import")
     end
@@ -105,7 +105,7 @@ defmodule Crawler.Parser.JavascriptScopeOwnersTest do
     assert JsParser.specs(source, goal) == ["./real.js"], source
     assert [{at, length, "./real.js"}] = JsParser.spans(source, goal)
     assert binary_part(source, at, length) == "./real.js"
-    {masked, _strings} = Scanner.scan(source, goal)
+    {masked, _strings, _comments} = Scanner.scan(source, goal)
     assert byte_size(masked) == byte_size(source)
   end
 end

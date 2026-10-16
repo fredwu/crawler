@@ -50,7 +50,7 @@ defmodule Crawler.Parser.JsParserTest do
       assert JsParser.specs(source) == ["./real.js"], identifier
       assert [{start, length, "./real.js"}] = JsParser.spans(source)
       assert binary_part(source, start, length) == "./real.js"
-      {masked, _strings} = Scanner.scan(source)
+      {masked, _strings, _comments} = Scanner.scan(source)
       assert byte_size(masked) == byte_size(source)
     end
 
@@ -65,7 +65,7 @@ defmodule Crawler.Parser.JsParserTest do
         ~S|if (ready) {} /import\("\.\/hidden.js"\)/.test(text); import("./block.js");|
 
     assert JsParser.specs(source) == ["./chunk.js", "./nested.js", "./block.js"]
-    {masked, _strings} = Scanner.scan(source)
+    {masked, _strings, _comments} = Scanner.scan(source)
     assert byte_size(masked) == byte_size(source)
     assert masked =~ "{} / 2;"
     assert masked =~ "{}} / 2;"
@@ -89,7 +89,7 @@ defmodule Crawler.Parser.JsParserTest do
           ~S|import("./chunk.js"); const r = /import(".\/hidden.js")/;|
 
       assert JsParser.specs(source) == ["./chunk.js"], expression
-      {masked, _strings} = Scanner.scan(source)
+      {masked, _strings, _comments} = Scanner.scan(source)
       assert masked =~ " / 2;"
       refute masked =~ "hidden.js"
     end

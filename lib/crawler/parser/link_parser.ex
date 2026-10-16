@@ -9,6 +9,7 @@ defmodule Crawler.Parser.LinkParser do
   alias Crawler.Parser.CssParser
   alias Crawler.Parser.LinkParser.LinkExpander
   alias Crawler.Parser.ScriptReferences
+  alias Crawler.Parser.SourceMap
   alias Crawler.Parser.SpeculationRules
   alias Crawler.Parser.Srcset
 
@@ -113,9 +114,12 @@ defmodule Crawler.Parser.LinkParser do
   defp same_drawing?(_link, _tag), do: false
 
   defp source_links("style", attrs, children, opts, namespace) when namespace in [:html, :svg] do
-    if HTMLReferences.enabled?(opts, "css") and HTMLReferences.css_style_element?(attrs),
-      do: children |> raw_text() |> style_links("style_text"),
-      else: []
+    if HTMLReferences.enabled?(opts, "css") and HTMLReferences.css_style_element?(attrs) do
+      text = raw_text(children)
+      style_links(text, "style_text") ++ SourceMap.element_refs(text, opts, :css)
+    else
+      []
+    end
   end
 
   defp source_links("script", attrs, children, opts, :html) do
@@ -321,6 +325,8 @@ defmodule Crawler.Parser.LinkParser do
     |> put_opt(:import_map, ref.import_map)
     |> put_opt(:document_base, ref.document_base)
     |> put_opt(:worker_base, ref.worker_base)
+    |> put_opt(:fetch_kind, ref[:fetch_kind])
+    |> put_opt(:json_span, ref[:json_span])
   end
 
   defp script_context(opts) do

@@ -22,7 +22,7 @@ defmodule Crawler.Parser.JsParser.Calls do
   # these calls are matched on the original source. Paren depth still uses the
   # mask, where string and comment contents are spaces.
   def spans(source, goal) when is_binary(source) and goal in [:script, :module] do
-    {masked, strings} = Scanner.scan(source, goal)
+    {masked, strings, _comments} = Scanner.scan(source, goal)
     strings = MapSet.new(strings)
     workers = workers(source, masked, strings, goal)
     taken = MapSet.new(for {:worker, at, len, _spec, _goal, :module} <- workers, do: {at, len})

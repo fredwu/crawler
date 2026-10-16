@@ -5,16 +5,21 @@ defmodule Crawler.Parser.ScriptReferences do
   alias Crawler.Linker
   alias Crawler.Parser.JsParser
   alias Crawler.Parser.JsParser.Calls
+  alias Crawler.Parser.SourceMap
   alias Crawler.URL
 
   def list(source, opts) when is_binary(source) do
     goal = goal(opts)
     map = active_map(opts)
+    {notes, sources} = map_additions(source, opts)
 
-    (import_refs(source, goal, map, opts) ++ call_refs(source, goal, opts))
-    |> Enum.reject(&is_nil/1)
-    |> Enum.uniq_by(& &1.at)
-    |> Enum.sort_by(& &1.at)
+    spanned =
+      (import_refs(source, goal, map, opts) ++ call_refs(source, goal, opts) ++ notes)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq_by(& &1.at)
+      |> Enum.sort_by(& &1.at)
+
+    spanned ++ sources
   end
 
   def list(_source, _opts), do: []
@@ -28,14 +33,31 @@ defmodule Crawler.Parser.ScriptReferences do
 
   def rewrite(source, opts) when is_binary(source) do
     page = opts[:url] || opts[:referrer_url]
+    newline? = String.ends_with?(source, "\n")
 
     source
     |> list(opts)
+    |> Enum.filter(&is_integer(&1[:at]))
     |> Enum.sort_by(& &1.at, :desc)
-    |> Enum.reduce(source, fn ref, source -> replace(source, ref, offline(page, ref)) end)
+    |> Enum.reduce(source, fn ref, source ->
+      replace(source, ref, replacement(ref, page, opts, newline?))
+    end)
   end
 
   def rewrite(source, _opts), do: source
+
+  defp map_additions(source, opts) do
+    case SourceMap.javascript(source, opts) do
+      nil -> {[], []}
+      note -> {[SourceMap.annotation_ref(note, source)], SourceMap.data_source_refs(note, opts)}
+    end
+  end
+
+  defp replacement(%{map_note: note}, page, opts, newline?) do
+    SourceMap.rewrite_text(note, page, opts, :javascript, newline?)
+  end
+
+  defp replacement(ref, page, _opts, _newline?), do: offline(page, ref)
 
   defp import_refs(source, goal, map, opts) do
     source

@@ -81,7 +81,7 @@ defmodule Crawler.Parser.JavascriptAsiTest do
     assert JsParser.specs(source, goal) == ["./real.js"], source
     assert [{at, length, "./real.js"}] = JsParser.spans(source, goal)
     assert binary_part(source, at, length) == "./real.js"
-    {masked, _strings} = Scanner.scan(source, goal)
+    {masked, _strings, _comments} = Scanner.scan(source, goal)
     assert byte_size(masked) == byte_size(source)
   end
 end

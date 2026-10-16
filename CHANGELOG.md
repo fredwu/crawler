@@ -2,6 +2,7 @@
 
 ## master
 
+- [Fixed] Save the source map named by a script, a stylesheet, or a SourceMap header, and save the original files that map names. The header wins over the note. The map is resolved from the file that arrived, and only an inline script's sourceURL moves that base. A data map is not a request, and a saved one still contains a hash from the map. A saved map drops sourceRoot once a source path is offline, so that path is not prefixed again. An empty sourceRoot does not move a source. A classic script reads the note with that script's rules.
 - [Fixed] Follow prefetch, prerender, next, prev, manifest, preload fetch and track, and speculation rules, and save those files. A disabled stylesheet stays as written. Nofollow still skips next and prev, not these subresources.
 - [Fixed] Follow import maps, `new URL(..., import.meta.url)`, workers, and `importScripts`, and save those same files. A later map can add a name but cannot replace one. Classic scripts fetch `import()` only. Workers do not use the page import map.
 - [Fixed] Send cookies with SameSite and partition rules for the page that caused the request. The default is Lax. SameSite=None is stored only when the cookie is Secure and the response is https. A document navigation to another site sends Lax and not Strict. A script, image, stylesheet, font, frame, object, or embed on another site does not. A partitioned cookie follows that page's registrable domain. Longer paths are sent first, and replacing a cookie keeps its earlier place.

@@ -39,7 +39,7 @@ The implementation separates these responsibilities:
 - `Crawler.Store` exposes the registry and coordinates updates through its internal server. The modules in `lib/crawler/store/` manage page slots, pending work, redirect aliases, and file publication.
 - `Crawler.Fetcher` applies crawl policy and records responses. `Crawler.HTTP` checks each redirect before Req follows it.
 - The URL module validates browser host spellings and defines page identity. The charset module decodes text responses before parsing and saving.
-- `Crawler.Parser` discovers links and invokes the scraper. CSS and JavaScript scanners share decoded link values and original source boundaries with offline rewriting. `Crawler.Linker` builds offline paths, and `Crawler.Snapper` rewrites links and publishes files while preserving unrelated source text.
+- `Crawler.Parser` discovers links and invokes the scraper. CSS and JavaScript scanners share decoded link values and original source boundaries with offline rewriting. A source map named by a crawled script or stylesheet, or by its `SourceMap` / `X-SourceMap` header, is saved with the sources that map names. `Crawler.Linker` builds offline paths, and `Crawler.Snapper` rewrites links and publishes files while preserving unrelated source text.
 
 A scope shares seen URLs and the page budget. Its generation prevents old workers from updating a reset scope. Queue ownership determines which processes `Crawler.stop/1` shuts down; callers can also supply an external queue.
 

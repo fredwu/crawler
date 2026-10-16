@@ -13,6 +13,7 @@ defmodule Crawler.Snapper.LinkReplacer do
   alias Crawler.Parser
   alias Crawler.Parser.Guarder
   alias Crawler.Parser.ScriptReferences
+  alias Crawler.Parser.SourceMap
   alias Crawler.Parser.SpeculationRules
   alias Crawler.Snapper.LinkReplacer.Css
   alias Crawler.Snapper.LinkReplacer.Html
@@ -77,7 +78,7 @@ defmodule Crawler.Snapper.LinkReplacer do
   """
   def replace_links(body, opts) do
     cond do
-      opts[:fetch_kind] in [:manifest, :speculation_rules] ->
+      opts[:fetch_kind] in [:manifest, :speculation_rules, :source_map] ->
         {:ok, Json.replace_spans(body, located_replacements(body, opts))}
 
       MediaType.javascript?(opts[:content_type]) ->
@@ -224,7 +225,7 @@ defmodule Crawler.Snapper.LinkReplacer do
     |> String.replace("'", "&#39;")
   end
 
-  defp rewrite_body(body, [], _opts), do: body
+  defp rewrite_body(body, [], opts), do: finish_css(body, opts)
 
   defp rewrite_body(body, links, opts) do
     prefix = Tokens.prefix([body | Enum.map(links, &elem(&1, 1))], "L")
@@ -242,13 +243,29 @@ defmodule Crawler.Snapper.LinkReplacer do
     body
     |> Html.drop_rewritten_integrity(tokens, opts)
     |> String.replace(tokens, &Map.fetch!(replacements, &1))
+    |> finish_css(opts)
+  end
+
+  defp finish_css(body, opts) do
+    if MediaType.css?(opts[:content_type]) and Guarder.pass?(opts) do
+      SourceMap.rewrite_css(body, opts)
+    else
+      body
+    end
   end
 
   defp located_replacements(body, opts) do
-    body
-    |> Parser.parse_links(opts, &located_link/2)
-    |> List.flatten()
-    |> Enum.reject(&is_nil/1)
+    spans =
+      body
+      |> Parser.parse_links(opts, &located_link/2)
+      |> List.flatten()
+      |> Enum.reject(&is_nil/1)
+
+    if opts[:fetch_kind] == :source_map and spans != [] do
+      spans ++ SourceMap.root_clear_spans(body, opts)
+    else
+      spans
+    end
   end
 
   defp located_link(link, link_opts) do

@@ -14,6 +14,7 @@ defmodule Crawler.Parser do
   alias Crawler.Parser.HtmlParser
   alias Crawler.Parser.LinkParser
   alias Crawler.Parser.ScriptReferences
+  alias Crawler.Parser.SourceMap
   alias Crawler.Parser.SpeculationRules
   alias Crawler.Parser.WebManifest
   alias Crawler.Robots
@@ -130,6 +131,9 @@ defmodule Crawler.Parser do
 
       opts[:fetch_kind] == :speculation_rules ->
         speculation_file_links(body, opts, link_handler)
+
+      opts[:fetch_kind] == :source_map ->
+        source_map_links(body, opts, link_handler)
 
       true ->
         opts = put_base_href(body, put_robots_nofollow(body, opts))
@@ -282,6 +286,38 @@ defmodule Crawler.Parser do
     end
   end
 
+  defp source_map_links(body, opts, handler) do
+    body
+    |> SourceMap.entries(opts)
+    |> Enum.map(fn entry ->
+      handler.(linked(entry.raw, entry.url), map_child_opts(opts, entry))
+    end)
+  end
+
+  defp map_child_opts(opts, entry) do
+    opts
+    |> Map.drop([
+      :cookie_navigation,
+      :document_base,
+      :fetch_kind,
+      :import_map,
+      :javascript_goal,
+      :json_span,
+      :link_html_tag,
+      :worker_base
+    ])
+    |> Map.put(:html_tag, "link")
+    |> Map.put(:reference_tag, "link")
+    |> put_fetch_kind(entry.fetch_kind)
+    |> put_json_span(entry.json_span)
+  end
+
+  defp put_fetch_kind(opts, :source_map), do: Map.put(opts, :fetch_kind, :source_map)
+  defp put_fetch_kind(opts, _kind), do: opts
+
+  defp put_json_span(opts, {start, length}), do: with_span(opts, start, length)
+  defp put_json_span(opts, _span), do: opts
+
   defp speculation_file_links(body, opts, handler) do
     body
     |> SpeculationRules.entries(opts)
@@ -374,7 +410,7 @@ defmodule Crawler.Parser do
 
     cond do
       MediaType.css?(type) ->
-        CssParser.parse(body)
+        CssParser.parse(body) ++ SourceMap.element_refs(body, opts, :css)
 
       MediaType.javascript?(type) ->
         ScriptReferences.elements(body, opts)

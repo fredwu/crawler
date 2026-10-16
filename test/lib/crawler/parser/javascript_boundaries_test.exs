@@ -112,7 +112,7 @@ defmodule Crawler.Parser.JavascriptBoundariesTest do
     assert JsParser.specs(source, goal) == expected, source
     spans = JsParser.spans(source, goal)
     assert Enum.map(spans, &elem(&1, 2)) == expected
-    {masked, _strings} = Scanner.scan(source, goal)
+    {masked, _strings, _comments} = Scanner.scan(source, goal)
     assert byte_size(masked) == byte_size(source)
   end
 end

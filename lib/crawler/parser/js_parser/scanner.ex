@@ -38,7 +38,8 @@ defmodule Crawler.Parser.JsParser.Scanner do
       for_headers: [],
       size: byte_size(source),
       string_start: nil,
-      strings: []
+      strings: [],
+      comments: []
     })
   end
 
@@ -77,7 +78,8 @@ defmodule Crawler.Parser.JsParser.Scanner do
   end
 
   defp scan_token(<<>>, acc, context) do
-    {IO.iodata_to_binary(Enum.reverse(acc)), Enum.reverse(context.strings)}
+    {IO.iodata_to_binary(Enum.reverse(acc)), Enum.reverse(context.strings),
+     Enum.reverse(context.comments)}
   end
 
   defp scan_token(<<char, rest::binary>>, acc, %{state: :code} = context)
@@ -96,13 +98,17 @@ defmodule Crawler.Parser.JsParser.Scanner do
   end
 
   defp scan_token(<<"//", rest::binary>>, acc, %{state: :code} = context) do
-    {line, rest} = split_line(rest)
-    mask(rest, [spaces_keep_nl("//" <> line) | acc], comment_context(context, line))
+    {line, rest_after} = split_line(rest)
+    at = context.size - byte_size(rest) - 2
+    context = add_comment(context, {at, 2 + line_text_size(line)})
+    mask(rest_after, [spaces_keep_nl("//" <> line) | acc], comment_context(context, line))
   end
 
   defp scan_token(<<"/*", rest::binary>>, acc, %{state: :code} = context) do
-    {block, rest} = split_block(rest)
-    mask(rest, [spaces_keep_nl("/*" <> block) | acc], comment_context(context, block))
+    {block, rest_after} = split_block(rest)
+    at = context.size - byte_size(rest) - 2
+    context = add_comment(context, {at, 2 + byte_size(block)})
+    mask(rest_after, [spaces_keep_nl("/*" <> block) | acc], comment_context(context, block))
   end
 
   defp scan_token(<<?/, rest::binary>>, acc, %{state: :code, regex_allowed?: true} = context) do
@@ -489,6 +495,15 @@ defmodule Crawler.Parser.JsParser.Scanner do
         statement_header: statement_header,
         for_headers: for_headers
     }
+  end
+
+  defp add_comment(context, span), do: %{context | comments: [span | context.comments]}
+
+  defp line_text_size(line) do
+    case :binary.match(line, @line_terminators) do
+      {index, _length} -> index
+      :nomatch -> byte_size(line)
+    end
   end
 
   defp split_line(rest) do
