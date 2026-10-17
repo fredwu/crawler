@@ -44,19 +44,52 @@ defmodule Crawler.Parser.Guarder do
       iex>   %{html_tag: "a", content_type: "image/svg+xml; charset=utf-8"}
       iex> )
       true
+
+      iex> Guarder.pass?(
+      iex>   %{html_tag: "a", content_type: "text/plain"}
+      iex> )
+      false
+
+      iex> Guarder.pass?(
+      iex>   %{html_tag: "link", content_type: "text/html"}
+      iex> )
+      false
+
+      iex> Guarder.pass?(
+      iex>   %{html_tag: "script", content_type: "text/html"}
+      iex> )
+      false
+
+      iex> Guarder.pass?(
+      iex>   %{html_tag: "a", content_type: "text/css"}
+      iex> )
+      true
+
+      iex> Guarder.pass?(
+      iex>   %{html_tag: "a", content_type: "text/javascript"}
+      iex> )
+      true
+
+      iex> Guarder.pass?(
+      iex>   %{html_tag: "a", content_type: "text/html"}
+      iex> )
+      true
+
+      iex> Guarder.pass?(
+      iex>   %{html_tag: "fetch", content_type: "text/html"}
+      iex> )
+      false
   """
   def pass?(opts) do
-    if MediaType.svg?(opts[:content_type]) do
-      opts[:html_tag] == "a"
-    else
-      parsable_tag?(opts[:html_tag]) and parsable_type?(opts[:content_type])
+    type = opts[:content_type]
+    tag = opts[:html_tag]
+
+    cond do
+      MediaType.svg?(type) -> tag == "a"
+      tag not in ["a", "link", "script"] -> false
+      MediaType.css?(type) or MediaType.javascript?(type) -> true
+      MediaType.html?(type) -> tag == "a"
+      true -> false
     end
-  end
-
-  defp parsable_tag?(html_tag), do: html_tag in ["a", "link", "script"]
-
-  defp parsable_type?(content_type) do
-    MediaType.text?(content_type) or MediaType.xhtml?(content_type) or
-      MediaType.javascript?(content_type)
   end
 end

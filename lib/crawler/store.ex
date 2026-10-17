@@ -115,12 +115,12 @@ defmodule Crawler.Store do
     GenServer.call(__MODULE__, {:processed, identity(url, scope), generation, queue})
   end
 
-  def complete_page({url, scope}, generation, queue, alias_url \\ nil) do
+  def complete_page({url, scope}, generation, queue, alias_url \\ nil, count? \\ true) do
     alias_key = if is_binary(alias_url), do: identity(alias_url, scope)
 
     GenServer.call(
       __MODULE__,
-      {:complete_page, identity(url, scope), alias_key, generation, queue}
+      {:complete_page, identity(url, scope), alias_key, generation, queue, count?}
     )
   end
 

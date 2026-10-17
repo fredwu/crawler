@@ -18,6 +18,7 @@ defmodule Crawler.Parser do
   alias Crawler.Parser.SpeculationRules
   alias Crawler.Parser.WebManifest
   alias Crawler.Robots
+  alias Crawler.Sitemap
   alias Crawler.URL
 
   require Logger
@@ -110,7 +111,14 @@ defmodule Crawler.Parser do
   def parse(%{body: body, opts: opts} = page) do
     parse_links(body, opts, &Dispatcher.dispatch(&1, &2))
 
-    {:ok, _page} = opts[:scraper].scrape(page)
+    opts =
+      if Sitemap.ingest(opts, body) do
+        Map.put(opts, :count_page, false)
+      else
+        opts
+      end
+
+    {:ok, _page} = opts[:scraper].scrape(%{page | opts: opts})
   end
 
   @doc """

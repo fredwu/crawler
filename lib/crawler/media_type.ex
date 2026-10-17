@@ -52,4 +52,13 @@ defmodule Crawler.MediaType do
 
   def svg?(nil), do: false
   def svg?(type), do: normalize(type) == "image/svg+xml"
+
+  def feed?(nil), do: false
+
+  def feed?(type) do
+    normalize(type) in ["application/rss+xml", "application/atom+xml"]
+  end
+
+  def xml?(nil), do: false
+  def xml?(type), do: normalize(type) in ["application/xml", "text/xml"]
 end

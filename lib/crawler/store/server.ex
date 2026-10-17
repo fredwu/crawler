@@ -141,7 +141,7 @@ defmodule Crawler.Store.Server do
   end
 
   def handle_call(
-        {:complete_page, {_url, scope} = key, alias_key, generation, queue},
+        {:complete_page, {_url, scope} = key, alias_key, generation, queue, count?},
         {worker, _},
         state
       ) do
@@ -153,7 +153,7 @@ defmodule Crawler.Store.Server do
 
           {_page, _previous} ->
             state
-            |> State.increment(:ops, scope, queue)
+            |> count_completed_page(count?, scope, queue)
             |> State.forget_page(key)
             |> complete_alias(alias_key, queue)
             |> Settlements.complete_source(key, worker)
@@ -399,6 +399,12 @@ defmodule Crawler.Store.Server do
   defp discard_claims(state, {refs, claims}) do
     Enum.each(refs, &Process.demonitor(&1, [:flush]))
     %{state | claims: claims}
+  end
+
+  defp count_completed_page(state, false, _scope, _queue), do: state
+
+  defp count_completed_page(state, _count, scope, queue) do
+    State.increment(state, :ops, scope, queue)
   end
 
   defp complete_alias(state, nil, _queue), do: state

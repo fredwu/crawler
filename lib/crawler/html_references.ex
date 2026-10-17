@@ -81,7 +81,7 @@ defmodule Crawler.HTMLReferences do
     if attribute(attrs, "crawler-speculation-rules") != nil do
       choice("link", "link", :speculation_rules, false, :always)
     else
-      classify(considered_rels(attrs), normalized(attrs, "as"))
+      classify(considered_rels(attrs), normalized(attrs, "as"), attrs)
     end
   end
 
@@ -262,7 +262,7 @@ defmodule Crawler.HTMLReferences do
     end
   end
 
-  defp classify(rels, as) do
+  defp classify(rels, as, attrs) do
     cond do
       "modulepreload" in rels ->
         choice("script", "link", nil, false, {:asset, "js"})
@@ -301,9 +301,18 @@ defmodule Crawler.HTMLReferences do
       "next" in rels or "prev" in rels or "previous" in rels ->
         choice("a", "a", nil, true, :always)
 
+      feed_alternate?(rels, attrs) ->
+        choice("a", "a", :feed, true, :always)
+
       true ->
         :skip
     end
+  end
+
+  # A stylesheet that is also alternate stays a stylesheet. Language alternates
+  # have no feed type, so they stay unfetched.
+  defp feed_alternate?(rels, attrs) do
+    "alternate" in rels and "stylesheet" not in rels and MediaType.feed?(attribute(attrs, "type"))
   end
 
   defp choice(html_tag, reference_tag, fetch_kind, nofollow, channel) do

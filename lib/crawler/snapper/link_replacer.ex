@@ -84,8 +84,11 @@ defmodule Crawler.Snapper.LinkReplacer do
       MediaType.javascript?(opts[:content_type]) ->
         {:ok, javascript_body(body, opts)}
 
-      true ->
+      Guarder.pass?(opts) ->
         {:ok, html_body(body, opts)}
+
+      true ->
+        {:ok, body}
     end
   end
 

@@ -51,7 +51,13 @@ defmodule Crawler.Worker do
   end
 
   defp mark_processed({:ok, %Page{url: url, opts: opts}}) do
-    Store.complete_page({url, opts[:scope]}, opts[:generation], opts[:queue], opts[:alias_url])
+    Store.complete_page(
+      {url, opts[:scope]},
+      opts[:generation],
+      opts[:queue],
+      opts[:alias_url],
+      opts[:count_page] != false
+    )
   end
 
   defp mark_processed(_), do: nil

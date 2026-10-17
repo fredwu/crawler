@@ -7,6 +7,7 @@ defmodule Crawler.Sitemap do
   alias Crawler.Fetcher.Retrier
   alias Crawler.HTMLReferences
   alias Crawler.HTTP
+  alias Crawler.MediaType
   alias Crawler.Robots
   alias Crawler.Site
   alias Crawler.Store
@@ -14,23 +15,40 @@ defmodule Crawler.Sitemap do
 
   @text_elements ["loc", "link", "thumbnail_loc", "content_loc"]
   @image_elements ["thumbnail_loc", "content_loc"]
+  @catalog_roots ["urlset", "sitemapindex", "rss", "feed"]
 
   def follow(opts, origin, rules) when is_map(rules) do
-    state = %{
-      files: MapSet.new(),
-      pages: seed_page(opts),
-      reserved: 0,
-      start_ops: Store.ops_count(opts[:scope])
-    }
-
     rules
     |> Map.get(:sitemaps, [])
-    |> Enum.reduce(state, fn url, state -> fetch_document(opts, origin <> "/", url, state) end)
+    |> Enum.reduce(document_state(opts), fn url, state ->
+      fetch_document(opts, origin <> "/", url, state)
+    end)
 
     :ok
   end
 
   def follow(_opts, _origin, _rules), do: :ok
+
+  # A fetched RSS, Atom, or sitemap document contributes its pages and does not
+  # take a page slot. Ordinary text, and XML that is not one of those documents,
+  # returns false so the caller keeps it as a normal file.
+  def ingest(opts, body) when is_map(opts) and is_binary(body) do
+    case catalog_body(opts, body) do
+      {:ok, text} ->
+        base = catalog_base(opts)
+        {urls, children} = xml_entries(text)
+        state = document_state(opts)
+        state = enqueue_urls(opts, urls, base, state)
+        reduce_children(state, opts, base, children)
+
+        true
+
+      :skip ->
+        false
+    end
+  end
+
+  def ingest(_opts, _body), do: false
 
   @doc false
   def locations(body) when is_binary(body) do
@@ -377,11 +395,77 @@ defmodule Crawler.Sitemap do
       :referrer_url,
       :robots_fetch,
       :robots_nofollow,
+      :count_page,
+      :fetch_kind,
       :sitemap_fetch,
       :url
     ])
     |> Map.put(:depth, 1)
   end
+
+  defp document_state(opts) do
+    %{
+      files: MapSet.new(),
+      pages: seed_page(opts),
+      reserved: 0,
+      start_ops: Store.ops_count(opts[:scope])
+    }
+  end
+
+  defp reduce_children(state, opts, base, children) do
+    Enum.reduce(children, state, fn child, state ->
+      fetch_document(opts, base, child, state)
+    end)
+  end
+
+  defp catalog_base(opts) do
+    case opts[:referrer_url] || opts[:url] do
+      url when is_binary(url) and url != "" -> url
+      _ -> ""
+    end
+  end
+
+  defp catalog_body(opts, body) do
+    with true <- catalog_media?(opts[:content_type]),
+         {:ok, inflated} <- inflate(body, max_body(opts)),
+         text when is_binary(text) <- decode_document(inflated),
+         true <- catalog_document?(text) do
+      {:ok, text}
+    else
+      _ -> :skip
+    end
+  end
+
+  defp catalog_media?(type), do: MediaType.feed?(type) or MediaType.xml?(type)
+
+  defp catalog_document?(text) do
+    text
+    |> String.trim_leading()
+    |> skip_markup_prolog()
+    |> root_local_name()
+    |> Kernel.in(@catalog_roots)
+  end
+
+  defp skip_markup_prolog(<<"<?", rest::binary>>) do
+    rest |> skip_until("?>") |> String.trim_leading() |> skip_markup_prolog()
+  end
+
+  defp skip_markup_prolog(<<"<!--", rest::binary>>) do
+    rest |> skip_until("-->") |> String.trim_leading() |> skip_markup_prolog()
+  end
+
+  defp skip_markup_prolog(<<"<!", rest::binary>>) do
+    rest |> skip_until(">") |> String.trim_leading() |> skip_markup_prolog()
+  end
+
+  defp skip_markup_prolog(text), do: text
+
+  defp root_local_name(<<"<", rest::binary>>) do
+    {name, _rest} = take_name(rest)
+    local_name(name)
+  end
+
+  defp root_local_name(_text), do: ""
 
   defp entries(body) do
     case decode_document(body) do
