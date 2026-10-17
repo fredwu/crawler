@@ -324,6 +324,135 @@ defmodule Crawler.RobotsCrawlTest do
     assert :counters.get(calls, 1) == 0
   end
 
+  test "a redirect into a disallowed path is not fetched", context do
+    ReqTestSite.expect_once(context.site, "GET", "/robots.txt", fn conn ->
+      resp(conn, 200, "User-agent: *\nDisallow: /private\n")
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/start", fn conn ->
+      html(conn, ~s|<a href="/go">g</a><script src="/app.js"></script>|)
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/go", fn conn ->
+      conn
+      |> put_resp_header("location", "/private")
+      |> resp(302, ~s|<a href="/after">x</a>|)
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/app.js", fn conn ->
+      conn
+      |> put_resp_header("content-type", "text/javascript")
+      |> put_resp_header("location", "/private/app.js")
+      |> resp(302, "")
+    end)
+
+    opts = crawl("#{context.url}/start", context, assets: ["js"])
+
+    assert Store.find_processed({"#{context.url}/start", opts.scope})
+    refute Store.find({"#{context.url}/private", opts.scope})
+    refute Store.find({"#{context.url}/after", opts.scope})
+    refute Store.find({"#{context.url}/private/app.js", opts.scope})
+  end
+
+  test "respect_robots false still follows a redirect", context do
+    ReqTestSite.expect_once(context.site, "GET", "/start", fn conn ->
+      html(conn, ~s|<a href="/go">g</a><script src="/app.js"></script>|)
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/go", fn conn ->
+      conn
+      |> put_resp_header("location", "/private")
+      |> resp(302, "")
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/private", &html(&1, "private"))
+
+    ReqTestSite.expect_once(context.site, "GET", "/app.js", fn conn ->
+      conn
+      |> put_resp_header("content-type", "text/javascript")
+      |> put_resp_header("location", "/private/app.js")
+      |> resp(302, "")
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/private/app.js", fn conn ->
+      conn |> put_resp_header("content-type", "text/javascript") |> resp(200, "js")
+    end)
+
+    opts =
+      crawl("#{context.url}/start", context, assets: ["js"], respect_robots: false)
+
+    assert Store.find_processed({"#{context.url}/private", opts.scope}).body == "private"
+    assert Store.find_processed({"#{context.url}/private/app.js", opts.scope}).body == "js"
+  end
+
+  test "an asset on another host does not import that host's sitemaps" do
+    hosts = ReqTestSite.open(hosts: 2)
+    cdn = hosts.site2
+
+    ReqTestSite.expect_once(cdn, "GET", "/robots.txt", fn conn ->
+      resp(conn, 200, """
+      User-agent: *
+      Sitemap: #{cdn.url}/list.xml
+      """)
+    end)
+
+    ReqTestSite.expect_once(hosts.site, "GET", "/start", fn conn ->
+      html(conn, """
+      <iframe src="#{cdn.url}/widget"></iframe>
+      <script src="#{cdn.url}/app.js"></script>
+      <img src="#{cdn.url}/pic.png">
+      """)
+    end)
+
+    ReqTestSite.expect_once(cdn, "GET", "/widget", &html(&1, "widget"))
+
+    ReqTestSite.expect_once(cdn, "GET", "/app.js", fn conn ->
+      conn |> put_resp_header("content-type", "text/javascript") |> resp(200, "app")
+    end)
+
+    ReqTestSite.expect_once(cdn, "GET", "/pic.png", fn conn ->
+      conn |> put_resp_header("content-type", "image/png") |> resp(200, "png")
+    end)
+
+    opts = crawl("#{hosts.url}/start", hosts, assets: ["js", "images"])
+
+    assert Store.find_processed({"#{cdn.url}/widget", opts.scope}).body == "widget"
+    assert Store.find_processed({"#{cdn.url}/app.js", opts.scope}).body == "app"
+    assert Store.find_processed({"#{cdn.url}/pic.png", opts.scope})
+    refute Store.find({"#{hosts.url}/injected", opts.scope})
+    refute Store.find({"#{cdn.url}/only-on-cdn", opts.scope})
+  end
+
+  test "a disallowed asset on another host is not fetched and its sitemaps stay unread" do
+    hosts = ReqTestSite.open(hosts: 2)
+    cdn = hosts.site2
+
+    ReqTestSite.expect_once(cdn, "GET", "/robots.txt", fn conn ->
+      resp(conn, 200, """
+      User-agent: *
+      Disallow: /widget
+      Sitemap: #{cdn.url}/list.xml
+      """)
+    end)
+
+    ReqTestSite.expect_once(hosts.site, "GET", "/start", fn conn ->
+      html(conn, """
+      <iframe src="#{cdn.url}/widget"></iframe>
+      <script src="#{cdn.url}/app.js"></script>
+      """)
+    end)
+
+    ReqTestSite.expect_once(cdn, "GET", "/app.js", fn conn ->
+      conn |> put_resp_header("content-type", "text/javascript") |> resp(200, "app")
+    end)
+
+    opts = crawl("#{hosts.url}/start", hosts, assets: ["js"])
+
+    assert Store.find_processed({"#{cdn.url}/app.js", opts.scope}).body == "app"
+    refute Store.find({"#{cdn.url}/widget", opts.scope})
+    refute Store.find({"#{hosts.url}/injected", opts.scope})
+  end
+
   defp waiting_robots?(scope, origin) do
     state = :sys.get_state(Store)
     match?({:loading, _, _, [_ | _]}, get_in(state.robots, [scope, origin]))

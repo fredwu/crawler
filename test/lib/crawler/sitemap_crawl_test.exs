@@ -5,6 +5,12 @@ defmodule Crawler.SitemapCrawlTest do
 
   alias Crawler.Store
 
+  defmodule RejectSkips do
+    @behaviour Crawler.Fetcher.UrlFilter.Spec
+
+    def filter(url, _opts), do: {:ok, URI.parse(url).path not in ["/skip-a", "/skip-b"]}
+  end
+
   test "prefixed xml queues a cdata address and a child sitemap", context do
     index = """
     <ns0:sitemapindex xmlns:ns0="http://www.sitemaps.org/schemas/sitemap/0.9">
@@ -495,6 +501,322 @@ defmodule Crawler.SitemapCrawlTest do
     assert Store.find_processed({"#{context.url}/wide", opts.scope}).body == "wide"
   end
 
+  test "a disallowed sitemap file is not downloaded", context do
+    index = """
+    <sitemapindex>
+      <sitemap><loc>#{context.url}/private/secret.xml</loc></sitemap>
+      <sitemap><loc>#{context.url}/kept.xml</loc></sitemap>
+    </sitemapindex>
+    """
+
+    ReqTestSite.expect_once(context.site, "GET", "/robots.txt", fn conn ->
+      resp(conn, 200, """
+      User-agent: *
+      Disallow: /private
+      Sitemap: #{context.url}/index.xml
+      """)
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/start", &html(&1, "start"))
+    ReqTestSite.expect_once(context.site, "GET", "/index.xml", &resp(&1, 200, index))
+
+    ReqTestSite.expect_once(context.site, "GET", "/kept.xml", fn conn ->
+      resp(conn, 200, ~s(<urlset><url><loc>#{context.url}/kept</loc></url></urlset>))
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/kept", &html(&1, "kept"))
+
+    opts = crawl("#{context.url}/start", context)
+
+    assert Store.find_processed({"#{context.url}/kept", opts.scope}).body == "kept"
+    refute Store.find({"#{context.url}/secret-page", opts.scope})
+  end
+
+  test "a sitemap redirect into a disallowed path is not followed", context do
+    ReqTestSite.expect_once(context.site, "GET", "/robots.txt", fn conn ->
+      resp(conn, 200, """
+      User-agent: *
+      Disallow: /private
+      Sitemap: #{context.url}/index.xml
+      """)
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/start", &html(&1, "start"))
+
+    ReqTestSite.expect_once(context.site, "GET", "/index.xml", fn conn ->
+      conn
+      |> put_resp_header("location", "#{context.url}/private/secret.xml")
+      |> resp(302, "")
+    end)
+
+    opts = crawl("#{context.url}/start", context)
+
+    assert Store.find_processed({"#{context.url}/start", opts.scope})
+    refute Store.find({"#{context.url}/secret-page", opts.scope})
+  end
+
+  test "a sitemap named by this site can redirect on another host" do
+    hosts = ReqTestSite.open(hosts: 2)
+    cdn = hosts.site2
+    listed = "#{hosts.url}/from-sitemap"
+
+    index = """
+    <sitemapindex>
+      <sitemap><loc>#{cdn.url}/child.xml</loc></sitemap>
+    </sitemapindex>
+    """
+
+    list = """
+    <urlset>
+      <url><loc>#{listed}</loc></url>
+      <url><loc>#{hosts.url}/secret</loc></url>
+      <url><loc>#{cdn.url}/only-on-cdn</loc></url>
+    </urlset>
+    """
+
+    ReqTestSite.expect_once(hosts.site, "GET", "/robots.txt", fn conn ->
+      resp(conn, 200, """
+      User-agent: *
+      Disallow: /secret
+      Sitemap: #{cdn.url}/index.xml
+      Sitemap: #{cdn.url}/hidden.xml
+      """)
+    end)
+
+    ReqTestSite.expect_once(cdn, "GET", "/robots.txt", fn conn ->
+      resp(conn, 200, """
+      User-agent: *
+      Disallow: /hidden.xml
+      Sitemap: #{cdn.url}/other.xml
+      """)
+    end)
+
+    ReqTestSite.expect_once(hosts.site, "GET", "/start", &html(&1, "start"))
+    ReqTestSite.expect_once(cdn, "GET", "/index.xml", &resp(&1, 200, index))
+
+    ReqTestSite.expect_once(cdn, "GET", "/child.xml", fn conn ->
+      conn
+      |> put_resp_header("location", "#{cdn.url}/list.xml")
+      |> resp(302, "")
+    end)
+
+    ReqTestSite.expect_once(cdn, "GET", "/list.xml", &resp(&1, 200, list))
+    ReqTestSite.expect_once(hosts.site, "GET", "/from-sitemap", &html(&1, "listed"))
+
+    opts = crawl("#{hosts.url}/start", hosts)
+
+    assert Store.find_processed({listed, opts.scope}).body == "listed"
+    refute Store.find({"#{hosts.url}/secret", opts.scope})
+    refute Store.find({"#{cdn.url}/only-on-cdn", opts.scope})
+    refute Store.find({"#{cdn.url}/index.xml", opts.scope})
+    assert Store.ops_count(opts.scope) == 2
+  end
+
+  test "a disallowed twin host does not use up the page limit" do
+    index = """
+    <sitemapindex>
+      <sitemap><loc>http://example.com/no.xml</loc></sitemap>
+      <sitemap><loc>http://example.com/good.xml</loc></sitemap>
+    </sitemapindex>
+    """
+
+    blocked = """
+    <urlset>
+      <url><loc>http://www.example.com/no-1</loc></url>
+      <url><loc>http://www.example.com/no-2</loc></url>
+    </urlset>
+    """
+
+    kept = ~s(<urlset><url><loc>http://example.com/good</loc></url></urlset>)
+
+    {agent, context} =
+      serve(fn request ->
+        cond do
+          request.url.host == "www.example.com" and request.url.path == "/robots.txt" ->
+            robots_body("Disallow: /\nSitemap: http://www.example.com/www-list.xml\n")
+
+          request.url.host == "example.com" and request.url.path == "/robots.txt" ->
+            robots_body("Sitemap: http://example.com/index.xml\n")
+
+          request.url.host == "example.com" and request.url.path == "/start" ->
+            adapter_html("start")
+
+          request.url.host == "example.com" and request.url.path == "/index.xml" ->
+            adapter_xml(index)
+
+          request.url.host == "example.com" and request.url.path == "/no.xml" ->
+            adapter_xml(blocked)
+
+          request.url.host == "example.com" and request.url.path == "/good.xml" ->
+            adapter_xml(kept)
+
+          request.url.host == "example.com" and request.url.path == "/good" ->
+            adapter_html("good")
+
+          true ->
+            Req.Response.new(status: 404, body: "")
+        end
+      end)
+
+    opts = crawl("http://example.com/start", context, max_pages: 2)
+
+    assert Store.find_processed({"http://example.com/start", opts.scope}).body == "start"
+    assert Store.find_processed({"http://example.com/good", opts.scope}).body == "good"
+    refute Store.find({"http://www.example.com/no-1", opts.scope})
+    refute Store.find({"http://www.example.com/no-2", opts.scope})
+    assert Store.ops_count(opts.scope) == 2
+    refute requested?(agent, "http", "www.example.com", "/no-1")
+    refute requested?(agent, "http", "www.example.com", "/no-2")
+    refute requested?(agent, "http", "www.example.com", "/www-list.xml")
+    assert requested?(agent, "http", "www.example.com", "/robots.txt")
+  end
+
+  test "a disallowed http and https twin does not use up the page limit" do
+    index = """
+    <sitemapindex>
+      <sitemap><loc>http://example.com/no.xml</loc></sitemap>
+      <sitemap><loc>http://example.com/good.xml</loc></sitemap>
+    </sitemapindex>
+    """
+
+    blocked = """
+    <urlset>
+      <url><loc>https://example.com/no-1</loc></url>
+      <url><loc>https://example.com/no-2</loc></url>
+    </urlset>
+    """
+
+    kept = ~s(<urlset><url><loc>http://example.com/good</loc></url></urlset>)
+
+    {agent, context} =
+      serve(fn request ->
+        cond do
+          request.url.scheme == "https" and request.url.host == "example.com" and
+              request.url.path == "/robots.txt" ->
+            robots_body("Disallow: /\nSitemap: https://example.com/https-only.xml\n")
+
+          request.url.host == "example.com" and request.url.path == "/robots.txt" ->
+            robots_body("Sitemap: http://example.com/index.xml\n")
+
+          request.url.host == "example.com" and request.url.path == "/start" ->
+            adapter_html("start")
+
+          request.url.host == "example.com" and request.url.path == "/index.xml" ->
+            adapter_xml(index)
+
+          request.url.host == "example.com" and request.url.path == "/no.xml" ->
+            adapter_xml(blocked)
+
+          request.url.host == "example.com" and request.url.path == "/good.xml" ->
+            adapter_xml(kept)
+
+          request.url.host == "example.com" and request.url.path == "/good" ->
+            adapter_html("good")
+
+          true ->
+            Req.Response.new(status: 404, body: "")
+        end
+      end)
+
+    opts = crawl("http://example.com/start", context, max_pages: 2)
+
+    assert Store.find_processed({"http://example.com/good", opts.scope}).body == "good"
+    refute Store.find({"https://example.com/no-1", opts.scope})
+    refute Store.find({"https://example.com/no-2", opts.scope})
+    assert Store.ops_count(opts.scope) == 2
+    refute requested?(agent, "https", "example.com", "/no-1")
+    refute requested?(agent, "https", "example.com", "/https-only.xml")
+    assert requested?(agent, "https", "example.com", "/robots.txt")
+  end
+
+  test "urls the filter will reject do not use up the sitemap page limit", context do
+    index = """
+    <sitemapindex>
+      <sitemap><loc>#{context.url}/skip.xml</loc></sitemap>
+      <sitemap><loc>#{context.url}/keep.xml</loc></sitemap>
+    </sitemapindex>
+    """
+
+    skipped = """
+    <urlset>
+      <url><loc>#{context.url}/skip-a</loc></url>
+      <url><loc>#{context.url}/skip-b</loc></url>
+    </urlset>
+    """
+
+    ReqTestSite.expect_once(context.site, "GET", "/robots.txt", fn conn ->
+      resp(conn, 200, "User-agent: *\nSitemap: #{context.url}/index.xml\n")
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/start", &html(&1, "start"))
+    ReqTestSite.expect_once(context.site, "GET", "/index.xml", &resp(&1, 200, index))
+    ReqTestSite.expect_once(context.site, "GET", "/skip.xml", &resp(&1, 200, skipped))
+
+    ReqTestSite.expect_once(context.site, "GET", "/keep.xml", fn conn ->
+      resp(conn, 200, ~s(<urlset><url><loc>#{context.url}/keep</loc></url></urlset>))
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/keep", &html(&1, "keep"))
+
+    opts =
+      crawl("#{context.url}/start", context,
+        max_pages: 2,
+        url_filter: RejectSkips
+      )
+
+    assert Store.find_processed({"#{context.url}/keep", opts.scope}).body == "keep"
+    refute Store.find({"#{context.url}/skip-a", opts.scope})
+    refute Store.find({"#{context.url}/skip-b", opts.scope})
+    assert Store.ops_count(opts.scope) == 2
+  end
+
+  test "pages past the depth limit do not use up a later image sitemap", context do
+    index = """
+    <sitemapindex>
+      <sitemap><loc>#{context.url}/pages.xml</loc></sitemap>
+      <sitemap><loc>#{context.url}/images.xml</loc></sitemap>
+    </sitemapindex>
+    """
+
+    pages = """
+    <urlset>
+      <url><loc>#{context.url}/skip-a</loc></url>
+      <url><loc>#{context.url}/skip-b</loc></url>
+    </urlset>
+    """
+
+    images = """
+    <urlset>
+      <url>
+        <image:image><image:loc>#{context.url}/keep.jpg</image:loc></image:image>
+      </url>
+    </urlset>
+    """
+
+    ReqTestSite.expect_once(context.site, "GET", "/robots.txt", fn conn ->
+      resp(conn, 200, "User-agent: *\nSitemap: #{context.url}/index.xml\n")
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/start", &html(&1, "start"))
+    ReqTestSite.expect_once(context.site, "GET", "/index.xml", &resp(&1, 200, index))
+    ReqTestSite.expect_once(context.site, "GET", "/pages.xml", &resp(&1, 200, pages))
+    ReqTestSite.expect_once(context.site, "GET", "/images.xml", &resp(&1, 200, images))
+    ReqTestSite.expect_once(context.site, "GET", "/keep.jpg", &asset(&1, "image/jpeg"))
+
+    opts =
+      crawl("#{context.url}/start", context,
+        max_pages: 2,
+        max_depths: 1,
+        assets: ["images"]
+      )
+
+    assert Store.find_processed({"#{context.url}/start", opts.scope}).body == "start"
+    assert Store.find_processed({"#{context.url}/keep.jpg", opts.scope})
+    refute Store.find({"#{context.url}/skip-a", opts.scope})
+    refute Store.find({"#{context.url}/skip-b", opts.scope})
+    assert Store.ops_count(opts.scope) == 2
+  end
+
   defp robots(site, sitemap) do
     ReqTestSite.expect_once(site, "GET", "/robots.txt", fn conn ->
       resp(conn, 200, "User-agent: *\nSitemap: #{sitemap}\n")
@@ -533,5 +855,35 @@ defmodule Crawler.SitemapCrawlTest do
     conn
     |> put_resp_header("content-type", type)
     |> resp(200, "asset")
+  end
+
+  defp serve(fun) do
+    {:ok, agent} = Agent.start_link(fn -> [] end)
+
+    adapter = fn request ->
+      Agent.update(agent, fn paths ->
+        [{request.url.scheme, request.url.host, request.url.path} | paths]
+      end)
+
+      {request, fun.(request)}
+    end
+
+    {agent, %{req_options: [adapter: adapter, retry: false]}}
+  end
+
+  defp requested?(agent, scheme, host, path) do
+    {scheme, host, path} in Agent.get(agent, & &1)
+  end
+
+  defp robots_body(rules) do
+    Req.Response.new(status: 200, body: "User-agent: *\n#{rules}")
+  end
+
+  defp adapter_html(body) do
+    Req.Response.new(status: 200, body: body, headers: [{"content-type", "text/html"}])
+  end
+
+  defp adapter_xml(body) do
+    Req.Response.new(status: 200, body: body, headers: [{"content-type", "application/xml"}])
   end
 end

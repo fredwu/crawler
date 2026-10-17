@@ -1005,7 +1005,7 @@ defmodule Crawler.CrawlHTTPTest do
       record(hits, request)
 
       cond do
-        request.url.host == "www.example.com" and request.url.path == "/robots.txt" ->
+        request.url.host == "example.com" and request.url.path == "/robots.txt" ->
           {request,
            Req.Response.new(
              status: 200,
@@ -1078,7 +1078,7 @@ defmodule Crawler.CrawlHTTPTest do
 
     assert hop(hits, "cdn.test", "/sitemap.xml").cookie == %{}
     assert hop(hits, "cdn.test", "/pic.png").cookie == %{"part" => "1"}
-    assert hop(hits, "cdn.test", "/robots.txt").cookie == %{"part" => "1"}
+    assert hop(hits, "cdn.test", "/robots.txt").cookie == %{}
 
     assert Store.cookie_header(scope, "https://cdn.test/pic.png", nil, %{
              site: "https://example.com/start",

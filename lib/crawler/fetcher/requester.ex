@@ -7,6 +7,7 @@ defmodule Crawler.Fetcher.Requester do
   alias Crawler.Fetcher.UrlFilter
   alias Crawler.HTTP
   alias Crawler.HTTP.Body
+  alias Crawler.Robots
   alias Crawler.Store
 
   @fetch_opts [
@@ -144,14 +145,28 @@ defmodule Crawler.Fetcher.Requester do
 
   defp timeout_opts(_timeout), do: []
 
+  # The next URL is part of this fetch. robots.txt itself may redirect to
+  # another host's rules file. Every other hop has to be allowed for the
+  # destination, including a sitemap file. Callers that never set
+  # `:respect_robots` keep the previous URL-filter check.
   defp allow_redirect?(url, opts) do
-    if opts[:robots_fetch] == true or opts[:sitemap_fetch] == true do
-      http_url?(url)
-    else
-      filter = opts[:url_filter] || UrlFilter
-      opts = opts |> Enum.into(%{}) |> Map.put(:url, url)
-      match?({:ok, true}, filter.filter(url, opts))
+    opts = opts |> Enum.into(%{}) |> Map.put(:url, url)
+
+    cond do
+      opts[:robots_fetch] == true ->
+        http_url?(url)
+
+      opts[:sitemap_fetch] == true ->
+        http_url?(url) and robots_allow?(opts)
+
+      true ->
+        filter = opts[:url_filter] || UrlFilter
+        match?({:ok, true}, filter.filter(url, opts)) and robots_allow?(opts)
     end
+  end
+
+  defp robots_allow?(opts) do
+    opts[:respect_robots] != true or Robots.permitted?(opts)
   end
 
   defp http_url?(url) do

@@ -2,6 +2,7 @@ defmodule Crawler.Sitemap do
   @moduledoc false
 
   alias Crawler.Charset.Encoding
+  alias Crawler.Fetcher.Policer
   alias Crawler.Fetcher.Requester
   alias Crawler.Fetcher.Retrier
   alias Crawler.HTMLReferences
@@ -16,8 +17,6 @@ defmodule Crawler.Sitemap do
 
   def follow(opts, origin, rules) when is_map(rules) do
     state = %{
-      origin: origin,
-      rules: rules,
       files: MapSet.new(),
       pages: seed_page(opts),
       reserved: 0,
@@ -75,6 +74,10 @@ defmodule Crawler.Sitemap do
   end
 
   defp fetch_new(opts, url, state) do
+    if sitemap_allowed?(opts, url), do: read_sitemap(opts, url, state), else: state
+  end
+
+  defp read_sitemap(opts, url, state) do
     case fetch_text(opts, url) do
       {:ok, body, final} ->
         {urls, children} = entries(body)
@@ -87,6 +90,10 @@ defmodule Crawler.Sitemap do
       :skip ->
         state
     end
+  end
+
+  defp sitemap_allowed?(opts, url) do
+    Robots.permitted?(sitemap_opts(opts, url))
   end
 
   defp fetch_text(opts, url) do
@@ -278,19 +285,23 @@ defmodule Crawler.Sitemap do
     if http_url?(url), do: reserve_fetch(opts, url, &image_opts/1, state), else: state
   end
 
-  # A robots rejection or a repeated URL does not finish a new page, so it must
-  # not take a budget slot. Rules for this origin are already stored.
-  # `permitted?/1` on another host would fetch that host and walk its sitemaps.
+  # A URL this crawl will not fetch does not finish a page, so it must not take
+  # a budget slot. Depth and the URL filter are decided here, before the queue
+  # runs. Another host's robots.txt is read only to answer this check.
   defp reserve_fetch(opts, url, opts_fun, state) do
     key = URL.canonical(url)
+    crawl_opts = opts |> opts_fun.() |> Map.put(:url, url)
 
     cond do
       MapSet.member?(state.pages, key) -> state
       stored?(opts, url) -> remember_page(state, key)
-      not fetch_allowed?(opts, state, url) -> remember_page(state, key)
+      not fetchable?(crawl_opts) -> remember_page(state, key)
+      not fetch_allowed?(crawl_opts) -> remember_page(state, key)
       true -> admit(opts, url, opts_fun, remember_page(state, key))
     end
   end
+
+  defp fetchable?(opts), do: match?({:ok, _}, Policer.police(opts))
 
   defp admit(opts, url, opts_fun, state) do
     if budget_open?(opts) do
@@ -311,11 +322,7 @@ defmodule Crawler.Sitemap do
 
   defp stored?(opts, url), do: Store.find({url, opts[:scope]}) != nil
 
-  defp fetch_allowed?(%{respect_robots: false}, _state, _url), do: true
-
-  defp fetch_allowed?(opts, %{origin: origin, rules: rules}, url) do
-    Site.origin(url) != origin or Robots.allowed?(rules, url, opts[:user_agent])
-  end
+  defp fetch_allowed?(opts), do: Robots.permitted?(opts)
 
   defp seed_page(%{url: url}) when is_binary(url), do: MapSet.new([URL.canonical(url)])
   defp seed_page(_opts), do: MapSet.new()

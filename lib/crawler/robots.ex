@@ -91,12 +91,20 @@ defmodule Crawler.Robots do
     case fetch(opts, origin) do
       {:cache, rules} ->
         Store.finish_robots(opts[:scope], origin, rules)
-        Sitemap.follow(opts, origin, rules)
+        follow_site_sitemaps(opts, origin, rules)
         rules
 
       {:temporary, rules} ->
         Store.forget_robots(opts[:scope], origin, rules)
         rules
+    end
+  end
+
+  # Sitemap directives belong to the crawl site. Loading robots.txt in order to
+  # vet one URL on another host must not walk the sitemaps that host lists.
+  defp follow_site_sitemaps(opts, origin, rules) do
+    if origin == Site.origin(opts[:site] || opts[:url]) do
+      Sitemap.follow(opts, origin, rules)
     end
   end
 
