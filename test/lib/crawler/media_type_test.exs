@@ -40,6 +40,8 @@ defmodule Crawler.MediaTypeTest do
     refute MediaType.xml?(nil)
     assert MediaType.feed?(" Application/RSS+XML ; charset=utf-8 ")
     assert MediaType.feed?("application/atom+xml")
+    assert MediaType.feed?("application/rdf+xml")
+    assert MediaType.feed?(" Application/RDF+XML ; charset=utf-8 ")
     refute MediaType.feed?("application/xml")
     assert MediaType.xml?(" Text/XML ; charset=utf-8 ")
     assert MediaType.xml?("application/xml")

@@ -3,6 +3,24 @@ defmodule Crawler.CharsetTest do
 
   alias Crawler.Charset
 
+  test "leaves text/xml unchanged when no charset is declared" do
+    body = <<0x3C, 0x00, 0xE9>>
+    assert decode(body, "text/xml", "text/xml") == body
+  end
+
+  test "a text/xml charset of utf-16 follows the byte order" do
+    xml = ~s(<?xml version="1.0" encoding="UTF-16"?><r>café</r>)
+    little = :unicode.characters_to_binary(xml, :utf8, {:utf16, :little})
+    big = :unicode.characters_to_binary(xml, :utf8, {:utf16, :big})
+
+    assert decode(little, "text/xml", "text/xml; charset=utf-16") == xml
+    assert decode(big, "text/xml", "text/xml; charset=UTF-16") == xml
+    assert decode(xml, "text/xml", "text/xml; charset=utf-16") == xml
+    assert decode(little, "text/xml", "text/xml; charset=utf-16le") == xml
+    assert decode(little, "application/xml", "application/xml; charset=utf-16") == little
+    assert decode(<<0x61, 0x00>>, "text/html", "text/html; charset=utf-16") == "\u6100"
+  end
+
   test "decodes Latin-1 aliases in an HTTP charset as Windows-1252" do
     for label <- ["iso-8859-1", "latin1", "latin-1", "ascii", "us-ascii"] do
       assert decode("caf" <> <<0xE9>>, "text/html", "text/html; charset=" <> label) == "café"

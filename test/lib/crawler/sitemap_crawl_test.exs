@@ -234,6 +234,61 @@ defmodule Crawler.SitemapCrawlTest do
     refute Store.find({"#{cdn.url}/caption.txt", opts.scope})
   end
 
+  test "markup in a video description does not hide the page or the video file", context do
+    cdn = context.site2
+
+    body = """
+    <urlset xmlns:video="http://www.google.com/schemas/sitemap-video/1.1"
+            xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+      <url>
+        <video:video>
+          <video:description>A < B</video:description>
+          <video:content_loc>#{cdn.url}/clip.mp4</video:content_loc>
+          <video:player_loc>#{cdn.url}/player</video:player_loc>
+        </video:video>
+        <image:image><image:caption>A < B</image:caption></image:image>
+        <loc>#{context.url}/page</loc>
+      </url>
+    </urlset>
+    """
+
+    robots(context.site, "#{context.url}/sitemap.xml")
+    ReqTestSite.expect_once(context.site, "GET", "/start", &html(&1, "start"))
+    ReqTestSite.expect_once(context.site, "GET", "/sitemap.xml", &resp(&1, 200, body))
+    ReqTestSite.expect_once(context.site, "GET", "/page", &html(&1, "page"))
+    ReqTestSite.expect_once(cdn, "GET", "/robots.txt", &resp(&1, 404, ""))
+    ReqTestSite.expect_once(cdn, "GET", "/clip.mp4", &asset(&1, "video/mp4"))
+
+    opts = crawl("#{context.url}/start", context, assets: ["images"])
+
+    assert Store.find_processed({"#{context.url}/page", opts.scope}).body == "page"
+    assert Store.find_processed({"#{cdn.url}/clip.mp4", opts.scope})
+    refute Store.find({"#{cdn.url}/player", opts.scope})
+  end
+
+  test "a relative image address uses xml:base", context do
+    body = """
+    <urlset xmlns:image="http://www.google.com/schemas/sitemap-image/1.1" xml:base="/images/">
+      <url>
+        <loc>#{context.url}/gallery</loc>
+        <image:image><image:loc>cover.jpg</image:loc></image:image>
+      </url>
+    </urlset>
+    """
+
+    robots(context.site, "#{context.url}/sitemap.xml")
+    ReqTestSite.expect_once(context.site, "GET", "/start", &html(&1, "start"))
+    ReqTestSite.expect_once(context.site, "GET", "/sitemap.xml", &resp(&1, 200, body))
+    ReqTestSite.expect_once(context.site, "GET", "/gallery", &html(&1, "gallery"))
+    ReqTestSite.expect_once(context.site, "GET", "/images/cover.jpg", &asset(&1, "image/jpeg"))
+
+    opts = crawl("#{context.url}/start", context, assets: ["images"])
+
+    assert Store.find_processed({"#{context.url}/gallery", opts.scope}).body == "gallery"
+    assert Store.find_processed({"#{context.url}/images/cover.jpg", opts.scope})
+    refute Store.find({"#{context.url}/cover.jpg", opts.scope})
+  end
+
   test "sitemap images are left alone when image assets are off", context do
     body = """
     <urlset xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">

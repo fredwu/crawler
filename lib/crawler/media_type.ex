@@ -56,7 +56,7 @@ defmodule Crawler.MediaType do
   def feed?(nil), do: false
 
   def feed?(type) do
-    normalize(type) in ["application/rss+xml", "application/atom+xml"]
+    normalize(type) in ["application/rss+xml", "application/atom+xml", "application/rdf+xml"]
   end
 
   def xml?(nil), do: false
