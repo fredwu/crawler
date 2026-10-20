@@ -100,7 +100,17 @@ defmodule Crawler.HTMLReferences do
   end
 
   def preload_goal(attrs) do
-    if "modulepreload" in rel_tokens(attrs), do: :module, else: :script
+    cond do
+      "modulepreload" in rel_tokens(attrs) -> :module
+      module_worklet?(attrs) -> :module
+      true -> :script
+    end
+  end
+
+  # Workers and worklets keep their own module map. The page import map stays
+  # with ordinary scripts.
+  def worker_entry?(attrs) do
+    "preload" in rel_tokens(attrs) and worker_as?(normalized(attrs, "as"))
   end
 
   defp script_type(attrs) do
@@ -125,6 +135,7 @@ defmodule Crawler.HTMLReferences do
   def role(tag, _attr, _attrs) when tag in @svg_paint, do: "img"
   def role("link", "imagesrcset", _attrs), do: "img"
   def role("link", "href", attrs), do: link_role(attrs)
+  def role("input", "src", attrs), do: if(image_button?(attrs), do: "img", else: "link")
   def role(tag, _attr, _attrs) when tag in ["img", "source", "video", "audio", "track"], do: tag
   def role(_tag, _attr, _attrs), do: "link"
 
@@ -135,7 +146,7 @@ defmodule Crawler.HTMLReferences do
     as = normalized(attrs, "as")
 
     Enum.any?(rel, &(&1 in ["stylesheet", "modulepreload"])) or
-      ("preload" in rel and as in ["script", "style"])
+      ("preload" in rel and rewritten_preload?(as))
   end
 
   def integrity_resource?(_tag, _attrs), do: false
@@ -231,6 +242,10 @@ defmodule Crawler.HTMLReferences do
   defp element_attributes(tag, _attrs, opts, :html) when tag in ["audio", "track"],
     do: channel_attributes(opts, "images", ["src"])
 
+  defp element_attributes("input", attrs, opts, :html) do
+    if image_button?(attrs), do: channel_attributes(opts, "images", ["src"]), else: []
+  end
+
   defp element_attributes(_tag, _attrs, _opts, :html), do: []
 
   defp channel_attributes(opts, channel, names) do
@@ -288,6 +303,15 @@ defmodule Crawler.HTMLReferences do
 
       "preload" in rels and as == "track" ->
         choice("track", "link", nil, false, {:track, "images"})
+
+      "preload" in rels and as in ["audio", "video"] ->
+        choice(as, "link", nil, false, {:asset, "images"})
+
+      "preload" in rels and as == "document" ->
+        choice("a", "a", nil, false, :always)
+
+      "preload" in rels and worker_as?(as) ->
+        choice("script", "link", nil, false, {:asset, "js"})
 
       icon_rel?(rels) ->
         choice("img", "link", nil, false, {:asset, "images"})
@@ -360,7 +384,34 @@ defmodule Crawler.HTMLReferences do
   defp disabled?(attrs), do: attribute(attrs, "disabled") != nil
   defp from_header?(attrs), do: attribute(attrs, "crawler-from-header") != nil
 
-  defp icon_rel?(rel), do: Enum.any?(rel, &(&1 in ["icon", "apple-touch-icon", "mask-icon"]))
+  defp icon_rel?(rel) do
+    Enum.any?(
+      rel,
+      &(&1 in [
+          "icon",
+          "apple-touch-icon",
+          "apple-touch-icon-precomposed",
+          "apple-touch-startup-image",
+          "mask-icon"
+        ])
+    )
+  end
+
+  defp image_button?(attrs), do: normalized(attrs, "type") == "image"
+
+  defp module_worklet?(attrs) do
+    "preload" in rel_tokens(attrs) and normalized(attrs, "as") in ["paintworklet", "audioworklet"]
+  end
+
+  defp worker_as?(as) do
+    as in ["worker", "serviceworker", "sharedworker", "paintworklet", "audioworklet"]
+  end
+
+  # The saved worker, worklet, or document no longer matches its original hash.
+  # Audio, video, and fetch bytes stay intact, so their hashes stay too.
+  defp rewritten_preload?(as) do
+    as in ["script", "style", "document"] or worker_as?(as)
+  end
 
   defp style_attribute?(attrs, opts),
     do: enabled?(opts, "css") and attribute(attrs, "style") != nil

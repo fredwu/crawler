@@ -121,7 +121,7 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
     assert Store.find_processed({context.url <> "/header-next-page", opts.scope})
   end
 
-  test "preload fetch and track follow the asset channels", context do
+  test "preload fetch, track, and audio follow the asset channels", context do
     page = context.url <> "/preloads"
     preload = preload_document()
 
@@ -138,6 +138,8 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
       expect_bytes(context, path, "text/vtt", "WEBVTT")
     end
 
+    expect_bytes(context, "/preload-audio.mp3", "audio/mpeg", "audio")
+
     {opts, root} = run(page, context, assets: ["css", "images"])
     saved = File.read!(saved(root, page))
 
@@ -147,19 +149,20 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
           "/a.vtt",
           "/b.vtt",
           "/header.vtt",
-          "/from-track.vtt"
+          "/from-track.vtt",
+          "/preload-audio.mp3"
         ] do
       assert Store.find_processed({context.url <> path, opts.scope})
     end
 
-    for path <- ["/c.vtt", "/nope.mp3", "/spaced.json"] do
+    for path <- ["/c.vtt", "/spaced.json"] do
       refute Store.find({context.url <> path, opts.scope})
     end
 
     assert_points(saved, page, context.url <> "/data.json", root)
+    assert_points(saved, page, context.url <> "/preload-audio.mp3", root)
     assert saved =~ ~s|href="/spaced.json"|
     assert saved =~ ~s|href="/c.vtt"|
-    assert saved =~ ~s|href="/nope.mp3"|
   end
 
   test "preload fetch does not require images and track does", context do
@@ -174,14 +177,17 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
       expect_bytes(context, path, "application/json", "{}")
     end
 
-    {opts, _root} = run(page, context, assets: ["css"])
+    {opts, root} = run(page, context, assets: ["css"])
+    saved = File.read!(saved(root, page))
 
     assert Store.find_processed({context.url <> "/data.json", opts.scope})
     assert Store.find_processed({context.url <> "/header.json", opts.scope})
 
-    for path <- ["/a.vtt", "/b.vtt", "/header.vtt", "/from-track.vtt"] do
+    for path <- ["/a.vtt", "/b.vtt", "/header.vtt", "/from-track.vtt", "/preload-audio.mp3"] do
       refute Store.find({context.url <> path, opts.scope})
     end
+
+    assert saved =~ ~s|href="/preload-audio.mp3"|
   end
 
   test "preload as=fetch does not crawl links inside the response", context do
@@ -519,7 +525,7 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
           "/header.vtt",
           "/from-track.vtt",
           "/c.vtt",
-          "/nope.mp3",
+          "/preload-audio.mp3",
           "/spaced.json"
         ] do
       refute Store.find({context.url <> path, opts.scope})
@@ -842,7 +848,7 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
     <link rel="preload" as="track" href="/a.vtt">
     <link rel="preload" as="track" type="text/vtt; charset=utf-8" href="/b.vtt">
     <link rel="preload" as="track" type="text/plain" href="/c.vtt">
-    <link rel="preload" as="audio" href="/nope.mp3">
+    <link rel="preload" as="audio" href="/preload-audio.mp3">
     <link rel="preload" as=" fetch " href="/spaced.json">
     <track src="/from-track.vtt">
     """

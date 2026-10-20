@@ -34,7 +34,7 @@ defmodule Crawler.Parser.CssParser.Scanner do
   defp step(<<"#", body::binary>>, offset, state) do
     {_name, tail} = Identifier.take(body)
     finish = offset + 1 + byte_size(body) - byte_size(tail)
-    walk(tail, finish, %{state | stack: used_candidate(state.stack), import?: false})
+    walk(tail, finish, %{state | stack: consume_hash(state.stack), import?: false})
   end
 
   defp step(<<")", tail::binary>>, offset, state) do
@@ -96,12 +96,18 @@ defmodule Crawler.Parser.CssParser.Scanner do
   end
 
   defp function(name, body, offset, state) do
-    frame = if name in ["image-set", "-webkit-image-set"], do: {:image_set, true}, else: :other
-    walk(body, offset, %{state | stack: [frame | state.stack], import?: false})
+    walk(body, offset, %{state | stack: [function_frame(name) | state.stack], import?: false})
   end
 
+  defp function_frame(name) when name in ["image-set", "-webkit-image-set"],
+    do: {:image_set, true}
+
+  defp function_frame("image"), do: {:image, true}
+  defp function_frame(_name), do: :other
+
+  # image-set() accepts a bare URL. image() accepts a string or url() only.
   defp atom(body, tail, offset, finish, state) do
-    if candidate?(state.stack) do
+    if image_set_candidate?(state.stack) do
       {token, tail, finish} = Value.bare(body, offset)
       state = if bare_url?(token.value), do: add(state, token), else: state
       walk(tail, finish, %{state | stack: used_candidate(state.stack), import?: false})
@@ -113,11 +119,18 @@ defmodule Crawler.Parser.CssParser.Scanner do
   defp add(state, %{value: ""}), do: state
   defp add(state, token), do: %{state | resources: [token | state.resources]}
   defp candidate?([{:image_set, true} | _]), do: true
+  defp candidate?([{:image, true} | _]), do: true
   defp candidate?(_stack), do: false
+  defp image_set_candidate?([{:image_set, true} | _]), do: true
+  defp image_set_candidate?(_stack), do: false
   defp used_candidate([{:image_set, _candidate} | tail]), do: [{:image_set, false} | tail]
+  defp used_candidate([{:image, _candidate} | tail]), do: [{:image, false} | tail]
   defp used_candidate(stack), do: stack
   defp next_candidate([{:image_set, _candidate} | tail]), do: [{:image_set, true} | tail]
+  defp next_candidate([{:image, _candidate} | tail]), do: [{:image, true} | tail]
   defp next_candidate(stack), do: stack
+  defp consume_hash([{:image, _candidate} | _tail] = stack), do: stack
+  defp consume_hash(stack), do: used_candidate(stack)
 
   defp bare_url?(value) do
     String.contains?(value, ["/", "."]) and

@@ -49,6 +49,42 @@ defmodule Crawler.Snapper.LinkReplacerIntegrityTest do
     assert {:ok, ^inline} = LinkReplacer.replace_links(inline, opts())
   end
 
+  test "drops integrity on rewritten worker and document preloads and keeps it on media and fetch" do
+    dropped = [
+      {"worker", "w.js"},
+      {"ServiceWorker", "sw.js"},
+      {"sharedworker", "shared.js"},
+      {"paintworklet", "paint.js"},
+      {"audioworklet", "heard.js"},
+      {"document", "next.html"}
+    ]
+
+    kept = [
+      {"audio", "clip.mp3"},
+      {"Video", "film.mp4"},
+      {"fetch", "notes.html"}
+    ]
+
+    source =
+      Enum.map_join(dropped ++ kept, "\n", fn {as, file} ->
+        ~s|<link rel="preload" as="#{as}" href="#{file}" integrity="#{@integrity}">|
+      end)
+
+    assert {:ok, body} =
+             LinkReplacer.replace_links(source, %{opts() | assets: ["css", "js", "images"]})
+
+    for {as, file} <- dropped do
+      offline = Linker.offline_link(@page, file)
+      assert body =~ ~s|as="#{as}" href="#{offline}">|
+      refute body =~ ~s|as="#{as}" href="#{offline}" integrity="#{@integrity}"|
+    end
+
+    for {as, file} <- kept do
+      offline = Linker.offline_link(@page, file)
+      assert body =~ ~s|as="#{as}" href="#{offline}" integrity="#{@integrity}"|
+    end
+  end
+
   test "preserves integrity on rewritten image, font and icon references" do
     source = """
     <link rel="preload" as="image" href="photo.png" integrity="#{@integrity}">

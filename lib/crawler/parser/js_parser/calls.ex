@@ -17,6 +17,10 @@ defmodule Crawler.Parser.JsParser.Calls do
                "^#{@gap}*,#{@gap}*import#{@gap}*\\.#{@gap}*meta#{@gap}*\\.#{@gap}*url#{@gap}*\\)"
              )
   @import_scripts Regex.compile!("(?<![\\w$.])importScripts#{@gap}*(\\()")
+  @ident "[A-Za-z_$][A-Za-z0-9_$]*"
+  @worklet Regex.compile!(
+             "(?<![\\w$])(?:(?:#{@ident}#{@gap}*\\.#{@gap}*)?CSS#{@gap}*\\.#{@gap}*paintWorklet|(?:#{@ident}#{@gap}*\\.#{@gap}*)+audioWorklet)#{@gap}*\\.#{@gap}*addModule#{@gap}*(\\()"
+           )
 
   # The scanner keeps `import` visible and masks every other identifier, so
   # these calls are matched on the original source. Paren depth still uses the
@@ -43,7 +47,12 @@ defmodule Crawler.Parser.JsParser.Calls do
 
   defp workers(source, masked, strings, goal) do
     meta = if goal == :module, do: worker_urls(source, masked, strings), else: []
-    meta ++ worker_strings(source, masked, strings) ++ registers(source, masked, strings)
+
+    meta ++
+      worklet_urls(source, masked, strings) ++
+      worker_strings(source, masked, strings) ++
+      worklet_strings(source, masked, strings) ++
+      registers(source, masked, strings)
   end
 
   defp worker_urls(source, masked, strings) do
@@ -74,6 +83,40 @@ defmodule Crawler.Parser.JsParser.Calls do
            true <- literal_argument?(masked, {at, len}),
            {:ok, close} <- call_end(masked, open) do
         {:worker, at, len, text, worker_goal(source, strings, masked, open, close), :window}
+      else
+        _ -> nil
+      end
+    end)
+  end
+
+  defp worklet_urls(source, masked, strings) do
+    reject_overlaps(scan(@worklet, source, &worklet_url(&1, source, masked, strings)))
+  end
+
+  defp worklet_url([whole, paren], source, masked, strings) do
+    open = index(paren)
+
+    with true <- call?(masked, strings, whole, paren),
+         {:ok, url_open} <- worker_url_open(source, masked, open),
+         {:ok, {at, len, text}, next} <- first_string(masked, source, strings, url_open),
+         {:ok, url_close} <- meta_base_end(source, next),
+         true <- literal_argument?(masked, {url_close, 0}),
+         {:ok, _close} <- call_end(masked, open) do
+      {:worker, at, len, text, :module, :module}
+    else
+      _ -> nil
+    end
+  end
+
+  defp worklet_strings(source, masked, strings) do
+    scan(@worklet, source, fn [whole, paren] ->
+      open = index(paren)
+
+      with true <- call?(masked, strings, whole, paren),
+           {:ok, {at, len, text}, _next} <- first_string(masked, source, strings, open),
+           true <- literal_argument?(masked, {at, len}),
+           {:ok, _close} <- call_end(masked, open) do
+        {:worker, at, len, text, :module, :window}
       else
         _ -> nil
       end

@@ -74,6 +74,21 @@ defmodule Crawler.Parser.CssParser do
 
       iex> CssParser.parse(~s|div { background: image-set("data:text/css,body{background:url('a.png')}" 1x, "b.png" 2x); }|)
       [{"link", [{"href", "b.png"}], []}]
+
+      iex> CssParser.parse(~s|div { background: image("wide.png"); }|)
+      [{"link", [{"href", "wide.png"}], []}]
+
+      iex> CssParser.parse(~s|div { background: image(ltr "left.png", #ccc); }|)
+      [{"link", [{"href", "left.png"}], []}]
+
+      iex> CssParser.parse(~s|div { background: image(url("already.png")); }|)
+      [{"link", [{"href", "already.png"}], []}]
+
+      iex> CssParser.parse(~s|div { background: image("data:image/png,aaa"); }|)
+      []
+
+      iex> CssParser.parse(~s|div { background: image(wide.png); }|)
+      []
   """
   def parse(body) do
     body

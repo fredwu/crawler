@@ -66,7 +66,8 @@ defmodule Crawler.Parser.LinkParser do
         {role, reference_tag, goal, fetch_kind, raw_link(element)}
       end)
       |> Enum.map(fn {role, reference_tag, goal, fetch_kind, element} ->
-        handler.(element, handler_opts(opts, role, goal, reference_tag, fetch_kind))
+        link_opts = handler_opts(opts, role, goal, reference_tag, fetch_kind)
+        handler.(element, worker_entry_opts(link_opts, tag, attrs, namespace, element))
       end)
 
     results = results ++ Enum.map(refs, fn {:ref, ref} -> ref_result(ref, opts, handler) end)
@@ -287,6 +288,19 @@ defmodule Crawler.Parser.LinkParser do
 
   defp reference_identity(tag, attr, attrs, _namespace),
     do: {HTMLReferences.role(tag, attr, attrs), tag, nil}
+
+  defp worker_entry_opts(opts, "link", attrs, :html, element) do
+    if HTMLReferences.worker_entry?(attrs) do
+      Map.put(opts, :worker_base, expanded_url(element))
+    else
+      opts
+    end
+  end
+
+  defp worker_entry_opts(opts, _tag, _attrs, _namespace, _element), do: opts
+
+  defp expanded_url({_src, url}), do: url
+  defp expanded_url({_tag, _link, _src, url}), do: url
 
   defp handler_opts(opts, role, goal, tag, fetch_kind) do
     carried = if role == "script" or tag == "script", do: script_context(opts), else: %{}
