@@ -27,16 +27,19 @@ defmodule Crawler.Parser.SpeculationRules do
 
   defp collect({:object, pairs}, opts) do
     Enum.flat_map(["prefetch", "prerender"], fn key ->
-      pairs |> field(key) |> rules(opts)
+      pairs |> field(key) |> rules(key, opts)
     end)
   end
 
   defp collect(_decoded, _opts), do: []
 
-  defp rules(items, opts) when is_list(items), do: Enum.flat_map(items, &rule(&1, opts))
-  defp rules(_items, _opts), do: []
+  defp rules(items, action, opts) when is_list(items) do
+    Enum.flat_map(items, &rule(&1, action, opts))
+  end
 
-  defp rule({:object, pairs}, opts) do
+  defp rules(_items, _action, _opts), do: []
+
+  defp rule({:object, pairs}, action, opts) do
     source = text(field(pairs, "source"))
     urls = field(pairs, "urls")
 
@@ -49,13 +52,16 @@ defmodule Crawler.Parser.SpeculationRules do
 
       true ->
         case rule_base(text(field(pairs, "relative_to")), opts) do
-          base when is_binary(base) -> resolve_urls(urls, base)
+          base when is_binary(base) -> resolve_urls(urls, base, action_name(action))
           _base -> []
         end
     end
   end
 
-  defp rule(_rule, _opts), do: []
+  defp rule(_rule, _action, _opts), do: []
+
+  defp action_name("prefetch"), do: :prefetch
+  defp action_name(_action), do: :prerender
 
   defp rule_base(nil, %{fetch_kind: :speculation_rules} = opts), do: response_url(opts)
   defp rule_base(nil, opts), do: opts[:document_base] || opts[:referrer_url] || opts[:url]
@@ -68,11 +74,11 @@ defmodule Crawler.Parser.SpeculationRules do
   defp response_url(%{referrer_url: url}) when is_binary(url) and url != "", do: url
   defp response_url(opts), do: opts[:url]
 
-  defp resolve_urls(urls, base) do
+  defp resolve_urls(urls, base, action) do
     Enum.flat_map(urls, fn
       {:str, raw, start, length} ->
         case URL.resolve(raw, base) do
-          {:ok, resolved} -> [{raw, resolved, start, length}]
+          {:ok, resolved} -> [{raw, resolved, start, length, action}]
           :skip -> []
         end
 

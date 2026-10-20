@@ -549,6 +549,71 @@ defmodule Crawler.CookiesTest do
            }) == nil
   end
 
+  test "request credentials narrow cookies to the document origin or site" do
+    jar =
+      Cookies.store([], "https://www.example.com/start", [
+        "session=1; Domain=example.com; Path=/; SameSite=Lax",
+        "open=1; Domain=example.com; Path=/; Secure; SameSite=None"
+      ])
+
+    page = "https://www.example.com/start"
+    origin = %{site: page, navigation: false, credentials: :same_origin}
+
+    assert Cookies.header(jar, "https://www.example.com/app.js", origin) == "session=1; open=1"
+
+    assert Cookies.header(jar, "https://www.example.com:443/app.js", origin) ==
+             "session=1; open=1"
+
+    assert Cookies.header(jar, "https://WWW.example.com/app.js", origin) == "session=1; open=1"
+    assert Cookies.header(jar, "https://cdn.example.com/app.js", origin) == nil
+    assert Cookies.header(jar, "https://www.example.com:8443/app.js", origin) == nil
+    assert Cookies.header(jar, "http://www.example.com/app.js", origin) == nil
+    assert Cookies.header(jar, "https://other.test/app.js", origin) == nil
+
+    site = %{site: page, navigation: false, credentials: :same_site}
+    assert Cookies.header(jar, "https://cdn.example.com/app.js", site) == "session=1; open=1"
+    assert Cookies.header(jar, "https://other.test/app.js", site) == nil
+    assert Cookies.header(jar, "http://cdn.example.com/app.js", site) == "session=1"
+
+    assert Cookies.header(jar, "https://other.test/app.js", %{site: page, navigation: true}) ==
+             nil
+
+    assert Cookies.header(jar, "https://other.test/app.js", %{site: page, navigation: false}) ==
+             nil
+
+    forced = %{site: page, navigation: true, credentials: :same_site}
+    assert Cookies.header(jar, "https://other.test/app.js", forced) == nil
+    assert Cookies.header(jar, "https://cdn.example.com/app.js", forced) == "session=1; open=1"
+
+    foreign =
+      Cookies.store([], "https://other.test/", [
+        "session=1; Path=/; SameSite=Lax",
+        "open=1; Path=/; Secure; SameSite=None"
+      ])
+
+    opened = %{site: page, navigation: true}
+    assert Cookies.header(foreign, "https://other.test/app.js", opened) == "session=1; open=1"
+    closed = %{site: page, navigation: false}
+    assert Cookies.header(foreign, "https://other.test/app.js", closed) == "open=1"
+    assert Cookies.header(foreign, "https://other.test/app.js", origin) == nil
+    assert Cookies.header(foreign, "https://other.test/app.js", site) == nil
+    assert Cookies.header(foreign, "https://other.test/app.js", forced) == nil
+
+    assert Cookies.caller_cookie?("https://www.example.com/app.js", origin)
+    refute Cookies.caller_cookie?("https://www.example.com:8443/app.js", origin)
+    refute Cookies.caller_cookie?("http://www.example.com/app.js", origin)
+    assert Cookies.caller_cookie?("https://cdn.example.com/app.js", site)
+    refute Cookies.caller_cookie?("https://other.test/app.js", site)
+    assert Cookies.caller_cookie?("https://other.test/next", %{site: page, navigation: true})
+    assert Cookies.same_origin?("https://WWW.example.com/a", "https://www.example.com:443/b")
+    assert Cookies.same_origin?("http://www.example.com/a", "http://www.example.com:80/b")
+    refute Cookies.same_origin?("https://www.example.com/a", "http://www.example.com/a")
+    refute Cookies.same_origin?("https://www.example.com/a", "https://www.example.com:8443/a")
+
+    assert Cookies.request_navigation?(%{html_tag: "a", reference_tag: "a"})
+    refute Cookies.request_navigation?(%{html_tag: "a", reference_tag: "a", page_open: false})
+  end
+
   defp wait_until_expired([%{expires_at: %DateTime{} = deadline} | _]) do
     delay = DateTime.diff(deadline, DateTime.utc_now(), :millisecond) + 50
     if delay > 0, do: Process.sleep(delay)

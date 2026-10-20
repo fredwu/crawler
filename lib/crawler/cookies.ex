@@ -24,11 +24,12 @@ defmodule Crawler.Cookies do
     uri = URI.parse(to_string(request_url))
     context = normalize_context(context)
     document = document_uri(uri, context)
-    navigation = context[:navigation] != false
+    mode = credential_mode(context)
+    navigation = navigating?(context, mode)
 
     pairs =
       (jar || [])
-      |> Enum.filter(&send?(&1, uri, document, navigation))
+      |> Enum.filter(&send?(&1, uri, document, navigation, mode))
       |> Enum.sort_by(&{-String.length(&1.path), Map.get(&1, :seq, 0)})
       |> Enum.map(&"#{&1.name}=#{&1.value}")
 
@@ -40,16 +41,39 @@ defmodule Crawler.Cookies do
 
   # A page open follows a link or a document redirect. Robots and sitemap
   # fetches inherit the document tags, so those flags are not page opens.
+  # Prefetch sets `:page_open` to false and keeps the link tags.
   def request_navigation?(opts) when is_map(opts) do
     opts[:robots_fetch] != true and opts[:sitemap_fetch] != true and
-      opts[:cookie_navigation] != false and opts[:html_tag] == "a" and
-      opts[:reference_tag] in [nil, "a", "area", "meta"]
+      opts[:cookie_navigation] != false and opts[:page_open] != false and
+      opts[:html_tag] == "a" and opts[:reference_tag] in [nil, "a", "area", "meta"]
   end
 
   def request_navigation?(_opts), do: false
 
   def assign_landed_site(opts, url) when is_map(opts) do
     if request_navigation?(opts), do: Map.put(opts, :cookie_site, url), else: opts
+  end
+
+  def credential_mode(context) do
+    case normalize_context(context) do
+      %{credentials: mode} when mode in [:include, :same_origin, :same_site] -> mode
+      _context -> :include
+    end
+  end
+
+  # Scheme, host, and port. Default ports match an omitted port. The host
+  # comparison is case-insensitive. Same-site still ignores scheme and port.
+  def same_origin?(left, right) do
+    case {origin(left), origin(right)} do
+      {origin, origin} when origin != :error -> true
+      _other -> false
+    end
+  end
+
+  # The caller cookie follows the credential mode. The host rule stays outside.
+  def caller_cookie?(url, context) do
+    context = normalize_context(context)
+    caller_cookie?(URI.parse(to_string(url)), context, credential_mode(context))
   end
 
   def merge_header(user, jar) when user in [nil, ""] and jar in [nil, ""], do: nil
@@ -213,7 +237,33 @@ defmodule Crawler.Cookies do
 
   defp expires_at(_value), do: nil
 
-  defp send?(cookie, %URI{scheme: scheme, host: host, path: path}, document, navigation)
+  defp navigating?(context, mode) do
+    context[:navigation] != false and mode != :same_site
+  end
+
+  defp caller_cookie?(_request, _context, :include), do: true
+
+  defp caller_cookie?(request, context, mode) do
+    credential_ok?(request, document_uri(request, context), mode)
+  end
+
+  defp send?(cookie, uri, document, navigation, mode) do
+    credential_ok?(uri, document, mode) and request_ok?(cookie, uri, document, navigation)
+  end
+
+  defp credential_ok?(%URI{host: host}, %URI{host: document_host}, :same_site)
+       when is_binary(host) and is_binary(document_host) do
+    same_registrable_site?(host, document_host)
+  end
+
+  defp credential_ok?(%URI{} = request, %URI{} = document, :same_origin) do
+    same_origin?(request, document)
+  end
+
+  defp credential_ok?(_request, _document, :include), do: true
+  defp credential_ok?(_request, _document, _mode), do: false
+
+  defp request_ok?(cookie, %URI{scheme: scheme, host: host, path: path}, document, navigation)
        when is_binary(host) do
     host = String.downcase(host)
     request_path = if is_binary(path) and path != "", do: path, else: "/"
@@ -228,7 +278,30 @@ defmodule Crawler.Cookies do
       site_ok?(cookie, host, document.host, navigation) and partition_ok?(cookie, document.host)
   end
 
-  defp send?(_cookie, _uri, _document, _navigation), do: false
+  defp request_ok?(_cookie, _uri, _document, _navigation), do: false
+
+  defp origin(%URI{scheme: scheme, host: host} = uri)
+       when is_binary(scheme) and is_binary(host) and host != "" do
+    {String.downcase(scheme), String.downcase(host), origin_port(uri)}
+  end
+
+  defp origin(%URI{}), do: :error
+  defp origin(url) when is_binary(url), do: url |> URI.parse() |> origin()
+  defp origin(_value), do: :error
+
+  defp origin_port(%URI{scheme: scheme, port: port}) do
+    scheme = scheme_name(scheme)
+
+    cond do
+      is_integer(port) -> port
+      scheme == "https" -> 443
+      scheme == "http" -> 80
+      true -> nil
+    end
+  end
+
+  defp scheme_name(scheme) when is_binary(scheme), do: String.downcase(scheme)
+  defp scheme_name(_scheme), do: nil
 
   defp site_ok?(cookie, request_host, document_host, navigation) do
     same = same_registrable_site?(request_host, document_host)

@@ -306,12 +306,14 @@ defmodule Crawler.Parser do
     opts
     |> Map.drop([
       :cookie_navigation,
+      :credentials,
       :document_base,
       :fetch_kind,
       :import_map,
       :javascript_goal,
       :json_span,
       :link_html_tag,
+      :page_open,
       :worker_base
     ])
     |> Map.put(:html_tag, "link")
@@ -329,8 +331,8 @@ defmodule Crawler.Parser do
   defp speculation_file_links(body, opts, handler) do
     body
     |> SpeculationRules.entries(opts)
-    |> Enum.map(fn {raw, url, start, length} ->
-      handler.(linked(raw, url), with_span(page_opts(opts), start, length))
+    |> Enum.map(fn {raw, url, start, length, action} ->
+      handler.(linked(raw, url), with_span(speculation_opts(opts, action), start, length))
     end)
   end
 
@@ -339,10 +341,19 @@ defmodule Crawler.Parser do
 
   defp child_opts(opts, html_tag, reference_tag) do
     opts
-    |> Map.drop([:fetch_kind, :document_base, :json_span])
+    |> Map.drop([:fetch_kind, :document_base, :json_span, :credentials, :page_open])
     |> Map.put(:html_tag, html_tag)
     |> Map.put(:reference_tag, reference_tag)
   end
+
+  defp speculation_opts(opts, :prefetch) do
+    opts
+    |> page_opts()
+    |> Map.put(:credentials, :same_site)
+    |> Map.put(:page_open, false)
+  end
+
+  defp speculation_opts(opts, _action), do: page_opts(opts)
 
   # Recorder has already counted this file. Its pages belong with the document's links.
   defp page_opts(opts) do
@@ -418,7 +429,7 @@ defmodule Crawler.Parser do
 
     cond do
       MediaType.css?(type) ->
-        CssParser.parse(body) ++ SourceMap.element_refs(body, opts, :css)
+        css_elements(body) ++ SourceMap.element_refs(body, opts, :css)
 
       MediaType.javascript?(type) ->
         ScriptReferences.elements(body, opts)
@@ -427,6 +438,16 @@ defmodule Crawler.Parser do
         xml_stylesheets(body, opts) ++ HtmlParser.references(body, opts)
     end
   end
+
+  defp css_elements(body) do
+    body
+    |> CssParser.spans()
+    |> Enum.uniq_by(& &1.value)
+    |> Enum.map(&{:css, &1.value, span_kind(&1)})
+  end
+
+  defp span_kind(%{kind: kind}) when kind in [:font, :import, :url], do: kind
+  defp span_kind(_span), do: :url
 
   defp xml_stylesheets(body, opts) do
     if MediaType.svg?(opts[:content_type]) do

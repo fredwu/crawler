@@ -24,10 +24,12 @@ defmodule Crawler.Fetcher.Requester do
   Header names are case-insensitive. Default headers are overridden by
   modifier headers, modifier options, and `:req_options` headers, in that order.
   Use `:redirect` to control redirects; `:follow_redirects` is not supported.
-  Caller `Cookie`, `Authorization`, and other custom headers stay on the seed
-  hostname when the scheme or port changes. Another hostname receives the safe
-  headers and its own jar cookies. Jar cookies use the page that caused the
-  request, and a redirect keeps that page and the request kind.
+  Caller `Authorization` and other custom headers stay on the seed hostname
+  when the scheme or port changes. The caller `Cookie` also stays when the
+  credential mode allows that origin. A same-origin request drops it when the
+  scheme or port changes. Another hostname receives the safe headers and its
+  own jar cookies. Jar cookies use the page that caused the request. A
+  redirect keeps that page and applies the same credential mode on every hop.
 
   ## Examples
 
@@ -89,6 +91,7 @@ defmodule Crawler.Fetcher.Requester do
     |> Keyword.put(:crawler_generation, opts[:generation])
     |> Keyword.put(:crawler_cookie_site, context.site)
     |> Keyword.put(:crawler_cookie_navigation, context.navigation)
+    |> Keyword.put(:crawler_cookie_credentials, context.credentials)
   end
 
   # The seed host keeps caller headers when the scheme or port changes.
@@ -118,6 +121,7 @@ defmodule Crawler.Fetcher.Requester do
   defp put_cookie(request, opts, user_cookie) do
     context = cookie_context(opts)
     jar = Store.cookie_header(opts[:scope], opts[:url], opts[:generation], context)
+    user_cookie = caller_cookie(opts[:url], context, user_cookie)
 
     case Cookies.merge_header(user_cookie, jar) do
       nil -> Req.Request.delete_header(request, "cookie")
@@ -128,8 +132,13 @@ defmodule Crawler.Fetcher.Requester do
   defp cookie_context(opts) do
     %{
       site: opts[:cookie_site] || opts[:url],
-      navigation: Cookies.request_navigation?(opts)
+      navigation: Cookies.request_navigation?(opts),
+      credentials: Cookies.credential_mode(opts)
     }
+  end
+
+  defp caller_cookie(url, context, user_cookie) do
+    if Cookies.caller_cookie?(url, context), do: user_cookie
   end
 
   defp cookie_value(request) do

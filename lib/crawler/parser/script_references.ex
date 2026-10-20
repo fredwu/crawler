@@ -88,7 +88,8 @@ defmodule Crawler.Parser.ScriptReferences do
           reference_tag: "script",
           import_map: child_map(opts, map),
           document_base: child_base(opts),
-          worker_base: opts[:worker_base]
+          worker_base: opts[:worker_base],
+          credentials: import_credentials(opts)
         }
 
       _other ->
@@ -152,7 +153,8 @@ defmodule Crawler.Parser.ScriptReferences do
       reference_tag: "script",
       import_map: nil,
       document_base: nil,
-      worker_base: url
+      worker_base: url,
+      credentials: :same_origin
     }
   end
 
@@ -167,7 +169,8 @@ defmodule Crawler.Parser.ScriptReferences do
       reference_tag: "script",
       import_map: nil,
       document_base: nil,
-      worker_base: opts[:worker_base]
+      worker_base: opts[:worker_base],
+      credentials: :same_origin
     }
   end
 
@@ -191,6 +194,12 @@ defmodule Crawler.Parser.ScriptReferences do
   defp api_base(opts), do: opts[:worker_base] || opts[:document_base] || script_base(opts)
   defp goal(opts), do: if(opts[:javascript_goal] == :script, do: :script, else: :module)
   defp html_tag(opts), do: opts[:link_html_tag] || "link"
+
+  # A module graph keeps the entry crossorigin. import() from a classic script
+  # is same-origin. Workers and importScripts set that mode on their own refs.
+  defp import_credentials(opts) do
+    if goal(opts) == :module, do: opts[:credentials] || :same_origin, else: :same_origin
+  end
 
   defp offline(nil, ref), do: ref.url
 

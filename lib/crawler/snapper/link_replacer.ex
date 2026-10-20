@@ -292,7 +292,8 @@ defmodule Crawler.Snapper.LinkReplacer do
     }
 
     spans =
-      Enum.map(SpeculationRules.entries(source, rules_opts), fn {raw, resolved, start, length} ->
+      Enum.map(SpeculationRules.entries(source, rules_opts), fn {raw, resolved, start, length,
+                                                                 _action} ->
         {start, length, Linker.offline_link(page_opts[:url], with_fragment(resolved, raw))}
       end)
 

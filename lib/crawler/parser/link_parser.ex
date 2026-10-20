@@ -40,6 +40,10 @@ defmodule Crawler.Parser.LinkParser do
     emit(tag, attrs, children, opts, handler, namespace)
   end
 
+  def parse({:css, url, kind}, opts, handler) when is_binary(url) do
+    css_result(url, kind, opts, handler)
+  end
+
   def parse({tag, attrs, children}, opts, handler) do
     emit(tag, attrs, children, opts, handler, :html)
   end
@@ -54,19 +58,19 @@ defmodule Crawler.Parser.LinkParser do
 
     results =
       plain
-      |> Enum.map(fn {attr, link} ->
-        {role, reference_tag, fetch_kind} = reference_identity(tag, attr, attrs, namespace)
-        goal = reference_goal(tag, attr, link, attrs, opts, namespace)
-        goal = if fetch_kind, do: nil, else: goal
-        expanded = LinkExpander.expand({attr_name(attr), link}, opts)
-        {role, reference_tag, goal, fetch_kind, expanded}
+      |> Enum.map(&prepare_link(&1, tag, attrs, opts, namespace))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq_by(fn {role, reference_tag, goal, fetch_kind, mode, _open, element} ->
+        {role, reference_tag, goal, fetch_kind, mode, raw_link(element)}
       end)
-      |> Enum.reject(&match?({_role, _reference_tag, _goal, _fetch_kind, nil}, &1))
-      |> Enum.uniq_by(fn {role, reference_tag, goal, fetch_kind, element} ->
-        {role, reference_tag, goal, fetch_kind, raw_link(element)}
-      end)
-      |> Enum.map(fn {role, reference_tag, goal, fetch_kind, element} ->
-        link_opts = handler_opts(opts, role, goal, reference_tag, fetch_kind)
+      |> Enum.map(fn {role, reference_tag, goal, fetch_kind, mode, open, element} ->
+        link_opts =
+          opts
+          |> handler_opts(role, goal, reference_tag, fetch_kind)
+          |> put_credentials(mode)
+          |> keep_module_credentials(mode, goal)
+          |> put_page_open(open)
+
         handler.(element, worker_entry_opts(link_opts, tag, attrs, namespace, element))
       end)
 
@@ -105,6 +109,8 @@ defmodule Crawler.Parser.LinkParser do
   end
 
   defp drop_same_drawing(links, _tag, _namespace), do: links
+
+  defp same_drawing?({:styled, attr, value, _kind}, tag), do: same_drawing?({attr, value}, tag)
 
   defp same_drawing?({attr, value}, tag) do
     HTMLReferences.local_reference?(value) and
@@ -168,6 +174,8 @@ defmodule Crawler.Parser.LinkParser do
           |> Map.delete(:json_span)
           |> Map.put(:content_type, "text/html")
           |> Map.put(:html_tag, "a")
+          |> Map.delete(:credentials)
+          |> Map.delete(:page_open)
 
         Crawler.Parser.parse_links(srcdoc, opts, handler)
     end
@@ -180,6 +188,7 @@ defmodule Crawler.Parser.LinkParser do
       opts
       |> Map.put(:link_html_tag, "script")
       |> Map.put(:javascript_goal, HTMLReferences.script_goal(attrs))
+      |> Map.put(:credentials, HTMLReferences.script_credentials(attrs))
 
     children
     |> raw_text()
@@ -191,8 +200,17 @@ defmodule Crawler.Parser.LinkParser do
     children
     |> raw_text()
     |> SpeculationRules.entries(opts)
-    |> Enum.map(fn {raw, url, _start, _length} -> {:ref, page_ref(raw, url)} end)
+    |> Enum.map(fn {raw, url, _start, _length, action} -> {:ref, page_ref(raw, url, action)} end)
   end
+
+  defp page_ref(raw, url, :prefetch) do
+    raw
+    |> page_ref(url)
+    |> Map.put(:credentials, :same_site)
+    |> Map.put(:page_open, false)
+  end
+
+  defp page_ref(raw, url, _action), do: page_ref(raw, url)
 
   defp page_ref(raw, url) do
     %{
@@ -235,9 +253,13 @@ defmodule Crawler.Parser.LinkParser do
 
   defp style_links(css, attr) do
     css
-    |> CssParser.parse()
-    |> Enum.map(fn {"link", [{"href", url}], _} -> {attr, url} end)
+    |> CssParser.spans()
+    |> Enum.uniq_by(& &1.value)
+    |> Enum.map(&{:styled, attr, &1.value, span_kind(&1)})
   end
+
+  defp span_kind(%{kind: kind}) when kind in [:font, :import, :url], do: kind
+  defp span_kind(_span), do: :url
 
   defp reference_goal(tag, attr, link, attrs, opts, namespace) do
     cond do
@@ -302,6 +324,72 @@ defmodule Crawler.Parser.LinkParser do
   defp expanded_url({_src, url}), do: url
   defp expanded_url({_tag, _link, _src, url}), do: url
 
+  defp prepare_link({:styled, attr, link, kind}, tag, attrs, opts, namespace) do
+    prepare_expanded(tag, attr, link, attrs, opts, namespace, css_mode(kind, opts), false)
+  end
+
+  defp prepare_link({attr, link}, tag, attrs, opts, namespace) do
+    prepare_expanded(
+      tag,
+      attr,
+      link,
+      attrs,
+      opts,
+      namespace,
+      HTMLReferences.credentials(tag, attr, attrs, namespace),
+      page_open?(tag, attr, attrs, namespace)
+    )
+  end
+
+  defp prepare_expanded(tag, attr, link, attrs, opts, namespace, mode, open) do
+    {role, reference_tag, fetch_kind} = reference_identity(tag, attr, attrs, namespace)
+    goal = reference_goal(tag, attr, link, attrs, opts, namespace)
+    goal = if fetch_kind, do: nil, else: goal
+
+    case LinkExpander.expand({attr_name(attr), link}, opts) do
+      nil -> nil
+      element -> {role, reference_tag, goal, fetch_kind, mode, open, element}
+    end
+  end
+
+  defp page_open?(tag, attr, attrs, namespace) do
+    case reference_identity(tag, attr, attrs, namespace) do
+      {"a", reference_tag, _fetch_kind} when reference_tag in [nil, "a", "area", "meta"] ->
+        anchor_open?(tag, attr, attrs, namespace)
+
+      _identity ->
+        false
+    end
+  end
+
+  defp anchor_open?("link", "href", attrs, :html) do
+    case HTMLReferences.link_choice(attrs) do
+      %{page_open: false} -> false
+      %{html_tag: "a"} -> true
+      _choice -> false
+    end
+  end
+
+  defp anchor_open?(_tag, _attr, _attrs, _namespace), do: true
+
+  defp css_result(url, kind, opts, handler) do
+    case LinkExpander.expand({"href", url}, opts) do
+      nil -> nil
+      element -> handler.(element, css_opts(opts, kind))
+    end
+  end
+
+  defp css_opts(opts, kind) do
+    opts
+    |> handler_opts("link", nil, "link", nil)
+    |> put_credentials(css_mode(kind, opts))
+    |> put_page_open(false)
+  end
+
+  defp css_mode(:font, _opts), do: :same_origin
+  defp css_mode(:import, opts), do: opts[:credentials] || :include
+  defp css_mode(_kind, _opts), do: :include
+
   defp handler_opts(opts, role, goal, tag, fetch_kind) do
     carried = if role == "script" or tag == "script", do: script_context(opts), else: %{}
 
@@ -341,6 +429,9 @@ defmodule Crawler.Parser.LinkParser do
     |> put_opt(:worker_base, ref.worker_base)
     |> put_opt(:fetch_kind, ref[:fetch_kind])
     |> put_opt(:json_span, ref[:json_span])
+    |> put_credentials(Map.get(ref, :credentials, :include))
+    |> keep_module_credentials(Map.get(ref, :credentials, :include), ref.goal)
+    |> put_page_open(Map.get(ref, :page_open, true))
   end
 
   defp script_context(opts) do
@@ -358,9 +449,21 @@ defmodule Crawler.Parser.LinkParser do
       :worker_base,
       :link_html_tag,
       :fetch_kind,
-      :json_span
+      :json_span,
+      :credentials,
+      :page_open
     ])
   end
+
+  defp put_credentials(opts, :include), do: Map.delete(opts, :credentials)
+  defp put_credentials(opts, mode), do: Map.put(opts, :credentials, mode)
+
+  # A module graph inherits include. Omitting the key would look like the
+  # same-origin default when that module is parsed.
+  defp keep_module_credentials(opts, :include, :module), do: Map.put(opts, :credentials, :include)
+  defp keep_module_credentials(opts, _mode, _goal), do: opts
+  defp put_page_open(opts, false), do: Map.put(opts, :page_open, false)
+  defp put_page_open(opts, _open), do: Map.delete(opts, :page_open)
 
   defp put_opt(opts, _key, nil), do: opts
   defp put_opt(opts, key, value), do: Map.put(opts, key, value)

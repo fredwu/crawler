@@ -3,12 +3,13 @@ defmodule Crawler.HTTP do
   Project-owned HTTP boundary.
 
   Redirect logging defaults to disabled. Set `:redirect_log_level` explicitly
-  to enable it. A redirect rebuilds `Cookie` for the next URL and keeps the
-  document site and navigation kind from the first request. The same host
-  keeps the caller's `Cookie`, `Authorization`, and other custom headers when
-  the scheme or port changes. Another host does not receive them. Leaving the
-  host also drops the stored caller cookie, so a later hop there does not
-  copy it back.
+  to enable it. A redirect rebuilds `Cookie` from the jar and the document
+  origin. The credential mode applies again on every hop. The same host keeps
+  `Authorization` and other custom headers when the scheme or port changes. A
+  page open also keeps the caller's `Cookie` on that host. A same-origin
+  request drops the caller cookie when the scheme or port changes. Another
+  host receives neither. Leaving the host also drops the stored caller cookie,
+  so a later hop there does not copy it back.
   """
 
   defmodule RedirectRejected do
@@ -65,6 +66,7 @@ defmodule Crawler.HTTP do
     {generation, opts} = Keyword.pop(opts, :crawler_generation)
     {cookie_site, opts} = Keyword.pop(opts, :crawler_cookie_site)
     {cookie_navigation, opts} = Keyword.pop(opts, :crawler_cookie_navigation, true)
+    {cookie_credentials, opts} = Keyword.pop(opts, :crawler_cookie_credentials, :include)
 
     opts
     |> Keyword.put_new(:redirect_log_level, false)
@@ -77,7 +79,8 @@ defmodule Crawler.HTTP do
       :crawler_user_cookie,
       :crawler_generation,
       :crawler_cookie_site,
-      :crawler_cookie_navigation
+      :crawler_cookie_navigation,
+      :crawler_cookie_credentials
     ])
     |> Req.Request.merge_options(
       crawler_scope: scope,
@@ -85,7 +88,8 @@ defmodule Crawler.HTTP do
       crawler_user_cookie: user_cookie,
       crawler_generation: generation,
       crawler_cookie_site: cookie_site,
-      crawler_cookie_navigation: cookie_navigation
+      crawler_cookie_navigation: cookie_navigation,
+      crawler_cookie_credentials: cookie_credentials
     )
     |> validate_redirect_option()
     |> Req.merge(headers: explicit_headers)
@@ -281,15 +285,19 @@ defmodule Crawler.HTTP do
   defp cookie_context(request) do
     %{
       site: Req.Request.get_option(request, :crawler_cookie_site),
-      navigation: Req.Request.get_option(request, :crawler_cookie_navigation, true)
+      navigation: Req.Request.get_option(request, :crawler_cookie_navigation, true),
+      credentials: Req.Request.get_option(request, :crawler_cookie_credentials, :include)
     }
   end
 
+  # A scheme or port change keeps the stored caller cookie. The mode decides
+  # whether this hop may send it. A new host has already cleared the option.
   defp user_cookie(request, url) do
-    if host_changed?(request.url, url) do
-      nil
-    else
-      Req.Request.get_option(request, :crawler_user_cookie)
-    end
+    if send_caller_cookie?(request, url),
+      do: Req.Request.get_option(request, :crawler_user_cookie)
+  end
+
+  defp send_caller_cookie?(request, url) do
+    not host_changed?(request.url, url) and Cookies.caller_cookie?(url, cookie_context(request))
   end
 end

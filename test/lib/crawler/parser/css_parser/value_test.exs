@@ -25,7 +25,7 @@ defmodule Crawler.Parser.CssParser.ValueTest do
     assert Scanner.comment_spans(comments <> tail) == spans
 
     assert Scanner.resources(comments <> tail) == [
-             %{start: finish + 4, length: 8, value: "real.png", quote: ""}
+             %{start: finish + 4, length: 8, value: "real.png", quote: "", kind: :url}
            ]
   end
 end

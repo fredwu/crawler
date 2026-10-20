@@ -115,6 +115,8 @@ defmodule Crawler.Robots do
       |> Map.put(:robots_fetch, true)
       |> Map.put(:cookie_navigation, false)
       |> Map.put(:respect_robots, false)
+      |> Map.delete(:credentials)
+      |> Map.delete(:page_open)
 
     case Requester.make(robots_opts) do
       {:ok, %{status: status, body: body}} when status in 200..299 and is_binary(body) ->

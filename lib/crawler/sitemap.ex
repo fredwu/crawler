@@ -142,6 +142,8 @@ defmodule Crawler.Sitemap do
     |> Map.put(:sitemap_fetch, true)
     |> Map.put(:cookie_navigation, false)
     |> Map.delete(:reference_tag)
+    |> Map.delete(:credentials)
+    |> Map.delete(:page_open)
   end
 
   # The retrier retries `:error` and `{:error, _}`. A permanent failure has to
@@ -428,6 +430,8 @@ defmodule Crawler.Sitemap do
       :content_type,
       :headers,
       :cookie_navigation,
+      :credentials,
+      :page_open,
       :reference_tag,
       :referrer_url,
       :robots_fetch,

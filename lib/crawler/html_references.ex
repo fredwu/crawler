@@ -107,6 +107,42 @@ defmodule Crawler.HTMLReferences do
     end
   end
 
+  def credentials(tag, attr, attrs, namespace \\ :html)
+
+  def credentials(_tag, attr, _attrs, :math) when attr in ["href", "xlink:href"], do: :include
+
+  def credentials("link", attr, attrs, :html) when attr in ["href", "imagesrcset"] do
+    link_credentials(link_choice(attrs), attrs)
+  end
+
+  def credentials("script", "src", attrs, _namespace), do: script_credentials(attrs)
+
+  def credentials("script", attr, attrs, :svg) when attr in ["href", "xlink:href"] do
+    script_credentials(attrs)
+  end
+
+  def credentials("script", "href", attrs, :html), do: keyword_credentials(attrs, :same_origin)
+
+  def credentials(tag, _attr, attrs, _namespace)
+      when tag in ["img", "source", "input", "video", "audio", "track"] do
+    keyword_credentials(attrs, :include)
+  end
+
+  def credentials(tag, attr, attrs, :svg)
+      when tag in @svg_paint and attr in ["href", "xlink:href"] do
+    keyword_credentials(attrs, :include)
+  end
+
+  def credentials(_tag, _attr, _attrs, _namespace), do: :include
+
+  def script_credentials(attrs) do
+    cond do
+      speculation_rules?(attrs) -> :include
+      script_goal(attrs) == :module -> keyword_credentials(attrs, :same_origin)
+      true -> keyword_credentials(attrs, :include)
+    end
+  end
+
   # Workers and worklets keep their own module map. The page import map stays
   # with ordinary scripts.
   def worker_entry?(attrs) do
@@ -319,8 +355,11 @@ defmodule Crawler.HTMLReferences do
       "manifest" in rels ->
         choice("link", "link", :manifest, false, :always)
 
-      "prefetch" in rels or "prerender" in rels ->
+      "prerender" in rels ->
         choice("a", "a", nil, false, :always)
+
+      "prefetch" in rels ->
+        Map.put(choice("a", "a", nil, false, :always), :page_open, false)
 
       "next" in rels or "prev" in rels or "previous" in rels ->
         choice("a", "a", nil, true, :always)
@@ -348,6 +387,45 @@ defmodule Crawler.HTMLReferences do
       channel: channel
     }
   end
+
+  defp link_credentials(%{html_tag: "font"}, _attrs), do: :same_origin
+
+  defp link_credentials(%{html_tag: "script"}, attrs) do
+    keyword_credentials(attrs, script_link_default(attrs))
+  end
+
+  defp link_credentials(%{html_tag: "a", page_open: false}, attrs) do
+    keyword_credentials(attrs, :include)
+  end
+
+  defp link_credentials(%{html_tag: "a"}, _attrs), do: :include
+  defp link_credentials(_choice, attrs), do: keyword_credentials(attrs, :include)
+
+  defp script_link_default(attrs) do
+    cond do
+      "modulepreload" in rel_tokens(attrs) -> :same_origin
+      worker_as?(normalized(attrs, "as")) -> :same_origin
+      true -> :include
+    end
+  end
+
+  # A missing attribute keeps the element's default. `use-credentials` sends
+  # cookies. Any other present value, including empty, is anonymous.
+  defp keyword_credentials(attrs, missing) do
+    case crossorigin_keyword(attribute(attrs, "crossorigin")) do
+      :missing -> missing
+      "use-credentials" -> :include
+      _other -> :same_origin
+    end
+  end
+
+  defp crossorigin_keyword(nil), do: :missing
+
+  defp crossorigin_keyword(value) when is_binary(value) do
+    value |> String.trim() |> String.downcase(:ascii)
+  end
+
+  defp crossorigin_keyword(_value), do: :missing
 
   defp considered_rels(attrs) do
     rels = rel_tokens(attrs)
