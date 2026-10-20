@@ -330,6 +330,179 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
     assert quiet_saved =~ ~s|href="/canon"|
   end
 
+  test "a fragment css url and a namespace name are not fetched", context do
+    page = context.url <> "/dir/page"
+    sheet = context.url <> "/dir/app.css"
+
+    html = """
+    <link rel="stylesheet" href="/dir/app.css">
+    <style>div { filter: url(#blur); background: url("paint.png"); }</style>
+    <div style="filter: url(#blur)"></div>
+    <style>div { filter: url("#blur"); background: url('#blur'); }</style>
+    <div style="filter: url( #blur )"></div>
+    <style>div { background: url("sprite.svg#icon"); }</style>
+    <svg>
+      <style>g { fill: url(#metal); background: url("paint.png"); }</style>
+      <rect fill="url(#shine)"></rect>
+    </svg>
+    """
+
+    css = """
+    @namespace svg url("http://www.w3.org/2000/svg");
+    @namespace url('http://www.w3.org/2000/svg');
+    @namespace url(http://www.w3.org/2000/svg);
+    @namespace "http://www.w3.org/1999/xhtml";
+    svg|a { filter: url(#blur); background: url("paint.png"); }
+    div { filter: url("#blur"); background: url('#blur'); }
+    div { filter: url( #blur ); }
+    """
+
+    expect_html(context, "/dir/page", html)
+    expect_bytes(context, "/dir/app.css", "text/css", css)
+    expect_bytes(context, "/dir/paint.png", "image/png", "paint")
+    expect_bytes(context, "/dir/sprite.svg", "image/svg+xml", "<svg></svg>")
+
+    {opts, root} = run(page, context, assets: ["css"])
+    saved = File.read!(saved(root, page))
+    css_saved = File.read!(saved(root, sheet))
+
+    for path <- ["/dir/app.css", "/dir/paint.png", "/dir/sprite.svg"] do
+      assert Store.find_processed({context.url <> path, opts.scope})
+    end
+
+    assert_points(saved, page, context.url <> "/dir/paint.png", root)
+    assert_points(saved, page, context.url <> "/dir/sprite.svg", root, "#icon")
+    assert_points(css_saved, sheet, context.url <> "/dir/paint.png", root)
+
+    assert saved =~ "url(#blur)"
+    assert saved =~ ~s|style="filter: url(#blur)"|
+    assert saved =~ ~s|url("#blur")|
+    assert saved =~ "url('#blur')"
+    assert saved =~ "url( #blur )"
+    assert saved =~ "url(#metal)"
+    assert saved =~ ~s|fill="url(#shine)"|
+    refute saved =~ ~s|url("paint.png")|
+    refute saved =~ ~s|url("sprite.svg#icon")|
+
+    assert css_saved =~ ~s|url("http://www.w3.org/2000/svg")|
+    assert css_saved =~ "url('http://www.w3.org/2000/svg')"
+    assert css_saved =~ "url(http://www.w3.org/2000/svg)"
+    assert css_saved =~ ~s|@namespace "http://www.w3.org/1999/xhtml"|
+    assert css_saved =~ "svg|a"
+    assert css_saved =~ "url(#blur)"
+    assert css_saved =~ ~s|url("#blur")|
+    assert css_saved =~ "url('#blur')"
+    assert css_saved =~ "url( #blur )"
+    refute css_saved =~ ~s|url("paint.png")|
+  end
+
+  test "an html image tag is fetched like an img", context do
+    page = context.url <> "/dir/page"
+
+    html = """
+    <image href="not-a-picture.svg" src="photo.png" srcset="photo-2x.png 2x">
+    <img src="real.png">
+    <svg><image src="nope.png" href="sprite.svg"/></svg>
+    """
+
+    expect_html(context, "/dir/page", html)
+    expect_bytes(context, "/dir/photo.png", "image/png", "photo")
+    expect_bytes(context, "/dir/photo-2x.png", "image/png", "photo2")
+    expect_bytes(context, "/dir/real.png", "image/png", "real")
+    expect_bytes(context, "/dir/sprite.svg", "image/svg+xml", "<svg></svg>")
+
+    {opts, root} = run(page, context, assets: ["images"])
+    saved = File.read!(saved(root, page))
+
+    for path <- ["/dir/photo.png", "/dir/photo-2x.png", "/dir/real.png", "/dir/sprite.svg"] do
+      assert Store.find_processed({context.url <> path, opts.scope})
+      assert_points(saved, page, context.url <> path, root)
+    end
+
+    refute Store.find({context.url <> "/dir/nope.png", opts.scope})
+    refute Store.find({context.url <> "/dir/not-a-picture.svg", opts.scope})
+    assert saved =~ "<image"
+    assert saved =~ ~s|href="not-a-picture.svg"|
+    assert saved =~ ~s|src="nope.png"|
+    refute saved =~ ~s|src="photo.png"|
+    refute saved =~ ~s|srcset="photo-2x.png 2x"|
+    refute saved =~ ~s|src="real.png"|
+    refute saved =~ ~s|href="sprite.svg"|
+
+    quiet = context.url <> "/dir/pictures-off"
+    expect_html(context, "/dir/pictures-off", html)
+    {quiet_opts, quiet_root} = run(quiet, context, assets: [])
+    quiet_saved = File.read!(saved(quiet_root, quiet))
+
+    for path <- [
+          "/dir/photo.png",
+          "/dir/photo-2x.png",
+          "/dir/real.png",
+          "/dir/sprite.svg",
+          "/dir/nope.png"
+        ] do
+      refute Store.find({context.url <> path, quiet_opts.scope})
+    end
+
+    assert quiet_saved =~ ~s|src="photo.png"|
+    assert quiet_saved =~ "photo-2x.png"
+    assert quiet_saved =~ ~s|src="real.png"|
+    assert quiet_saved =~ ~s|href="sprite.svg"|
+  end
+
+  test "a legacy background attribute is fetched as an image", context do
+    page = context.url <> "/start"
+    names = ~w(bg.jpg table.png head.png body.png row.png cell.png heading.png foot.png)
+
+    html = """
+    <base href="#{context.url}/blog/">
+    <body bgcolor="red" background="bg.jpg" alink="navy">
+    <table background="table.png"><thead background="head.png"></thead>
+    <tbody background="body.png"><tr background="row.png">
+    <td background="cell.png"></td><th background="heading.png"></th>
+    </tr></tbody><tfoot background="foot.png"></tfoot></table>
+    <div background="nope.png"></div>
+    </body>
+    """
+
+    expect_html(context, "/start", html)
+
+    for name <- names do
+      expect_bytes(context, "/blog/" <> name, "image/png", name)
+    end
+
+    {opts, root} = run(page, context, assets: ["images"])
+    saved = File.read!(saved(root, page))
+
+    for name <- names do
+      url = context.url <> "/blog/" <> name
+      assert Store.find_processed({url, opts.scope})
+      assert_points(saved, page, url, root)
+      refute saved =~ ~s|background="#{name}"|
+    end
+
+    assert saved =~ ~s|bgcolor="red"|
+    assert saved =~ ~s|alink="navy"|
+    assert saved =~ ~s|background="nope.png"|
+
+    for path <- ["/blog/red", "/blog/navy", "/blog/nope.png", "/red", "/navy", "/nope.png"] do
+      refute Store.find({context.url <> path, opts.scope})
+    end
+
+    quiet = context.url <> "/plain"
+    expect_html(context, "/plain", html)
+    {quiet_opts, quiet_root} = run(quiet, context, assets: [])
+    quiet_saved = File.read!(saved(quiet_root, quiet))
+
+    for name <- names do
+      refute Store.find({context.url <> "/blog/" <> name, quiet_opts.scope})
+      assert quiet_saved =~ ~s|background="#{name}"|
+    end
+
+    assert quiet_saved =~ ~s|bgcolor="red"|
+    assert quiet_saved =~ ~s|background="nope.png"|
+  end
+
   defp run(page, context, extra) do
     scope = extra[:scope] || unique_scope("subresource")
     root = tmp(scope)

@@ -63,17 +63,98 @@ defmodule Crawler.Parser.DrawingMathTest do
     refute saved =~ ~s|url("paint.png")|
   end
 
-  test "an html style still follows a fragment url" do
-    source = ~s|<style>a { background: url(#top); }</style>|
+  test "an html style leaves a fragment url" do
+    source = """
+    <style>div { filter: url(#blur); background: url("paint.png"); }</style>
+    <div style="filter: url(#blur)"></div>
+    <style>div { filter: url("#blur"); background: url('#blur'); }</style>
+    <div style="filter: url( #blur )"></div>
+    <style>div { background: url("sprite.svg#icon"); }</style>
+    """
 
     assert found(source, ["css"]) == [
-             {"#top", "http://example.com/dir/page", "link", nil, "style"}
+             {"paint.png", asset("paint.png"), "link", nil, "style"},
+             {"sprite.svg#icon", "http://example.com/dir/sprite.svg", "link", nil, "style"}
            ]
 
-    refute rewrite(source, ["css"]) =~ "url(#top)"
+    saved = rewrite(source, ["css"])
+    paint = Linker.offline_link(@page, asset("paint.png"))
+    sprite = Linker.offline_link(@page, "http://example.com/dir/sprite.svg#icon")
+
+    assert saved =~ "filter: url(#blur); background:"
+    assert saved =~ ~s|style="filter: url(#blur)"|
+    assert saved =~ ~s|url("#blur")|
+    assert saved =~ "url('#blur')"
+    assert saved =~ "url( #blur )"
+    assert saved =~ paint
+    assert saved =~ sprite
+    refute saved =~ ~s|url("paint.png")|
+    refute saved =~ ~s|url("sprite.svg#icon")|
   end
 
-  test "svg style keeps a fragment when another link repeats it" do
+  test "an html style leaves a namespace name" do
+    source = """
+    <style>
+    @namespace svg url("http://www.w3.org/2000/svg");
+    @namespace url('http://www.w3.org/2000/svg');
+    @namespace url(http://www.w3.org/2000/svg);
+    @namespace "http://www.w3.org/1999/xhtml";
+    svg|a { background: url("paint.png"); }
+    </style>
+    """
+
+    assert found(source, ["css"]) == [
+             {"paint.png", asset("paint.png"), "link", nil, "style"}
+           ]
+
+    saved = rewrite(source, ["css"])
+    assert saved =~ ~s|url("http://www.w3.org/2000/svg")|
+    assert saved =~ "url('http://www.w3.org/2000/svg')"
+    assert saved =~ "url(http://www.w3.org/2000/svg)"
+    assert saved =~ ~s|@namespace "http://www.w3.org/1999/xhtml"|
+    assert saved =~ "svg|a"
+    assert saved =~ Linker.offline_link(@page, asset("paint.png"))
+    refute saved =~ ~s|url("paint.png")|
+  end
+
+  test "a stylesheet leaves a fragment url and a namespace name" do
+    sheet = "http://example.com/dir/app.css"
+
+    css = """
+    @namespace svg url("http://www.w3.org/2000/svg");
+    @namespace url('http://www.w3.org/2000/svg');
+    @namespace url(http://www.w3.org/2000/svg);
+    @namespace "http://www.w3.org/1999/xhtml";
+    svg|a { filter: url(#blur); background: url("paint.png"); }
+    div { filter: url("#blur"); background: url('#blur'); }
+    div { filter: url( #blur ); }
+    div { background: url("sprite.svg#icon"); }
+    """
+
+    opts = %{url: sheet, content_type: "text/css", html_tag: "link", assets: ["css"]}
+
+    assert found(css, opts) == [
+             {"paint.png", asset("paint.png"), "link", nil, "link"},
+             {"sprite.svg#icon", "http://example.com/dir/sprite.svg", "link", nil, "link"}
+           ]
+
+    saved = rewrite(css, opts)
+    assert saved =~ ~s|url("http://www.w3.org/2000/svg")|
+    assert saved =~ "url('http://www.w3.org/2000/svg')"
+    assert saved =~ "url(http://www.w3.org/2000/svg)"
+    assert saved =~ ~s|@namespace "http://www.w3.org/1999/xhtml"|
+    assert saved =~ "svg|a"
+    assert saved =~ "url(#blur)"
+    assert saved =~ ~s|url("#blur")|
+    assert saved =~ "url('#blur')"
+    assert saved =~ "url( #blur )"
+    assert saved =~ Linker.offline_link(sheet, asset("paint.png"))
+    assert saved =~ Linker.offline_link(sheet, "http://example.com/dir/sprite.svg#icon")
+    refute saved =~ ~s|url("paint.png")|
+    refute saved =~ ~s|url("sprite.svg#icon")|
+  end
+
+  test "html and svg styles keep a fragment when another link repeats it" do
     source = """
     <a href="#shade">Page</a>
     <div style="background: url(#shade)"></div>
@@ -84,11 +165,17 @@ defmodule Crawler.Parser.DrawingMathTest do
     </svg>
     """
 
+    assert found(source, ["css"]) == [
+             {"#shade", @page, "a", nil, "a"},
+             {"paint.png", asset("paint.png"), "link", nil, "style"},
+             {"line.png", asset("line.png"), "link", nil, "rect"}
+           ]
+
     saved = rewrite(source, ["css"])
     assert saved =~ "fill: url(#shade); background:"
     assert saved =~ ~s|style="fill: url(#shade); stroke:|
-    refute saved =~ "a { background: url(#shade)"
-    refute saved =~ ~s|style="background: url(#shade)"|
+    assert saved =~ "a { background: url(#shade)"
+    assert saved =~ ~s|style="background: url(#shade)"|
     refute saved =~ ~s|url("paint.png")|
     refute saved =~ "url(line.png)"
 

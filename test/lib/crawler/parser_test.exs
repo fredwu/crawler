@@ -99,6 +99,39 @@ defmodule Crawler.ParserTest do
            ]
   end
 
+  test "an inline ruleset url uses the document base" do
+    opts = %{
+      html_tag: "a",
+      content_type: "text/html",
+      referrer_url: "http://example.com/start",
+      url: "http://example.com/start",
+      assets: []
+    }
+
+    body = """
+    <base href="http://example.com/blog/">
+    <script type="speculationrules">
+    {"prefetch":[
+      {"urls":["skip-ruleset"],"relative_to":"ruleset"},
+      {"urls":["inline-next"]},
+      {"source":"document","urls":["skip-document"]},
+      {"where":{"href_matches":"/*"}}
+    ]}
+    </script>
+    """
+
+    links =
+      body
+      |> Parser.parse_links(opts, fn element, _link_opts -> element end)
+      |> List.flatten()
+      |> Enum.reject(&is_nil/1)
+
+    assert links == [
+             {"link", "skip-ruleset", "href", "http://example.com/blog/skip-ruleset"},
+             {"link", "inline-next", "href", "http://example.com/blog/inline-next"}
+           ]
+  end
+
   test "a manifest uses the last duplicate start_url" do
     opts = %{
       fetch_kind: :manifest,

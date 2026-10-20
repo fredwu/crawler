@@ -90,13 +90,16 @@ defmodule Crawler.Snapper.DeclarativeJsonTest do
 
     {:ok, next} = URL.resolve("next", "http://example.com/blog/")
     next_offline = Linker.offline_link(page, next)
+    {:ok, skipped} = URL.resolve("skip-ruleset", "http://example.com/blog/")
+    skipped_offline = Linker.offline_link(page, skipped)
 
     assert String.contains?(saved, ~s("eagerness":"eager"))
     assert String.contains?(saved, ~s("source":"list"))
-    assert String.contains?(saved, ~s("skip-ruleset"))
     assert String.contains?(saved, ~s("relative_to":"ruleset"))
     assert String.contains?(saved, ~s("#{next_offline}"))
+    assert String.contains?(saved, ~s("#{skipped_offline}"))
     refute String.contains?(saved, ~s("next"))
+    refute String.contains?(saved, ~s("skip-ruleset"))
   end
 
   test "an unparsed fetch preload leaves speculation rules unchanged" do

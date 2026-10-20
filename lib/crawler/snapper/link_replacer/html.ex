@@ -56,7 +56,7 @@ defmodule Crawler.Snapper.LinkReplacer.Html do
          variant,
          offline
        )
-       when name in ~w(href xlink:href src poster data) do
+       when name in ~w(href xlink:href src poster data background) do
     href_replacement(attr, offline)
   end
 

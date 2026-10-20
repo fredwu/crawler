@@ -5,6 +5,7 @@ defmodule Crawler.HTMLReferences do
 
   @svg_paint ~w(image use feimage lineargradient radialgradient pattern filter)
   @svg_presentation ~w(fill stroke filter clip-path mask marker marker-start marker-mid marker-end cursor)
+  @background_tags ~w(body table thead tbody tfoot tr td th)
   @math_inert @svg_paint ++ ~w(base script style svg)
 
   def attributes(tag, attrs, opts, namespace \\ :html) do
@@ -124,7 +125,7 @@ defmodule Crawler.HTMLReferences do
   def credentials("script", "href", attrs, :html), do: keyword_credentials(attrs, :same_origin)
 
   def credentials(tag, _attr, attrs, _namespace)
-      when tag in ["img", "source", "input", "video", "audio", "track"] do
+      when tag in ["img", "image", "source", "input", "video", "audio", "track"] do
     keyword_credentials(attrs, :include)
   end
 
@@ -133,6 +134,7 @@ defmodule Crawler.HTMLReferences do
     keyword_credentials(attrs, :include)
   end
 
+  def credentials(_tag, "background", attrs, :html), do: keyword_credentials(attrs, :include)
   def credentials(_tag, _attr, _attrs, _namespace), do: :include
 
   def script_credentials(attrs) do
@@ -172,6 +174,7 @@ defmodule Crawler.HTMLReferences do
   def role("link", "imagesrcset", _attrs), do: "img"
   def role("link", "href", attrs), do: link_role(attrs)
   def role("input", "src", attrs), do: if(image_button?(attrs), do: "img", else: "link")
+  def role(_tag, "background", _attrs), do: "img"
   def role(tag, _attr, _attrs) when tag in ["img", "source", "video", "audio", "track"], do: tag
   def role(_tag, _attr, _attrs), do: "link"
 
@@ -269,8 +272,16 @@ defmodule Crawler.HTMLReferences do
     href ++ images
   end
 
-  defp element_attributes(tag, _attrs, opts, :html) when tag in ["img", "source"],
+  defp element_attributes(tag, _attrs, opts, :html) when tag in ["img", "image", "source"],
     do: channel_attributes(opts, "images", ["src", "srcset"])
+
+  defp element_attributes(tag, attrs, opts, :html) when tag in @background_tags do
+    if attribute(attrs, "background") == nil do
+      []
+    else
+      channel_attributes(opts, "images", ["background"])
+    end
+  end
 
   defp element_attributes("video", _attrs, opts, :html),
     do: channel_attributes(opts, "images", ["src", "poster"])

@@ -63,11 +63,18 @@ defmodule Crawler.Parser.SpeculationRules do
   defp action_name("prefetch"), do: :prefetch
   defp action_name(_action), do: :prerender
 
-  defp rule_base(nil, %{fetch_kind: :speculation_rules} = opts), do: response_url(opts)
-  defp rule_base(nil, opts), do: opts[:document_base] || opts[:referrer_url] || opts[:url]
+  # A missing relative_to and relative_to ruleset keep the base passed to the
+  # parser. An inline script passes the document base. A rules file passes its
+  # response URL. relative_to document always uses the page.
+  defp rule_base(relative_to, %{fetch_kind: :speculation_rules} = opts)
+       when relative_to in [nil, "ruleset"],
+       do: response_url(opts)
+
+  defp rule_base(relative_to, opts) when relative_to in [nil, "ruleset"] do
+    opts[:document_base] || opts[:referrer_url] || opts[:url]
+  end
+
   defp rule_base("document", opts), do: opts[:document_base]
-  defp rule_base("ruleset", %{fetch_kind: :speculation_rules} = opts), do: response_url(opts)
-  defp rule_base("ruleset", _opts), do: nil
   defp rule_base(_relative_to, _opts), do: nil
 
   # referrer_url is the response. url remains the request that was redirected.

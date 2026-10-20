@@ -448,6 +448,9 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
 
     assert {:ok, _} = Store.add({article, scope}, opts.generation, opts.queue, "fetch")
 
+    # finish_claim releases one pending slot. Count this in-flight fetch.
+    assert :ok = Store.note_enqueued(scope, opts.generation, opts.queue)
+
     assert :ok ==
              Store.note_picture_type(
                {article, scope},
@@ -662,6 +665,7 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
 
     for path <- [
           "/blog/inline-next",
+          "/blog/skip-ruleset",
           "/rules/ext-next",
           "/rules/file-next",
           "/blog/doc-next",
@@ -677,6 +681,7 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
 
     for path <- [
           "/blog/inline-next",
+          "/blog/skip-ruleset",
           "/rules/ext.json",
           "/rules/ext-next",
           "/rules/rules.json",
@@ -689,11 +694,13 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
 
     refute Store.find({"https://other.test/nope", opts.scope})
 
-    for path <- ["/blog/skip-ruleset", "/blog/skip-document", "/star"] do
+    for path <- ["/blog/skip-document", "/star"] do
       refute Store.find({context.url <> path, opts.scope})
     end
 
     assert_points(saved, page, context.url <> "/blog/inline-next", root)
+    assert_points(saved, page, context.url <> "/blog/skip-ruleset", root)
+    refute saved =~ ~s("skip-ruleset")
     assert_points(saved, page, ext, root)
     assert_points(rules_body, rules, context.url <> "/rules/file-next", root)
     assert_points(rules_body, rules, context.url <> "/blog/doc-next", root)

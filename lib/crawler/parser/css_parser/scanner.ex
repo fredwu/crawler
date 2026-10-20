@@ -113,7 +113,7 @@ defmodule Crawler.Parser.CssParser.Scanner do
 
   defp function("url", body, offset, state) do
     {token, tail, finish, comments} = Value.url(body, offset)
-    state = if token, do: add(state, token), else: state
+    state = if keep_url?(state, token), do: add(state, token), else: state
 
     walk(
       tail,
@@ -158,7 +158,18 @@ defmodule Crawler.Parser.CssParser.Scanner do
   defp resource_kind(%{import?: true}), do: :import
   defp resource_kind(_state), do: :url
 
+  # A namespace url is a literal name. A url whose value starts with "#" is a
+  # fragment in the current tree, not a file relative to the stylesheet.
+  defp keep_url?(_state, nil), do: false
+  defp keep_url?(%{at_rule: :namespace}, _token), do: false
+  defp keep_url?(_state, %{value: value}), do: not local_fragment?(value)
+
+  defp local_fragment?(value) do
+    value |> String.trim() |> String.starts_with?("#")
+  end
+
   defp at_name("font-face"), do: :font_face
+  defp at_name("namespace"), do: :namespace
   defp at_name(_name), do: nil
 
   defp open_block(state) do
@@ -245,8 +256,12 @@ defmodule Crawler.Parser.CssParser.Scanner do
   defp finish_ident(state, changes \\ %{}) do
     state
     |> Map.merge(changes)
-    |> Map.merge(%{import?: false, at_rule: nil})
+    |> Map.merge(%{import?: false, at_rule: namespace_prelude(state.at_rule)})
   end
+
+  # The prefix is an ident. The namespace url after it is still a name.
+  defp namespace_prelude(:namespace), do: :namespace
+  defp namespace_prelude(_rule), do: nil
 
   defp candidate?([{:image_set, true} | _]), do: true
   defp candidate?([{:image, true} | _]), do: true

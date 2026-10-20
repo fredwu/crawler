@@ -520,6 +520,9 @@ defmodule Crawler.CrawlDrawingMathTest do
 
     assert {:ok, _} = Store.add({svg, scope}, opts.generation, opts.queue, "img")
 
+    # finish_claim releases one pending slot. Count the picture worker's slot.
+    assert :ok = Store.note_enqueued(scope, opts.generation, opts.queue)
+
     {:ok, claim} =
       Store.start_work(%{
         url: svg,

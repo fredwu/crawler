@@ -290,7 +290,7 @@ defmodule Crawler.Snapper.LinkReplacer do
     end
   end
 
-  # Inline rules belong to the document. A ruleset base applies only to a rules file.
+  # fetch_kind stays unset, so an inline ruleset url keeps the document base.
   defp rewrite_inline_rules(source, page_opts, source_opts) do
     rules_opts = %{
       url: page_opts[:url],
