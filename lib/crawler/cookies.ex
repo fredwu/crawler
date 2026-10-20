@@ -56,7 +56,7 @@ defmodule Crawler.Cookies do
 
   def credential_mode(context) do
     case normalize_context(context) do
-      %{credentials: mode} when mode in [:include, :same_origin, :same_site] -> mode
+      %{credentials: mode} when mode in [:include, :same_origin, :same_site, :omit] -> mode
       _context -> :include
     end
   end
@@ -261,6 +261,7 @@ defmodule Crawler.Cookies do
   end
 
   defp credential_ok?(_request, _document, :include), do: true
+  defp credential_ok?(_request, _document, :omit), do: false
   defp credential_ok?(_request, _document, _mode), do: false
 
   defp request_ok?(cookie, %URI{scheme: scheme, host: host, path: path}, document, navigation)

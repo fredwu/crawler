@@ -14,6 +14,7 @@ defmodule Crawler.Snapper.LinkReplacer.RawText do
     else
       document = Parser.with_document_base(body, opts)
       base = document[:referrer_url] || document[:url]
+      location = opts[:document_url] || opts[:referrer_url] || opts[:url]
       tags = body |> HTMLSpans.tags() |> Enum.filter(& &1.content_span)
       maps = maps_before(tags, body, opts, base)
       prefix = Tokens.prefix([body], "R")
@@ -22,7 +23,7 @@ defmodule Crawler.Snapper.LinkReplacer.RawText do
       |> Enum.zip(maps)
       |> Enum.reverse()
       |> Enum.with_index()
-      |> Enum.reduce({body, []}, &protect_region(&1, &2, opts, prefix, base))
+      |> Enum.reduce({body, []}, &protect_region(&1, &2, opts, prefix, base, location))
     end
   end
 
@@ -33,10 +34,10 @@ defmodule Crawler.Snapper.LinkReplacer.RawText do
     end)
   end
 
-  defp protect_region({{tag, map}, index}, {body, saved}, opts, prefix, base) do
+  defp protect_region({{tag, map}, index}, {body, saved}, opts, prefix, base, location) do
     {start, length} = tag.content_span
     source = binary_part(body, start, length)
-    source_opts = source_options(tag, opts, map, base)
+    source_opts = source_options(tag, opts, map, base, location)
     token = Tokens.at(prefix, index)
     head = binary_part(body, 0, start)
     tail = binary_part(body, start + length, byte_size(body) - start - length)
@@ -66,9 +67,9 @@ defmodule Crawler.Snapper.LinkReplacer.RawText do
       HTMLReferences.import_map?(tuple_attrs(tag))
   end
 
-  defp source_options(%{in_template?: true}, _opts, _map, _base), do: nil
+  defp source_options(%{in_template?: true}, _opts, _map, _base, _location), do: nil
 
-  defp source_options(tag, opts, map, base) do
+  defp source_options(tag, opts, map, base, location) do
     attrs = tuple_attrs(tag)
 
     cond do
@@ -81,11 +82,11 @@ defmodule Crawler.Snapper.LinkReplacer.RawText do
 
       tag.name == "script" and tag.namespace == :svg and HTMLReferences.enabled?(opts, "js") and
           HTMLReferences.svg_script_source(attrs) == :inline ->
-        inline_script_options(attrs, map, base)
+        inline_script_options(attrs, map, base, location)
 
       tag.name == "script" and tag.namespace != :svg and HTMLReferences.enabled?(opts, "js") and
           HTMLReferences.script_source(attrs) == :inline ->
-        inline_script_options(attrs, map, base)
+        inline_script_options(attrs, map, base, location)
 
       true ->
         nil
@@ -120,19 +121,23 @@ defmodule Crawler.Snapper.LinkReplacer.RawText do
     )
   end
 
-  defp inline_script_options(attrs, map, base) do
-    put_referrer(
-      %{
-        content_type: "application/javascript",
-        javascript_goal: HTMLReferences.script_goal(attrs),
-        import_map: map,
-        document_base: base,
-        inline_source: true,
-        headers: []
-      },
-      base
-    )
+  defp inline_script_options(attrs, map, base, location) do
+    %{
+      content_type: "application/javascript",
+      javascript_goal: HTMLReferences.script_goal(attrs),
+      import_map: map,
+      document_base: base,
+      inline_source: true,
+      headers: []
+    }
+    |> put_referrer(base)
+    |> put_document_url(location)
   end
+
+  defp put_document_url(opts, url) when is_binary(url) and url != "",
+    do: Map.put(opts, :document_url, url)
+
+  defp put_document_url(opts, _url), do: opts
 
   defp put_referrer(opts, base) when is_binary(base), do: Map.put(opts, :referrer_url, base)
   defp put_referrer(opts, _base), do: opts

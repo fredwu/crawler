@@ -16,7 +16,23 @@ defmodule Crawler.Parser.JsParser.Calls do
   @meta_base Regex.compile!(
                "^#{@gap}*,#{@gap}*import#{@gap}*\\.#{@gap}*meta#{@gap}*\\.#{@gap}*url#{@gap}*\\)"
              )
+  @self_location_base Regex.compile!(
+                        "^#{@gap}*,#{@gap}*self#{@gap}*\\.#{@gap}*location#{@gap}*\\.#{@gap}*href#{@gap}*\\)"
+                      )
+  @location_base Regex.compile!("^#{@gap}*,#{@gap}*location#{@gap}*\\.#{@gap}*href#{@gap}*\\)")
+  @document_base Regex.compile!("^#{@gap}*,#{@gap}*document#{@gap}*\\.#{@gap}*baseURI#{@gap}*\\)")
+  # `self.location.href` is tried before `location.href`. Both name the same base.
+  @known_bases [
+    {:location, @self_location_base},
+    {:location, @location_base},
+    {:document, @document_base},
+    {:script, @meta_base}
+  ]
+  # A worklet and `importScripts` keep `import.meta.url` in a classic script.
+  # A worker, service worker, and `import()` do not.
+  @entry_bases [:script, :location, :document]
   @import_scripts Regex.compile!("(?<![\\w$.])importScripts#{@gap}*(\\()")
+  @import_call Regex.compile!("(?<![\\w$.])import#{@gap}*(\\()")
   @ident "[A-Za-z_$][A-Za-z0-9_$]*"
   @worklet Regex.compile!(
              "(?<![\\w$])(?:(?:#{@ident}#{@gap}*\\.#{@gap}*)?CSS#{@gap}*\\.#{@gap}*paintWorklet|(?:#{@ident}#{@gap}*\\.#{@gap}*)+audioWorklet)#{@gap}*\\.#{@gap}*addModule#{@gap}*(\\()"
@@ -29,50 +45,51 @@ defmodule Crawler.Parser.JsParser.Calls do
     {masked, strings, _comments} = Scanner.scan(source, goal)
     strings = MapSet.new(strings)
     workers = workers(source, masked, strings, goal)
-    taken = MapSet.new(for {:worker, at, len, _spec, _goal, :module} <- workers, do: {at, len})
+    scripts = import_scripts(source, masked, strings)
+    imports = dynamic_imports(source, masked, strings, goal)
+    taken = taken_spans(workers, scripts, imports)
 
-    urls =
-      if goal == :module do
-        source
-        |> urls(masked, strings)
-        |> Enum.reject(fn {:url, at, len, _spec} -> MapSet.member?(taken, {at, len}) end)
-      else
-        []
-      end
-
-    workers ++ urls ++ import_scripts(source, masked, strings)
+    workers ++ module_urls(source, masked, strings, goal, taken) ++ scripts ++ imports
   end
 
   def spans(_source, _goal), do: []
 
   defp workers(source, masked, strings, goal) do
-    meta = if goal == :module, do: worker_urls(source, masked, strings), else: []
-
-    meta ++
-      worklet_urls(source, masked, strings) ++
+    constructed(@worker, source, masked, strings, :worker, allowed_bases(goal)) ++
+      constructed(@worklet, source, masked, strings, :worklet, @entry_bases) ++
+      constructed(@register, source, masked, strings, :register, allowed_bases(goal)) ++
       worker_strings(source, masked, strings) ++
       worklet_strings(source, masked, strings) ++
       registers(source, masked, strings)
   end
 
-  defp worker_urls(source, masked, strings) do
+  defp constructed(regex, source, masked, strings, kind, bases) do
     reject_overlaps(
-      scan(@worker, source, fn [whole, _kind, paren] ->
-        open = index(paren)
-
-        with true <- call?(masked, strings, whole, paren),
-             {:ok, url_open} <- worker_url_open(source, masked, open),
-             {:ok, {at, len, text}, next} <- first_string(masked, source, strings, url_open),
-             {:ok, url_close} <- meta_base_end(source, next),
-             true <- literal_argument?(masked, {url_close, 0}),
-             {:ok, close} <- call_end(masked, open) do
-          {:worker, at, len, text, worker_goal(source, strings, masked, open, close), :module}
-        else
-          _ -> nil
-        end
-      end)
+      scan(regex, source, &constructed_call(&1, source, masked, strings, kind, bases))
     )
   end
+
+  defp constructed_call([whole, kind_name, paren], source, masked, strings, kind, bases)
+       when is_tuple(kind_name) do
+    constructed_call([whole, paren], source, masked, strings, kind, bases)
+  end
+
+  defp constructed_call([whole, paren], source, masked, strings, kind, bases) do
+    open = index(paren)
+
+    with true <- call?(masked, strings, whole, paren),
+         {:ok, url_open} <- worker_url_open(source, masked, open),
+         {:ok, {at, len, text}, next} <- first_string(masked, source, strings, url_open),
+         {:ok, url_close, base} <- known_base_end(source, next, bases),
+         true <- literal_argument?(masked, {url_close, 0}),
+         {:ok, close} <- call_end(masked, open) do
+      worker_tuple(at, len, text, base, kind, source, strings, masked, open, close)
+    else
+      _ -> nil
+    end
+  end
+
+  defp constructed_call(_groups, _source, _masked, _strings, _kind, _bases), do: nil
 
   defp worker_strings(source, masked, strings) do
     scan(@worker, source, fn [whole, _kind, paren] ->
@@ -82,30 +99,11 @@ defmodule Crawler.Parser.JsParser.Calls do
            {:ok, {at, len, text}, _next} <- first_string(masked, source, strings, open),
            true <- literal_argument?(masked, {at, len}),
            {:ok, close} <- call_end(masked, open) do
-        {:worker, at, len, text, worker_goal(source, strings, masked, open, close), :window}
+        worker_tuple(at, len, text, :window, :worker, source, strings, masked, open, close)
       else
         _ -> nil
       end
     end)
-  end
-
-  defp worklet_urls(source, masked, strings) do
-    reject_overlaps(scan(@worklet, source, &worklet_url(&1, source, masked, strings)))
-  end
-
-  defp worklet_url([whole, paren], source, masked, strings) do
-    open = index(paren)
-
-    with true <- call?(masked, strings, whole, paren),
-         {:ok, url_open} <- worker_url_open(source, masked, open),
-         {:ok, {at, len, text}, next} <- first_string(masked, source, strings, url_open),
-         {:ok, url_close} <- meta_base_end(source, next),
-         true <- literal_argument?(masked, {url_close, 0}),
-         {:ok, _close} <- call_end(masked, open) do
-      {:worker, at, len, text, :module, :module}
-    else
-      _ -> nil
-    end
   end
 
   defp worklet_strings(source, masked, strings) do
@@ -115,8 +113,8 @@ defmodule Crawler.Parser.JsParser.Calls do
       with true <- call?(masked, strings, whole, paren),
            {:ok, {at, len, text}, _next} <- first_string(masked, source, strings, open),
            true <- literal_argument?(masked, {at, len}),
-           {:ok, _close} <- call_end(masked, open) do
-        {:worker, at, len, text, :module, :window}
+           {:ok, close} <- call_end(masked, open) do
+        worker_tuple(at, len, text, :window, :worklet, source, strings, masked, open, close)
       else
         _ -> nil
       end
@@ -131,10 +129,31 @@ defmodule Crawler.Parser.JsParser.Calls do
            {:ok, {at, len, text}, _next} <- first_string(masked, source, strings, open),
            true <- literal_argument?(masked, {at, len}),
            {:ok, close} <- call_end(masked, open) do
-        {:worker, at, len, text, worker_goal(source, strings, masked, open, close), :window}
+        worker_tuple(at, len, text, :window, :register, source, strings, masked, open, close)
       else
         _ -> nil
       end
+    end)
+  end
+
+  defp module_urls(source, masked, strings, :module, taken) do
+    source
+    |> urls(masked, strings)
+    |> Enum.reject(fn {:url, at, len, _spec} -> MapSet.member?(taken, {at, len}) end)
+  end
+
+  defp module_urls(_source, _masked, _strings, _goal, _taken), do: []
+
+  defp taken_spans(workers, scripts, imports) do
+    MapSet.new(span_keys(workers) ++ span_keys(scripts) ++ span_keys(imports))
+  end
+
+  defp span_keys(calls) do
+    Enum.flat_map(calls, fn
+      {:worker, at, len, _, _, _, _} -> [{at, len}]
+      {:scripts, at, len, _, _} -> [{at, len}]
+      {:import, at, len, _, _} -> [{at, len}]
+      _other -> []
     end)
   end
 
@@ -142,12 +161,31 @@ defmodule Crawler.Parser.JsParser.Calls do
     scan(@meta_url, source, fn [whole, paren] ->
       with true <- call?(masked, strings, whole, paren),
            {:ok, {at, len, text}, next} <- first_string(masked, source, strings, index(paren)),
-           {:ok, _close} <- meta_base_end(source, next) do
+           {:ok, _close, :script} <- known_base_end(source, next, [:script]) do
         {:url, at, len, text}
       else
         _ -> nil
       end
     end)
+  end
+
+  defp dynamic_imports(source, masked, strings, goal) do
+    scan(@import_call, source, &import_call(&1, source, masked, strings, goal))
+  end
+
+  defp import_call([whole, paren], source, masked, strings, goal) do
+    open = index(paren)
+
+    with true <- call?(masked, strings, whole, paren),
+         {:ok, url_open} <- worker_url_open(source, masked, open),
+         {:ok, {at, len, text}, next} <- first_string(masked, source, strings, url_open),
+         {:ok, url_close, base} <- known_base_end(source, next, allowed_bases(goal)),
+         true <- literal_argument?(masked, {url_close, 0}),
+         {:ok, _close} <- call_end(masked, open) do
+      {:import, at, len, text, base}
+    else
+      _ -> nil
+    end
   end
 
   defp import_scripts(source, masked, strings) do
@@ -183,7 +221,7 @@ defmodule Crawler.Parser.JsParser.Calls do
         string_argument(masked, source, strings, index, stop)
 
       true ->
-        arguments(masked, source, strings, skip_argument(masked, index, stop), stop)
+        script_url_argument(masked, source, strings, index, stop)
     end
   end
 
@@ -205,6 +243,27 @@ defmodule Crawler.Parser.JsParser.Calls do
       [{:scripts, at, len, text} | arguments(masked, source, strings, next, stop)]
     else
       arguments(masked, source, strings, skip_argument(masked, next, stop), stop)
+    end
+  end
+
+  defp script_url_argument(masked, source, strings, index, stop) do
+    case script_url(source, masked, strings, index) do
+      {:ok, {at, len, text, base}, next} ->
+        [{:scripts, at, len, text, base} | arguments(masked, source, strings, next, stop)]
+
+      :error ->
+        arguments(masked, source, strings, skip_argument(masked, index, stop), stop)
+    end
+  end
+
+  defp script_url(source, masked, strings, index) do
+    with {:ok, url_open} <- url_open_at(source, masked, index),
+         {:ok, {at, len, text}, next} <- first_string(masked, source, strings, url_open),
+         {:ok, url_close, base} <- known_base_end(source, next, @entry_bases),
+         true <- literal_argument?(masked, {url_close, 0}) do
+      {:ok, {at, len, text, base}, url_close + 1}
+    else
+      _ -> :error
     end
   end
 
@@ -254,40 +313,78 @@ defmodule Crawler.Parser.JsParser.Calls do
   end
 
   defp worker_url_open(source, masked, open) do
-    index = skip(masked, open + 1, byte_size(masked))
+    url_open_at(source, masked, skip(masked, open + 1, byte_size(masked)))
+  end
+
+  defp url_open_at(source, masked, index) when index < byte_size(source) do
     rest = binary_part(source, index, byte_size(source) - index)
+    opened_url(masked, index, Regex.run(@worker_url_open, rest, return: :index))
+  end
 
-    case Regex.run(@worker_url_open, rest, return: :index) do
-      [{0, len}] ->
-        paren = index + len - 1
-        if :binary.at(masked, paren) == ?(, do: {:ok, paren}, else: :error
+  defp url_open_at(_source, _masked, _index), do: :error
 
-      _ ->
-        :error
+  defp opened_url(masked, index, [{0, len}]) do
+    paren = index + len - 1
+    if :binary.at(masked, paren) == ?(, do: {:ok, paren}, else: :error
+  end
+
+  defp opened_url(_masked, _index, _match), do: :error
+
+  defp known_base_end(source, index, allowed) do
+    rest = binary_part(source, index, byte_size(source) - index)
+    find_base(rest, index, allowed, @known_bases)
+  end
+
+  defp find_base(_rest, _index, _allowed, []), do: :error
+
+  defp find_base(rest, index, allowed, [{kind, regex} | bases]) do
+    if kind in allowed do
+      matched_base(rest, index, allowed, bases, kind, regex)
+    else
+      find_base(rest, index, allowed, bases)
     end
   end
 
-  defp meta_base_end(source, index) do
-    rest = binary_part(source, index, byte_size(source) - index)
-
-    case Regex.run(@meta_base, rest, return: :index) do
-      [{0, len}] -> {:ok, index + len - 1}
-      _ -> :error
+  defp matched_base(rest, index, allowed, bases, kind, regex) do
+    case Regex.run(regex, rest, return: :index) do
+      [{0, len}] -> {:ok, index + len - 1, kind}
+      _other -> find_base(rest, index, allowed, bases)
     end
   end
+
+  defp allowed_bases(:module), do: [:script, :location, :document]
+  defp allowed_bases(_goal), do: [:location, :document]
 
   defp literal_argument?(masked, {at, len}) do
     index = skip(masked, at + len + 1, byte_size(masked))
     index < byte_size(masked) and :binary.at(masked, index) in [?,, ?)]
   end
 
+  defp worker_tuple(at, len, text, base, kind, source, strings, masked, open, close) do
+    {goal, credentials} = entry_options(kind, source, strings, masked, open, close)
+    {:worker, at, len, text, goal, base, credentials}
+  end
+
+  defp entry_options(kind, source, strings, masked, open, close) do
+    {parsed, credentials} = worker_goal(source, strings, masked, open, close)
+    {goal_for(kind, parsed), credentials_for(kind, parsed, credentials)}
+  end
+
+  defp goal_for(:worklet, _parsed), do: :module
+  defp goal_for(_kind, parsed), do: parsed
+
+  defp credentials_for(:register, _parsed, _credentials), do: :same_origin
+  defp credentials_for(:worklet, _parsed, credentials), do: credentials
+  defp credentials_for(_kind, :module, credentials), do: credentials
+  defp credentials_for(_kind, _parsed, _credentials), do: :same_origin
+
   defp worker_goal(source, strings, masked, open, close) do
     case options_brace(masked, open, close) do
       {start, stop} ->
-        scan_type(source, strings, masked, start + 1, stop, 1, 0, 0, :script)
+        scan_options(source, strings, masked, start + 1, stop, 1, 0, 0, :script, :same_origin)
 
       nil ->
-        :script
+        {:script, :same_origin}
     end
   end
 
@@ -338,86 +435,321 @@ defmodule Crawler.Parser.JsParser.Calls do
     end
   end
 
-  defp scan_type(_source, _strings, _masked, index, stop, _braces, _parens, _brackets, goal)
+  defp scan_options(
+         _source,
+         _strings,
+         _masked,
+         index,
+         stop,
+         _braces,
+         _parens,
+         _brackets,
+         goal,
+         credentials
+       )
        when index >= stop do
-    goal
+    {goal, credentials}
   end
 
-  defp scan_type(source, strings, masked, index, stop, braces, parens, brackets, goal) do
+  defp scan_options(
+         source,
+         strings,
+         masked,
+         index,
+         stop,
+         braces,
+         parens,
+         brackets,
+         goal,
+         credentials
+       ) do
     case :binary.at(masked, index) do
       ?{ ->
-        scan_type(source, strings, masked, index + 1, stop, braces + 1, parens, brackets, goal)
+        scan_options(
+          source,
+          strings,
+          masked,
+          index + 1,
+          stop,
+          braces + 1,
+          parens,
+          brackets,
+          goal,
+          credentials
+        )
 
       ?} ->
-        scan_type(source, strings, masked, index + 1, stop, braces - 1, parens, brackets, goal)
+        scan_options(
+          source,
+          strings,
+          masked,
+          index + 1,
+          stop,
+          braces - 1,
+          parens,
+          brackets,
+          goal,
+          credentials
+        )
 
       ?( ->
-        scan_type(source, strings, masked, index + 1, stop, braces, parens + 1, brackets, goal)
+        scan_options(
+          source,
+          strings,
+          masked,
+          index + 1,
+          stop,
+          braces,
+          parens + 1,
+          brackets,
+          goal,
+          credentials
+        )
 
       ?) ->
-        scan_type(source, strings, masked, index + 1, stop, braces, parens - 1, brackets, goal)
+        scan_options(
+          source,
+          strings,
+          masked,
+          index + 1,
+          stop,
+          braces,
+          parens - 1,
+          brackets,
+          goal,
+          credentials
+        )
 
       ?[ ->
-        scan_type(source, strings, masked, index + 1, stop, braces, parens, brackets + 1, goal)
+        scan_options(
+          source,
+          strings,
+          masked,
+          index + 1,
+          stop,
+          braces,
+          parens,
+          brackets + 1,
+          goal,
+          credentials
+        )
 
       ?] ->
-        scan_type(source, strings, masked, index + 1, stop, braces, parens, brackets - 1, goal)
+        scan_options(
+          source,
+          strings,
+          masked,
+          index + 1,
+          stop,
+          braces,
+          parens,
+          brackets - 1,
+          goal,
+          credentials
+        )
 
       _char ->
-        advance_type(source, strings, masked, index, stop, braces, parens, brackets, goal)
+        advance_options(
+          source,
+          strings,
+          masked,
+          index,
+          stop,
+          braces,
+          parens,
+          brackets,
+          goal,
+          credentials
+        )
     end
   end
 
-  defp advance_type(source, strings, masked, index, stop, braces, parens, brackets, goal) do
-    if braces == 1 and parens == 0 and brackets == 0 and type_key?(source, masked, strings, index) do
-      apply_type(source, strings, masked, index, stop, braces, parens, brackets, goal)
-    else
-      scan_type(source, strings, masked, index + 1, stop, braces, parens, brackets, goal)
+  defp advance_options(
+         source,
+         strings,
+         masked,
+         index,
+         stop,
+         braces,
+         parens,
+         brackets,
+         goal,
+         credentials
+       ) do
+    cond do
+      option_level?(braces, parens, brackets) and
+          option_key?(source, masked, strings, index, "type") ->
+        apply_type(
+          source,
+          strings,
+          masked,
+          index,
+          stop,
+          braces,
+          parens,
+          brackets,
+          goal,
+          credentials
+        )
+
+      option_level?(braces, parens, brackets) and
+          option_key?(source, masked, strings, index, "credentials") ->
+        apply_credentials(
+          source,
+          strings,
+          masked,
+          index,
+          stop,
+          braces,
+          parens,
+          brackets,
+          goal,
+          credentials
+        )
+
+      true ->
+        scan_options(
+          source,
+          strings,
+          masked,
+          index + 1,
+          stop,
+          braces,
+          parens,
+          brackets,
+          goal,
+          credentials
+        )
     end
   end
 
-  defp apply_type(source, strings, masked, index, stop, braces, parens, brackets, goal) do
-    case type_value(source, strings, masked, index + 4, stop) do
-      {:ok, next, next_goal} ->
-        scan_type(source, strings, masked, next, stop, braces, parens, brackets, next_goal)
+  defp option_level?(braces, parens, brackets) do
+    braces == 1 and parens == 0 and brackets == 0
+  end
+
+  defp apply_type(
+         source,
+         strings,
+         masked,
+         index,
+         stop,
+         braces,
+         parens,
+         brackets,
+         goal,
+         credentials
+       ) do
+    case option_value(source, strings, masked, index + 4, stop) do
+      {:ok, text, next} ->
+        scan_options(
+          source,
+          strings,
+          masked,
+          next,
+          stop,
+          braces,
+          parens,
+          brackets,
+          script_goal(text),
+          credentials
+        )
 
       :no ->
-        scan_type(source, strings, masked, index + 1, stop, braces, parens, brackets, goal)
+        scan_options(
+          source,
+          strings,
+          masked,
+          index + 1,
+          stop,
+          braces,
+          parens,
+          brackets,
+          goal,
+          credentials
+        )
     end
   end
 
-  defp type_key?(source, masked, strings, index) do
-    index + 4 <= byte_size(source) and binary_part(source, index, 4) == "type" and
-      (identifier_key?(masked, index) or MapSet.member?(strings, {index, index + 4}))
+  defp apply_credentials(
+         source,
+         strings,
+         masked,
+         index,
+         stop,
+         braces,
+         parens,
+         brackets,
+         goal,
+         credentials
+       ) do
+    case option_value(source, strings, masked, index + 11, stop) do
+      {:ok, text, next} ->
+        scan_options(
+          source,
+          strings,
+          masked,
+          next,
+          stop,
+          braces,
+          parens,
+          brackets,
+          goal,
+          worker_credential(text)
+        )
+
+      :no ->
+        scan_options(
+          source,
+          strings,
+          masked,
+          index + 1,
+          stop,
+          braces,
+          parens,
+          brackets,
+          goal,
+          credentials
+        )
+    end
   end
 
-  defp identifier_key?(masked, index) do
-    next = index + 4
+  defp option_key?(source, masked, strings, index, name) do
+    size = byte_size(name)
 
-    binary_part(masked, index, 4) == "____" and identifier_boundary?(masked, index) and
+    index + size <= byte_size(source) and binary_part(source, index, size) == name and
+      (masked_key?(masked, index, size) or MapSet.member?(strings, {index, index + size}))
+  end
+
+  defp masked_key?(masked, index, size) do
+    next = index + size
+
+    binary_part(masked, index, size) == String.duplicate("_", size) and
+      identifier_boundary?(masked, index) and
       (next >= byte_size(masked) or :binary.at(masked, next) != ?_)
   end
 
-  defp type_value(source, strings, masked, index, stop) do
+  defp option_value(source, strings, masked, index, stop) do
     index =
       if index < stop and :binary.at(masked, index) in [?", ?', ?`], do: index + 1, else: index
 
     index = skip(masked, index, stop)
 
     if index < stop and :binary.at(masked, index) == ?: do
-      value_at = skip(masked, index + 1, stop)
-
-      if value_at < stop and :binary.at(source, value_at) in [?", ?', ?`] do
-        decode_type(source, strings, masked, value_at, stop)
-      else
-        :no
-      end
+      read_option(source, strings, masked, skip(masked, index + 1, stop), stop)
     else
       :no
     end
   end
 
-  defp decode_type(source, strings, masked, quote_at, stop) do
+  defp read_option(source, strings, masked, value_at, stop) do
+    if value_at < stop and :binary.at(source, value_at) in [?", ?', ?`] do
+      decoded_literal(source, strings, masked, value_at, stop)
+    else
+      :no
+    end
+  end
+
+  defp decoded_literal(source, strings, masked, quote_at, stop) do
     mark = :binary.at(source, quote_at)
     at = quote_at + 1
 
@@ -426,12 +758,19 @@ defmodule Crawler.Parser.JsParser.Calls do
          true <- MapSet.member?(strings, {at, at + len}),
          {:ok, text} <- StringLiteral.decode(binary_part(source, at, len)),
          true <- type_literal?(masked, at + len + 1, stop) do
-      goal = if text == "module", do: :module, else: :script
-      {:ok, at + len + 1, goal}
+      {:ok, text, at + len + 1}
     else
       _ -> :no
     end
   end
+
+  defp script_goal("module"), do: :module
+  defp script_goal(_text), do: :script
+
+  defp worker_credential("include"), do: :include
+  defp worker_credential("omit"), do: :omit
+  defp worker_credential("same-origin"), do: :same_origin
+  defp worker_credential(_text), do: :same_origin
 
   # `stop` is the options object's closing brace, which the scan does not enter.
   defp type_literal?(masked, index, stop) do
@@ -468,7 +807,7 @@ defmodule Crawler.Parser.JsParser.Calls do
 
   defp reject_overlaps(matches) do
     {kept, _} =
-      Enum.reduce(matches, {[], MapSet.new()}, fn {:worker, at, len, _, _, _} = match,
+      Enum.reduce(matches, {[], MapSet.new()}, fn {:worker, at, len, _, _, _, _} = match,
                                                   {kept, seen} ->
         if MapSet.member?(seen, {at, len}),
           do: {kept, seen},

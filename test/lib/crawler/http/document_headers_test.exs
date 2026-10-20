@@ -74,6 +74,49 @@ defmodule Crawler.HTTP.DocumentHeadersTest do
            ]
   end
 
+  test "a link header keeps crossorigin, including a bare flag and an empty value" do
+    headers = [
+      {"link",
+       ~s|<https://cdn.example.com/app.js>; rel="modulepreload"; crossorigin="use-credentials", <https://cdn.example.com/anon.js>; rel="modulepreload"; crossorigin, <https://cdn.example.com/empty.css>; rel="stylesheet"; crossorigin="", <https://cdn.example.com/cred.css>; rel=stylesheet; crossorigin=Use-Credentials, <https://cdn.example.com/hero.png>; rel=preload; as=image; imagesrcset="a.png 1x, b.png 2x"; type=image/png; crossorigin=anonymous|}
+    ]
+
+    assert DocumentHeaders.elements(headers) == [
+             {"link",
+              [
+                {"rel", "modulepreload"},
+                {"href", "https://cdn.example.com/app.js"},
+                {"crossorigin", "use-credentials"}
+              ], []},
+             {"link",
+              [
+                {"rel", "modulepreload"},
+                {"href", "https://cdn.example.com/anon.js"},
+                {"crossorigin", ""}
+              ], []},
+             {"link",
+              [
+                {"rel", "stylesheet"},
+                {"href", "https://cdn.example.com/empty.css"},
+                {"crossorigin", ""}
+              ], []},
+             {"link",
+              [
+                {"rel", "stylesheet"},
+                {"href", "https://cdn.example.com/cred.css"},
+                {"crossorigin", "Use-Credentials"}
+              ], []},
+             {"link",
+              [
+                {"rel", "preload"},
+                {"href", "https://cdn.example.com/hero.png"},
+                {"as", "image"},
+                {"imagesrcset", "a.png 1x, b.png 2x"},
+                {"type", "image/png"},
+                {"crossorigin", "anonymous"}
+              ], []}
+           ]
+  end
+
   test "link parameter names are matched without changing their values" do
     headers = [{"link", ~s|</app.css>; AS=Style|}]
 

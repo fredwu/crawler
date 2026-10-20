@@ -77,49 +77,39 @@ defmodule Crawler.Parser.ScriptReferences do
 
   defp import_ref(at, len, spec, map, opts) do
     case ImportMap.resolve(spec, map, script_base(opts)) do
-      {:ok, url} ->
-        %{
-          at: at,
-          len: len,
-          spec: spec,
-          url: url,
-          goal: :module,
-          html_tag: html_tag(opts),
-          reference_tag: "script",
-          import_map: child_map(opts, map),
-          document_base: child_base(opts),
-          worker_base: opts[:worker_base],
-          credentials: import_credentials(opts)
-        }
-
-      _other ->
-        nil
+      {:ok, url} -> module_import_ref(at, len, spec, url, opts)
+      _other -> nil
     end
   end
 
   defp call_ref({:url, at, len, spec}, opts) do
     case fetch(spec, script_base(opts)) do
       nil -> nil
-      url -> file_ref(at, len, spec, url)
+      url -> file_ref(at, len, spec, url, opts)
     end
   end
 
-  defp call_ref({:worker, at, len, spec, goal, :window}, opts) do
-    case fetch(spec, api_base(opts)) do
+  defp call_ref({:import, at, len, spec, base}, opts) do
+    case fetch(spec, reference_base(base, opts)) do
       nil -> nil
-      url -> worker_ref(at, len, spec, url, goal, opts)
+      url -> module_import_ref(at, len, spec, url, opts)
     end
   end
 
-  defp call_ref({:worker, at, len, spec, goal, :module}, opts) do
-    case fetch(spec, script_base(opts)) do
+  defp call_ref({:worker, at, len, spec, goal, base, credentials}, opts) do
+    case fetch(spec, reference_base(base, opts)) do
       nil -> nil
-      url -> worker_ref(at, len, spec, url, goal, opts)
+      url -> worker_ref(at, len, spec, url, goal, credentials, opts)
     end
   end
 
-  defp call_ref({:scripts, at, len, spec}, %{worker_base: base} = opts) when is_binary(base) do
-    case fetch(spec, base) do
+  defp call_ref({:scripts, at, len, spec}, opts) do
+    call_ref({:scripts, at, len, spec, :entry}, opts)
+  end
+
+  defp call_ref({:scripts, at, len, spec, base}, %{worker_base: worker} = opts)
+       when is_binary(worker) do
+    case fetch(spec, reference_base(base, opts)) do
       nil -> nil
       url -> script_ref(at, len, spec, url, opts)
     end
@@ -127,7 +117,24 @@ defmodule Crawler.Parser.ScriptReferences do
 
   defp call_ref(_call, _opts), do: nil
 
-  defp file_ref(at, len, spec, url) do
+  defp module_import_ref(at, len, spec, url, opts) do
+    %{
+      at: at,
+      len: len,
+      spec: spec,
+      url: url,
+      goal: :module,
+      html_tag: html_tag(opts),
+      reference_tag: "script",
+      import_map: child_map(opts, active_map(opts)),
+      document_base: child_base(opts),
+      document_url: child_document_url(opts),
+      worker_base: opts[:worker_base],
+      credentials: import_credentials(opts)
+    }
+  end
+
+  defp file_ref(at, len, spec, url, opts) do
     %{
       at: at,
       len: len,
@@ -137,12 +144,13 @@ defmodule Crawler.Parser.ScriptReferences do
       html_tag: "link",
       reference_tag: "link",
       import_map: nil,
-      document_base: nil,
-      worker_base: nil
+      document_base: child_base(opts),
+      document_url: child_document_url(opts),
+      worker_base: opts[:worker_base]
     }
   end
 
-  defp worker_ref(at, len, spec, url, goal, opts) do
+  defp worker_ref(at, len, spec, url, goal, credentials, opts) do
     %{
       at: at,
       len: len,
@@ -154,7 +162,7 @@ defmodule Crawler.Parser.ScriptReferences do
       import_map: nil,
       document_base: nil,
       worker_base: url,
-      credentials: :same_origin
+      credentials: credentials
     }
   end
 
@@ -180,8 +188,14 @@ defmodule Crawler.Parser.ScriptReferences do
   defp child_base(%{worker_base: base}) when is_binary(base), do: nil
   defp child_base(opts), do: opts[:document_base]
 
+  defp child_document_url(%{worker_base: base}) when is_binary(base), do: nil
+  defp child_document_url(opts), do: opts[:document_url]
+
   defp active_map(%{worker_base: base}) when is_binary(base), do: ImportMap.empty()
   defp active_map(opts), do: opts[:import_map] || ImportMap.empty()
+
+  # A missing base means the call could not be evaluated, even for an absolute URL.
+  defp fetch(_spec, base) when not is_binary(base), do: nil
 
   defp fetch(spec, base) do
     case URL.resolve(spec, base) do
@@ -192,6 +206,24 @@ defmodule Crawler.Parser.ScriptReferences do
 
   defp script_base(opts), do: opts[:referrer_url] || opts[:document_base] || opts[:url] || ""
   defp api_base(opts), do: opts[:worker_base] || opts[:document_base] || script_base(opts)
+
+  defp reference_base(:window, opts), do: api_base(opts)
+  defp reference_base(:script, opts), do: script_base(opts)
+  defp reference_base(:entry, opts), do: opts[:worker_base]
+  defp reference_base(:location, opts), do: location_base(opts)
+  defp reference_base(:document, opts), do: document_base_url(opts)
+  defp reference_base(_base, _opts), do: nil
+
+  # `location` is the page after redirects. A worker's location is that worker.
+  # It is not the script file and a base element does not change it.
+  defp location_base(%{worker_base: base}) when is_binary(base), do: base
+  defp location_base(%{document_url: url}) when is_binary(url), do: url
+  defp location_base(opts), do: opts[:url] || ""
+
+  # `document.baseURI` follows the page base. A worker has no document.
+  defp document_base_url(%{worker_base: base}) when is_binary(base), do: nil
+  defp document_base_url(%{document_base: base}) when is_binary(base), do: base
+  defp document_base_url(opts), do: location_base(opts)
   defp goal(opts), do: if(opts[:javascript_goal] == :script, do: :script, else: :module)
   defp html_tag(opts), do: opts[:link_html_tag] || "link"
 

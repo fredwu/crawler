@@ -599,6 +599,15 @@ defmodule Crawler.CookiesTest do
     assert Cookies.header(foreign, "https://other.test/app.js", site) == nil
     assert Cookies.header(foreign, "https://other.test/app.js", forced) == nil
 
+    omit = %{site: page, navigation: false, credentials: :omit}
+    assert Cookies.header(jar, "https://www.example.com/app.js", omit) == nil
+    assert Cookies.header(jar, "https://cdn.example.com/app.js", omit) == nil
+    refute Cookies.caller_cookie?("https://www.example.com/app.js", omit)
+    refute Cookies.caller_cookie?("https://cdn.example.com/app.js", omit)
+
+    assert Cookies.header(jar, "https://cdn.example.com/app.js", %{site: page, navigation: false}) ==
+             "session=1; open=1"
+
     assert Cookies.caller_cookie?("https://www.example.com/app.js", origin)
     refute Cookies.caller_cookie?("https://www.example.com:8443/app.js", origin)
     refute Cookies.caller_cookie?("http://www.example.com/app.js", origin)

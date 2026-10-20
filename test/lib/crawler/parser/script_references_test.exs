@@ -490,6 +490,391 @@ defmodule Crawler.Parser.ScriptReferencesTest do
     assert body =~ ~s|import "vue"|
   end
 
+  test "new URL uses the script, the opened page, or the document base" do
+    page = "https://example.com/dir/page.html"
+    base = "https://example.com/assets/"
+    script = "https://example.com/js/app.js"
+
+    refs =
+      js_refs(
+        """
+        new Worker(new URL("./from-script.js", import.meta.url));
+        new Worker(new URL("./from-page.js", location.href));
+        new Worker(new URL("./from-base.js", document.baseURI));
+        new SharedWorker(new URL("./shared.js", location.href));
+        CSS.paintWorklet.addModule(new URL("./paint.js", document.baseURI));
+        audio.audioWorklet.addModule(new URL("./heard.js", location.href));
+        new Worker(new URL("./self-page.js", self.location.href));
+        new Worker("./" + "skip.js");
+        new Worker(new URL("./skip.js", base));
+        fetch(new URL("./fetched-loc.js", location.href));
+        new URL("./bare-loc.js", location.href);
+        fetch(new URL("./fetched-meta.js", import.meta.url));
+        new URL("./bare-meta.js", import.meta.url);
+        new Worker(new URL("./win-loc.js", window.location.href));
+        """,
+        %{url: script, referrer_url: script, document_base: base, document_url: page}
+      )
+
+    assert find_spec(refs, "./from-script.js").url == "https://example.com/js/from-script.js"
+    assert find_spec(refs, "./from-page.js").url == "https://example.com/dir/from-page.js"
+    assert find_spec(refs, "./from-base.js").url == "https://example.com/assets/from-base.js"
+    assert find_spec(refs, "./shared.js").url == "https://example.com/dir/shared.js"
+    assert find_spec(refs, "./paint.js").url == "https://example.com/assets/paint.js"
+    assert find_spec(refs, "./heard.js").url == "https://example.com/dir/heard.js"
+    assert find_spec(refs, "./self-page.js").url == "https://example.com/dir/self-page.js"
+    assert find_spec(refs, "./fetched-meta.js").goal == nil
+    assert find_spec(refs, "./bare-meta.js").goal == nil
+
+    refute Enum.any?(
+             refs,
+             &(&1.spec in [
+                 "./skip.js",
+                 "./fetched-loc.js",
+                 "./bare-loc.js",
+                 "./win-loc.js"
+               ])
+           )
+
+    classic =
+      js_refs(
+        """
+        new Worker(new URL("./from-script.js", import.meta.url));
+        new Worker(new URL("./from-page.js", location.href));
+        navigator.serviceWorker.register(new URL("./sw.js", import.meta.url));
+        audio.audioWorklet.addModule(new URL("./proc.js", import.meta.url));
+        """,
+        %{
+          javascript_goal: :script,
+          url: script,
+          referrer_url: script,
+          document_base: base,
+          document_url: page
+        }
+      )
+
+    assert Enum.map(classic, & &1.spec) == ["./from-page.js", "./proc.js"]
+    assert find_spec(classic, "./from-page.js").url == "https://example.com/dir/from-page.js"
+    assert find_spec(classic, "./proc.js").goal == :module
+
+    entry = "https://example.com/js/sw.js"
+
+    inside =
+      js_refs(
+        """
+        importScripts(new URL("./ok.js", self.location.href));
+        importScripts(new URL("./also.js", location.href));
+        new Worker(new URL("./no-doc.js", document.baseURI));
+        importScripts(new URL("https://cdn.example.com/abs.js", document.baseURI));
+        """,
+        %{
+          javascript_goal: :script,
+          worker_base: entry,
+          url: "https://example.com/js/lib.js",
+          referrer_url: "https://example.com/js/lib.js",
+          document_base: base,
+          document_url: page
+        }
+      )
+
+    assert find_spec(inside, "./ok.js").url == "https://example.com/js/ok.js"
+    assert find_spec(inside, "./also.js").url == "https://example.com/js/also.js"
+    refute Enum.any?(inside, &(&1.spec in ["./no-doc.js", "https://cdn.example.com/abs.js"]))
+  end
+
+  test "a bare new URL file keeps the page or the worker" do
+    page = "https://example.com/dir/page.html"
+    base = "https://example.com/assets/"
+    script = "https://example.com/js/app.js"
+    chunk = "https://example.com/js/chunk.js"
+
+    parent =
+      js_refs(~s|new URL("./chunk.js", import.meta.url);|, %{
+        url: script,
+        referrer_url: script,
+        document_base: base,
+        document_url: page
+      })
+
+    file = find_spec(parent, "./chunk.js")
+    assert file.goal == nil
+    assert file.document_url == page
+    assert file.document_base == base
+    assert file.worker_base == nil
+
+    child =
+      js_refs(
+        """
+        new Worker(new URL("./from-page.js", location.href));
+        new Worker(new URL("./from-base.js", document.baseURI));
+        """,
+        %{
+          url: chunk,
+          referrer_url: chunk,
+          document_url: file.document_url,
+          document_base: file.document_base,
+          worker_base: file.worker_base
+        }
+      )
+
+    assert find_spec(child, "./from-page.js").url == "https://example.com/dir/from-page.js"
+    assert find_spec(child, "./from-base.js").url == "https://example.com/assets/from-base.js"
+
+    entry = "https://example.com/js/sw.js"
+
+    worker_file =
+      js_refs(~s|new URL("./chunk.js", import.meta.url);|, %{
+        javascript_goal: :module,
+        worker_base: entry,
+        url: entry,
+        referrer_url: entry,
+        document_url: page,
+        document_base: base
+      })
+
+    carried = find_spec(worker_file, "./chunk.js")
+    assert carried.worker_base == entry
+    assert carried.document_url == nil
+    assert carried.document_base == nil
+
+    inside =
+      js_refs(
+        """
+        new Worker(new URL("./from-worker.js", location.href));
+        new Worker(new URL("https://cdn.example.com/abs.js", document.baseURI));
+        """,
+        %{
+          url: chunk,
+          referrer_url: chunk,
+          document_url: carried.document_url,
+          document_base: carried.document_base,
+          worker_base: carried.worker_base
+        }
+      )
+
+    assert find_spec(inside, "./from-worker.js").url == "https://example.com/js/from-worker.js"
+    refute Enum.any?(inside, &(&1.spec == "https://cdn.example.com/abs.js"))
+  end
+
+  test "an inline module keeps import.meta.url on the base and location on the page" do
+    page = "https://example.com/dir/page.html"
+    base = "https://example.com/assets/"
+
+    source = """
+    <base href="#{base}">
+    <script type="module">
+    new Worker(new URL("./inline-base.js", import.meta.url));
+    new Worker(new URL("./inline-page.js", location.href));
+    new Worker(new URL("./inline-self.js", self.location.href));
+    </script>
+    """
+
+    refs =
+      html_refs(source, %{url: "https://example.com/old", referrer_url: page})
+
+    assert find_spec(refs, "./inline-base.js").url == "https://example.com/assets/inline-base.js"
+    assert find_spec(refs, "./inline-page.js").url == "https://example.com/dir/inline-page.js"
+    assert find_spec(refs, "./inline-self.js").url == "https://example.com/dir/inline-self.js"
+
+    old = "https://example.com/old"
+
+    assert {:ok, body} = rewrite(source, %{url: old, referrer_url: page})
+    assert body =~ Linker.offline_link(old, "https://example.com/assets/inline-base.js")
+    assert body =~ Linker.offline_link(old, "https://example.com/dir/inline-page.js")
+  end
+
+  test "a saved module points page and script addresses at different files" do
+    page = "https://example.com/dir/page.html"
+    base = "https://example.com/assets/"
+    script = "https://example.com/js/app.js"
+
+    source = """
+    new Worker(new URL("./from-script.js", import.meta.url));
+    new Worker(new URL("./from-page.js", location.href));
+    """
+
+    assert {:ok, body} =
+             LinkReplacer.replace_links(source, %{
+               url: script,
+               referrer_url: script,
+               document_url: page,
+               document_base: base,
+               content_type: "application/javascript",
+               html_tag: "link",
+               javascript_goal: :module
+             })
+
+    from_script = Linker.offline_link(script, "https://example.com/js/from-script.js")
+    from_page = Linker.offline_link(script, "https://example.com/dir/from-page.js")
+    assert from_script != from_page
+    assert body =~ from_script
+    assert body =~ from_page
+  end
+
+  test "worker and worklet credentials follow the kind of call" do
+    refs =
+      js_refs(
+        """
+        new Worker("https://cdn.example.com/included.js", {type: "module", credentials: "include"});
+        new Worker("/omitted.js", {type: "module", credentials: "omit"});
+        new Worker("https://cdn.example.com/local.js", {type: "module"});
+        new Worker("https://cdn.example.com/classic.js", {credentials: "include"});
+        new Worker("/classic-home.js", {credentials: "include"});
+        new SharedWorker("https://cdn.example.com/shared.js", {type: "module", credentials: "include"});
+        CSS.paintWorklet.addModule("https://cdn.example.com/paint.js", {credentials: "include"});
+        audio.audioWorklet.addModule("/quiet.js", {credentials: "omit"});
+        navigator.serviceWorker.register("./sw.js", {type: "module", credentials: "include"});
+        new Worker("https://cdn.example.com/unknown.js", {type: "module", credentials: "Include"});
+        new Worker("https://cdn.example.com/explicit.js", {type: "module", credentials: "same-origin"});
+        new Worker("./later.js", {credentials: "omit", type: "module"});
+        """,
+        %{document_base: @base}
+      )
+
+    assert_entry(refs, "https://cdn.example.com/included.js", :module, :include)
+    assert_entry(refs, "/omitted.js", :module, :omit)
+    assert_entry(refs, "https://cdn.example.com/local.js", :module, :same_origin)
+    assert_entry(refs, "https://cdn.example.com/classic.js", :script, :same_origin)
+    assert_entry(refs, "/classic-home.js", :script, :same_origin)
+    assert_entry(refs, "https://cdn.example.com/shared.js", :module, :include)
+    assert_entry(refs, "https://cdn.example.com/paint.js", :module, :include)
+    assert_entry(refs, "/quiet.js", :module, :omit)
+    assert_entry(refs, "./sw.js", :module, :same_origin)
+    assert_entry(refs, "https://cdn.example.com/unknown.js", :module, :same_origin)
+    assert_entry(refs, "https://cdn.example.com/explicit.js", :module, :same_origin)
+    assert_entry(refs, "./later.js", :module, :omit)
+  end
+
+  test "importScripts(new URL) is a classic script and keeps the worker location" do
+    page = "https://example.com/dir/page.html"
+    entry = "https://example.com/js/sw.js"
+    lib = "https://example.com/js/lib.js"
+    map = ImportMap.parse(~s|{"imports":{"vue":"/vue.js"}}|, @base)
+
+    refs =
+      js_refs(
+        """
+        importScripts(new URL("./lib.js", self.location.href));
+        importScripts("./plain.js");
+        importScripts(new URL("./also.js", location.href));
+        importScripts(new URL("./meta.js", import.meta.url));
+        """,
+        %{
+          javascript_goal: :script,
+          worker_base: entry,
+          url: entry,
+          referrer_url: entry,
+          document_url: page,
+          document_base: "https://example.com/assets/",
+          import_map: map
+        }
+      )
+
+    assert find_spec(refs, "./lib.js").url == lib
+    assert find_spec(refs, "./plain.js").url == "https://example.com/js/plain.js"
+    assert find_spec(refs, "./also.js").url == "https://example.com/js/also.js"
+    assert find_spec(refs, "./meta.js").url == "https://example.com/js/meta.js"
+    assert Enum.all?(refs, &(&1.goal == :script and &1.credentials == :same_origin))
+
+    inner = "https://example.com/js/lib/inner.js"
+
+    nested =
+      js_refs(
+        """
+        importScripts(new URL("./nested.js", self.location.href));
+        importScripts(new URL("./meta.js", import.meta.url));
+        import "vue";
+        import("./dyn.js");
+        import("vue");
+        """,
+        %{
+          javascript_goal: :script,
+          worker_base: entry,
+          url: inner,
+          referrer_url: inner,
+          document_url: page,
+          document_base: "https://example.com/assets/",
+          import_map: map
+        }
+      )
+
+    assert Enum.map(nested, & &1.spec) == ["./nested.js", "./meta.js", "./dyn.js"]
+    assert find_spec(nested, "./nested.js").url == "https://example.com/js/nested.js"
+    assert find_spec(nested, "./meta.js").url == "https://example.com/js/lib/meta.js"
+    assert find_spec(nested, "./dyn.js").url == "https://example.com/js/lib/dyn.js"
+    assert find_spec(nested, "./dyn.js").goal == :module
+    assert find_spec(nested, "./dyn.js").credentials == :same_origin
+    assert find_spec(nested, "./dyn.js").import_map == nil
+  end
+
+  test "import(new URL) is a module import and keeps the caller's cookies" do
+    page = "https://www.example.com/dir/page.html"
+    base = "https://www.example.com/assets/"
+    map = ImportMap.parse(~s|{"imports":{"vue":"/vue.js","/js/lib.js":"/mapped.js"}}|, base)
+
+    refs =
+      js_refs(
+        """
+        import(new URL("./mod.js", location.href));
+        import(new URL("./based.js", document.baseURI));
+        import(new URL("./classic-meta.js", import.meta.url));
+        import(new URL("/js/lib.js", location.href));
+        """,
+        %{
+          javascript_goal: :script,
+          url: page,
+          referrer_url: page,
+          document_url: page,
+          document_base: base,
+          import_map: map
+        }
+      )
+
+    assert find_spec(refs, "./mod.js").url == "https://www.example.com/dir/mod.js"
+    assert find_spec(refs, "./based.js").url == "https://www.example.com/assets/based.js"
+    assert find_spec(refs, "/js/lib.js").url == "https://www.example.com/js/lib.js"
+    refute Enum.any?(refs, &(&1.url == "https://www.example.com/mapped.js"))
+    refute Enum.any?(refs, &(&1.spec == "./classic-meta.js"))
+
+    for spec <- ["./mod.js", "./based.js", "/js/lib.js"] do
+      ref = find_spec(refs, spec)
+      assert ref.goal == :module
+      assert ref.credentials == :same_origin
+      assert resolve_carried(ref, "vue") == {:ok, "https://www.example.com/vue.js"}
+    end
+
+    script = "https://cdn.example.com/anon-entry.js"
+
+    included =
+      js_refs(~s|import(new URL("./next.js", import.meta.url));|, %{
+        url: script,
+        referrer_url: script,
+        document_url: page,
+        document_base: base,
+        credentials: :include
+      })
+
+    assert find_spec(included, "./next.js").url == "https://cdn.example.com/next.js"
+    assert find_spec(included, "./next.js").credentials == :include
+    assert find_spec(included, "./next.js").goal == :module
+
+    worker =
+      js_refs(~s|import(new URL("./next.js", location.href));|, %{
+        javascript_goal: :module,
+        worker_base: script,
+        url: script,
+        referrer_url: script,
+        document_url: page,
+        document_base: base,
+        import_map: map,
+        credentials: :include
+      })
+
+    assert find_spec(worker, "./next.js").url == "https://cdn.example.com/next.js"
+    assert find_spec(worker, "./next.js").import_map == nil
+    assert find_spec(worker, "./next.js").credentials == :include
+  end
+
   defp html_refs(source, opts \\ %{}) do
     opts =
       Map.merge(
@@ -536,7 +921,9 @@ defmodule Crawler.Parser.ScriptReferencesTest do
         reference_tag: link_opts.reference_tag,
         import_map: link_opts[:import_map],
         document_base: link_opts[:document_base],
-        worker_base: link_opts[:worker_base]
+        document_url: link_opts[:document_url],
+        worker_base: link_opts[:worker_base],
+        credentials: link_opts[:credentials]
       }
     end)
     |> List.flatten()
@@ -552,6 +939,12 @@ defmodule Crawler.Parser.ScriptReferencesTest do
 
   defp find_spec(refs, spec) do
     Enum.find(refs, &(&1.spec == spec)) || flunk("missing #{spec}")
+  end
+
+  defp assert_entry(refs, spec, goal, credentials) do
+    ref = find_spec(refs, spec)
+    assert ref.goal == goal
+    assert ref.credentials == credentials
   end
 
   defp resolve_carried(ref, spec) do

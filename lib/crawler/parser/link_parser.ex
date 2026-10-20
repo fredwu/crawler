@@ -426,6 +426,7 @@ defmodule Crawler.Parser.LinkParser do
     |> put_opt(:javascript_goal, ref.goal)
     |> put_opt(:import_map, ref.import_map)
     |> put_opt(:document_base, ref.document_base)
+    |> put_opt(:document_url, ref[:document_url])
     |> put_opt(:worker_base, ref.worker_base)
     |> put_opt(:fetch_kind, ref[:fetch_kind])
     |> put_opt(:json_span, ref[:json_span])
@@ -438,6 +439,7 @@ defmodule Crawler.Parser.LinkParser do
     %{}
     |> put_opt(:import_map, opts[:import_map])
     |> put_opt(:document_base, opts[:document_base])
+    |> put_opt(:document_url, opts[:document_url])
   end
 
   defp drop_script_context(opts) do
@@ -446,6 +448,7 @@ defmodule Crawler.Parser.LinkParser do
       :cookie_navigation,
       :import_map,
       :document_base,
+      :document_url,
       :worker_base,
       :link_html_tag,
       :fetch_kind,

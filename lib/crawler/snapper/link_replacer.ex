@@ -175,12 +175,14 @@ defmodule Crawler.Snapper.LinkReplacer do
   defp srcdoc_document?(_body, _opts), do: false
 
   defp srcdoc_opts(body, opts) do
+    location = opts[:document_url] || opts[:referrer_url] || opts[:url]
     base = Parser.with_document_base(body, opts)
 
     opts
     |> Map.put(:content_type, "text/html")
     |> Map.put(:html_tag, "a")
     |> Map.put(:referrer_url, base[:referrer_url] || opts[:url])
+    |> put_srcdoc_location(location)
     |> Map.delete(:robots_nofollow)
     |> Map.delete(:headers)
     |> Map.delete(:javascript_goal)
@@ -190,6 +192,11 @@ defmodule Crawler.Snapper.LinkReplacer do
     |> Map.delete(:fetch_kind)
     |> Map.delete(:json_span)
   end
+
+  defp put_srcdoc_location(opts, url) when is_binary(url) and url != "",
+    do: Map.put(opts, :document_url, url)
+
+  defp put_srcdoc_location(opts, _url), do: opts
 
   defp srcdoc_edit(
          body,

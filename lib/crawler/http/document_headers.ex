@@ -43,6 +43,7 @@ defmodule Crawler.HTTP.DocumentHeaders do
     |> param("as", attrs)
     |> param("imagesrcset", attrs)
     |> param("type", attrs)
+    |> param("crossorigin", attrs)
   end
 
   defp param(attributes, name, attrs) do
@@ -73,17 +74,25 @@ defmodule Crawler.HTTP.DocumentHeaders do
         |> String.downcase(:ascii)
         |> named_param(decode_param(value))
 
+      [name] ->
+        name |> String.trim() |> String.downcase(:ascii) |> named_flag()
+
       _other ->
         nil
     end
   end
 
+  defp named_flag("crossorigin"), do: {"crossorigin", ""}
+  defp named_flag(_name), do: nil
+
   defp named_param("type", nil), do: {"type", ""}
+  defp named_param("crossorigin", nil), do: {"crossorigin", ""}
   defp named_param(_name, nil), do: nil
   defp named_param("rel", value), do: {"rel", value}
   defp named_param("as", value), do: {"as", value}
   defp named_param("imagesrcset", value), do: {"imagesrcset", value}
   defp named_param("type", value), do: {"type", value}
+  defp named_param("crossorigin", value), do: {"crossorigin", value}
   defp named_param(_name, _value), do: nil
 
   defp uri_and_params(<<"<", rest::binary>>) do

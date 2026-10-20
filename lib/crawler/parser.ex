@@ -144,7 +144,7 @@ defmodule Crawler.Parser do
         source_map_links(body, opts, link_handler)
 
       true ->
-        opts = put_base_href(body, put_robots_nofollow(body, opts))
+        opts = put_base_href(body, remember_document_url(put_robots_nofollow(body, opts)))
 
         opts
         |> Guarder.pass?()
@@ -170,6 +170,22 @@ defmodule Crawler.Parser do
         Map.delete(opts, :robots_nofollow)
     end
   end
+
+  defp remember_document_url(opts) do
+    if document?(opts) and not present_url?(opts[:document_url]) do
+      put_document_url(opts, opts[:referrer_url] || opts[:url])
+    else
+      opts
+    end
+  end
+
+  defp present_url?(url) when is_binary(url) and url != "", do: true
+  defp present_url?(_url), do: false
+
+  defp put_document_url(opts, url) when is_binary(url) and url != "",
+    do: Map.put(opts, :document_url, url)
+
+  defp put_document_url(opts, _url), do: opts
 
   defp put_base_href(body, opts) when is_binary(body) do
     if html?(opts) do
@@ -308,6 +324,7 @@ defmodule Crawler.Parser do
       :cookie_navigation,
       :credentials,
       :document_base,
+      :document_url,
       :fetch_kind,
       :import_map,
       :javascript_goal,
@@ -341,7 +358,14 @@ defmodule Crawler.Parser do
 
   defp child_opts(opts, html_tag, reference_tag) do
     opts
-    |> Map.drop([:fetch_kind, :document_base, :json_span, :credentials, :page_open])
+    |> Map.drop([
+      :fetch_kind,
+      :document_base,
+      :document_url,
+      :json_span,
+      :credentials,
+      :page_open
+    ])
     |> Map.put(:html_tag, html_tag)
     |> Map.put(:reference_tag, reference_tag)
   end
