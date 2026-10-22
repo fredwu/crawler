@@ -4,6 +4,7 @@ defmodule Crawler do
   """
 
   alias Crawler.Options
+  alias Crawler.Parser.CssSheets
   alias Crawler.Queue
   alias Crawler.QueueHandler
   alias Crawler.Store
@@ -22,7 +23,8 @@ defmodule Crawler do
   def start(_type, _args) do
     children = [
       Store,
-      {DynamicSupervisor, name: Crawler.QueueSupervisor, strategy: :one_for_one}
+      {DynamicSupervisor, name: Crawler.QueueSupervisor, strategy: :one_for_one},
+      CssSheets
     ]
 
     Supervisor.start_link(children, strategy: :rest_for_one, name: Crawler)

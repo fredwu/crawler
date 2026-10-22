@@ -99,7 +99,7 @@ defmodule Crawler.Snapper.CssCommentsTest do
 
     expected =
       comment <>
-        ~s| .x { background:url("#{offline("real.png")}") } @import "#{offline("theme.css")}";|
+        ~s| .x { background:url("#{offline("real.png")}") } @import "theme.css";|
 
     assert snapshot(source, "snapshot-css-comment-bytes") == expected
   end

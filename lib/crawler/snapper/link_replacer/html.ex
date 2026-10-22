@@ -68,11 +68,11 @@ defmodule Crawler.Snapper.LinkReplacer.Html do
   defp replace_value(%{namespace: :svg}, %{name: "style", value: value}, variant, offline) do
     if HTMLReferences.local_reference?(variant),
       do: value,
-      else: Css.replace(value, variant, offline)
+      else: Css.replace(value, variant, offline, mode: :declarations)
   end
 
   defp replace_value(_tag, %{name: "style", value: value}, variant, offline) do
-    Css.replace(value, variant, offline)
+    Css.replace(value, variant, offline, mode: :declarations)
   end
 
   defp replace_value(_tag, %{name: "content", value: value}, variant, offline) do
@@ -83,7 +83,7 @@ defmodule Crawler.Snapper.LinkReplacer.Html do
     if HTMLReferences.presentation_attribute?(name) do
       if HTMLReferences.local_reference?(variant),
         do: value,
-        else: Css.replace(value, variant, offline)
+        else: Css.replace(value, variant, offline, mode: :declarations)
     else
       value
     end

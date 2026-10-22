@@ -267,13 +267,12 @@ defmodule Crawler.Snapper.OfflineLink.HtmlTest do
     refute body =~ "&#X0022;Later.html&#x0022;"
     refute body =~ "&#x22;a.png&#x22;"
     refute body =~ "&#x22;A.PNG&#x22;"
-    refute body =~ "&#x22;theme.css&#x22;"
+    assert body =~ "&#x22;theme.css&#x22;"
     refute body =~ "&#x22;pic.png&#x22;"
     assert_points(body, @page, "http://example.com/blog/next.html")
     assert_points(body, @page, "http://example.com/blog/Later.html")
     assert_points(body, @page, "http://example.com/blog/a.png")
     assert_points(body, @page, "http://example.com/blog/A.PNG")
-    assert_points(body, @page, "http://example.com/blog/theme.css")
     assert_points(body, @page, "http://example.com/blog/pic.png")
   end
 
@@ -301,7 +300,7 @@ defmodule Crawler.Snapper.OfflineLink.HtmlTest do
       body = rewrite(html, @page)
       quoted = fn target -> normalized <> Linker.offline_link(@page, target) <> normalized end
 
-      assert body =~ "@IMPORT #{quoted.("http://example.com/blog/Theme.css")};"
+      assert body =~ "@IMPORT #{opening}Theme.css#{closing};"
       assert body =~ "URL( #{quoted.("http://example.com/blog/Picture.png")} )"
       assert body =~ "image-set(#{quoted.("http://example.com/blog/Picture.png")} 1x)"
       refresh_target = Linker.offline_link(@page, "http://example.com/blog/Next.html")

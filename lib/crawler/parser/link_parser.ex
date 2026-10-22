@@ -7,6 +7,7 @@ defmodule Crawler.Parser.LinkParser do
   alias Crawler.HTMLRefresh
   alias Crawler.MediaType
   alias Crawler.Parser.CssParser
+  alias Crawler.Parser.CssSheets
   alias Crawler.Parser.LinkParser.LinkExpander
   alias Crawler.Parser.ScriptReferences
   alias Crawler.Parser.SourceMap
@@ -60,16 +61,17 @@ defmodule Crawler.Parser.LinkParser do
       plain
       |> Enum.map(&prepare_link(&1, tag, attrs, opts, namespace))
       |> Enum.reject(&is_nil/1)
-      |> Enum.uniq_by(fn {role, reference_tag, goal, fetch_kind, mode, _open, element} ->
+      |> Enum.uniq_by(fn {role, reference_tag, goal, fetch_kind, mode, _open, element, _share} ->
         {role, reference_tag, goal, fetch_kind, mode, raw_link(element)}
       end)
-      |> Enum.map(fn {role, reference_tag, goal, fetch_kind, mode, open, element} ->
+      |> Enum.map(fn {role, reference_tag, goal, fetch_kind, mode, open, element, share_group?} ->
         link_opts =
           opts
           |> handler_opts(role, goal, reference_tag, fetch_kind)
           |> put_credentials(mode)
           |> keep_module_credentials(mode, goal)
           |> put_page_open(open)
+          |> share_style_group(share_group?, opts[:style_group])
 
         handler.(element, worker_entry_opts(link_opts, tag, attrs, namespace, element))
       end)
@@ -95,7 +97,9 @@ defmodule Crawler.Parser.LinkParser do
     attributes =
       tag
       |> HTMLReferences.attributes(attrs, opts, namespace)
-      |> Enum.flat_map(fn name -> attribute_links(name, HTMLReferences.attribute(attrs, name)) end)
+      |> Enum.flat_map(fn name ->
+        attribute_links(name, HTMLReferences.attribute(attrs, name), opts)
+      end)
 
     drop_same_drawing(
       attributes ++ source_links(tag, attrs, children, opts, namespace),
@@ -123,7 +127,7 @@ defmodule Crawler.Parser.LinkParser do
   defp source_links("style", attrs, children, opts, namespace) when namespace in [:html, :svg] do
     if HTMLReferences.enabled?(opts, "css") and HTMLReferences.css_style_element?(attrs) do
       text = raw_text(children)
-      style_links(text, "style_text") ++ SourceMap.element_refs(text, opts, :css)
+      style_links(text, "style_text", opts) ++ SourceMap.element_refs(text, opts, :css)
     else
       []
     end
@@ -176,6 +180,8 @@ defmodule Crawler.Parser.LinkParser do
           |> Map.put(:html_tag, "a")
           |> Map.delete(:credentials)
           |> Map.delete(:page_open)
+          |> Map.delete(:style_group)
+          |> Map.put(:srcdoc, true)
 
         Crawler.Parser.parse_links(srcdoc, opts, handler)
     end
@@ -225,38 +231,68 @@ defmodule Crawler.Parser.LinkParser do
     }
   end
 
-  defp attribute_links(_name, nil), do: []
-  defp attribute_links("style", value), do: style_links(value, "style")
+  defp attribute_links(_name, nil, _opts), do: []
+  defp attribute_links("style", value, opts), do: style_links(value, "style", opts)
 
-  defp attribute_links(name, value) when name in ["srcset", "imagesrcset"] do
+  defp attribute_links(name, value, _opts) when name in ["srcset", "imagesrcset"] do
     value
     |> Srcset.urls()
     |> Enum.reject(&String.match?(&1, ~r/^data:/i))
     |> Enum.map(&{name, &1})
   end
 
-  defp attribute_links("content", value) do
+  defp attribute_links("content", value, _opts) do
     case HTMLRefresh.target(value) do
       %{url: url} -> [{"content", url}]
       nil -> []
     end
   end
 
-  defp attribute_links(name, value) do
+  defp attribute_links(name, value, opts) do
     if HTMLReferences.presentation_attribute?(name),
-      do: style_links(value, name),
+      do: style_links(value, name, opts),
       else: [{name, value}]
   end
 
-  defp style_links(nil, _attr), do: []
-  defp style_links("", _attr), do: []
+  defp style_links(nil, _attr, _opts), do: []
+  defp style_links("", _attr, _opts), do: []
 
-  defp style_links(css, attr) do
-    css
-    |> CssParser.spans()
-    |> Enum.uniq_by(& &1.value)
-    |> Enum.map(&{:styled, attr, &1.value, span_kind(&1)})
+  defp style_links(css, "style_text" = attr, opts) do
+    tokens = style_tokens(css, attr, opts)
+
+    extras =
+      opts
+      |> CssSheets.take_urls(css, tokens)
+      |> Enum.map(&{:styled, attr, &1, :url})
+
+    style_refs(tokens, attr) ++ extras
   end
+
+  defp style_links(css, attr, opts) do
+    css
+    |> style_tokens(attr, opts)
+    |> style_refs(attr)
+  end
+
+  defp style_tokens(css, attr, opts) do
+    css
+    |> CssParser.spans(style_span_opts(attr, opts))
+    |> Enum.uniq_by(& &1.value)
+  end
+
+  defp style_refs(tokens, attr) do
+    Enum.map(tokens, &{:styled, attr, &1.value, span_kind(&1)})
+  end
+
+  defp style_span_opts(attr, opts) do
+    opts
+    |> Map.take([:scope, :url, :referrer_url, :style_group, :document_url, :css_sheet])
+    |> Map.put(:mode, style_mode(attr))
+    |> Map.put(:entity_quotes, false)
+  end
+
+  defp style_mode("style_text"), do: :stylesheet
+  defp style_mode(_attr), do: :declarations
 
   defp span_kind(%{kind: kind}) when kind in [:font, :import, :url], do: kind
   defp span_kind(_span), do: :url
@@ -325,12 +361,14 @@ defmodule Crawler.Parser.LinkParser do
   defp expanded_url({_tag, _link, _src, url}), do: url
 
   defp prepare_link({:styled, attr, link, kind}, tag, attrs, opts, namespace) do
-    prepare_expanded(tag, attr, link, attrs, opts, namespace, css_mode(kind, opts), false)
+    tag
+    |> prepare_expanded(attr, link, attrs, opts, namespace, css_mode(kind, opts), false)
+    |> with_style_share(kind == :import)
   end
 
   defp prepare_link({attr, link}, tag, attrs, opts, namespace) do
-    prepare_expanded(
-      tag,
+    tag
+    |> prepare_expanded(
       attr,
       link,
       attrs,
@@ -339,7 +377,23 @@ defmodule Crawler.Parser.LinkParser do
       HTMLReferences.credentials(tag, attr, attrs, namespace),
       page_open?(tag, attr, attrs, namespace)
     )
+    |> with_style_share(stylesheet_link?(tag, attrs, namespace))
   end
+
+  defp with_style_share(nil, _share?), do: nil
+  defp with_style_share(prepared, share?), do: Tuple.append(prepared, share?)
+
+  defp stylesheet_link?("link", attrs, :html) do
+    case HTMLReferences.link_choice(attrs) do
+      %{channel: {:style, "css"}} -> true
+      _choice -> false
+    end
+  end
+
+  defp stylesheet_link?(_tag, _attrs, _namespace), do: false
+
+  defp share_style_group(opts, true, group), do: put_opt(opts, :style_group, group)
+  defp share_style_group(opts, false, _group), do: opts
 
   defp prepare_expanded(tag, attr, link, attrs, opts, namespace, mode, open) do
     {role, reference_tag, fetch_kind} = reference_identity(tag, attr, attrs, namespace)
@@ -380,10 +434,13 @@ defmodule Crawler.Parser.LinkParser do
   end
 
   defp css_opts(opts, kind) do
+    group = opts[:style_group]
+
     opts
     |> handler_opts("link", nil, "link", nil)
     |> put_credentials(css_mode(kind, opts))
     |> put_page_open(false)
+    |> share_style_group(kind == :import, group)
   end
 
   defp css_mode(:font, _opts), do: :same_origin
@@ -454,7 +511,9 @@ defmodule Crawler.Parser.LinkParser do
       :fetch_kind,
       :json_span,
       :credentials,
-      :page_open
+      :page_open,
+      :style_group,
+      :srcdoc
     ])
   end
 

@@ -11,6 +11,7 @@ defmodule Crawler.Snapper.LinkReplacer do
   alias Crawler.Linker
   alias Crawler.MediaType
   alias Crawler.Parser
+  alias Crawler.Parser.CssParser
   alias Crawler.Parser.Guarder
   alias Crawler.Parser.ScriptReferences
   alias Crawler.Parser.SourceMap
@@ -93,6 +94,7 @@ defmodule Crawler.Snapper.LinkReplacer do
   end
 
   defp html_body(body, opts) do
+    opts = put_srcdoc_style_group(body, opts)
     raw_links = links(body, opts)
     {body, saved} = RawText.protect(body, opts)
     document_links = if saved == [], do: raw_links, else: links(body, opts)
@@ -113,7 +115,11 @@ defmodule Crawler.Snapper.LinkReplacer do
           javascript_body(source, rewrite_opts)
 
         true ->
-          rewrite_body(source, source_links(raw_links, source_opts), rewrite_opts)
+          rewrite_body(
+            source,
+            style_rewrite_links(source, rewrite_opts, source_opts),
+            rewrite_opts
+          )
       end
     end)
   end
@@ -131,7 +137,7 @@ defmodule Crawler.Snapper.LinkReplacer do
 
   defp links(body, opts) do
     body
-    |> Parser.parse_links(opts, &get_link/2)
+    |> Parser.parse_links(Map.put(opts, :css_sheet, :rewrite), &get_link/2)
     |> List.flatten()
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
@@ -151,6 +157,29 @@ defmodule Crawler.Snapper.LinkReplacer do
   end
 
   defp source_links(links, _source_opts), do: links
+
+  # The first document walk records style elements before later elements use them.
+  # Preview each original style body again once that group is complete.
+  defp style_rewrite_links(source, opts, source_opts) do
+    source
+    |> CssParser.spans(css_replace_opts(opts))
+    |> Enum.flat_map(&style_link(&1, opts))
+    |> Enum.uniq()
+    |> Enum.sort_by(fn {raw, _offline} -> byte_size(raw) end, :desc)
+    |> source_links(source_opts)
+  end
+
+  defp style_link(token, opts) do
+    base = opts[:referrer_url] || opts[:url]
+
+    case URL.resolve(token.value, base) do
+      {:ok, resolved} ->
+        [{token.value, Linker.offline_link(opts[:url], with_fragment(resolved, token.value))}]
+
+      :skip ->
+        []
+    end
+  end
 
   defp rewrite_srcdocs(body, opts) do
     if srcdoc_document?(body, opts) do
@@ -174,6 +203,17 @@ defmodule Crawler.Snapper.LinkReplacer do
 
   defp srcdoc_document?(_body, _opts), do: false
 
+  # Style elements are remembered under the srcdoc group. The rewrite opts must
+  # use that same group, not the parent document URL.
+  defp put_srcdoc_style_group(body, %{srcdoc: true} = opts) do
+    case Parser.assigned_style_group(body, opts) do
+      group when is_binary(group) and group != "" -> Map.put(opts, :style_group, group)
+      _other -> opts
+    end
+  end
+
+  defp put_srcdoc_style_group(_body, opts), do: opts
+
   defp srcdoc_opts(body, opts) do
     location = opts[:document_url] || opts[:referrer_url] || opts[:url]
     base = Parser.with_document_base(body, opts)
@@ -191,6 +231,8 @@ defmodule Crawler.Snapper.LinkReplacer do
     |> Map.delete(:worker_base)
     |> Map.delete(:fetch_kind)
     |> Map.delete(:json_span)
+    |> Map.delete(:style_group)
+    |> Map.put(:srcdoc, true)
   end
 
   defp put_srcdoc_location(opts, url) when is_binary(url) and url != "",
@@ -315,11 +357,24 @@ defmodule Crawler.Snapper.LinkReplacer do
   defp modify_body(body, opts, {raw, offline}) do
     cond do
       MediaType.css?(opts[:content_type]) ->
-        Css.replace(body, raw, offline, entity_quotes: false)
+        Css.replace(body, raw, offline, css_replace_opts(opts))
 
       true ->
         Html.replace(body, raw, offline, opts)
     end
+  end
+
+  defp css_replace_opts(opts) do
+    [
+      entity_quotes: false,
+      mode: :stylesheet,
+      css_sheet: :replace,
+      scope: opts[:scope],
+      url: opts[:url],
+      referrer_url: opts[:referrer_url],
+      style_group: opts[:style_group],
+      document_url: opts[:document_url]
+    ]
   end
 
   defp with_fragment(resolved, raw) do

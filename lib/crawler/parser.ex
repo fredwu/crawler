@@ -10,6 +10,7 @@ defmodule Crawler.Parser do
   alias Crawler.ImportMap
   alias Crawler.MediaType
   alias Crawler.Parser.CssParser
+  alias Crawler.Parser.CssSheets
   alias Crawler.Parser.Guarder
   alias Crawler.Parser.HtmlParser
   alias Crawler.Parser.LinkParser
@@ -145,6 +146,7 @@ defmodule Crawler.Parser do
 
       true ->
         opts = put_base_href(body, remember_document_url(put_robots_nofollow(body, opts)))
+        opts = assign_style_group(body, opts)
 
         opts
         |> Guarder.pass?()
@@ -154,6 +156,9 @@ defmodule Crawler.Parser do
 
   @doc false
   def with_document_base(body, opts), do: put_base_href(body, opts)
+
+  @doc false
+  def assigned_style_group(body, opts), do: assign_style_group(body, opts)[:style_group]
 
   defp put_robots_nofollow(body, opts) do
     cond do
@@ -186,6 +191,36 @@ defmodule Crawler.Parser do
     do: Map.put(opts, :document_url, url)
 
   defp put_document_url(opts, _url), do: opts
+
+  defp assign_style_group(body, %{srcdoc: true} = opts) do
+    Map.put(opts, :style_group, srcdoc_group(opts, body))
+  end
+
+  defp assign_style_group(_body, opts) do
+    cond do
+      MediaType.css?(opts[:content_type]) -> keep_or_assign_group(opts)
+      document?(opts) -> document_group(opts)
+      true -> keep_or_assign_group(opts)
+    end
+  end
+
+  defp document_group(%{url: url} = opts) when is_binary(url) and url != "",
+    do: Map.put(opts, :style_group, url)
+
+  defp document_group(opts), do: keep_or_assign_group(opts)
+
+  defp keep_or_assign_group(%{style_group: group} = opts) when is_binary(group) and group != "",
+    do: opts
+
+  defp keep_or_assign_group(%{url: url} = opts) when is_binary(url) and url != "",
+    do: Map.put(opts, :style_group, url)
+
+  defp keep_or_assign_group(opts), do: opts
+
+  defp srcdoc_group(opts, body) do
+    base = if present_url?(opts[:url]), do: opts[:url], else: ""
+    base <> " srcdoc " <> Integer.to_string(:erlang.phash2(body))
+  end
 
   defp put_base_href(body, opts) when is_binary(body) do
     if html?(opts) do
@@ -453,7 +488,7 @@ defmodule Crawler.Parser do
 
     cond do
       MediaType.css?(type) ->
-        css_elements(body) ++ SourceMap.element_refs(body, opts, :css)
+        css_elements(body, opts) ++ SourceMap.element_refs(body, opts, :css)
 
       MediaType.javascript?(type) ->
         ScriptReferences.elements(body, opts)
@@ -463,12 +498,26 @@ defmodule Crawler.Parser do
     end
   end
 
-  defp css_elements(body) do
-    body
-    |> CssParser.spans()
-    |> Enum.uniq_by(& &1.value)
-    |> Enum.map(&{:css, &1.value, span_kind(&1)})
+  defp css_elements(body, opts) when is_binary(body) do
+    tokens =
+      body
+      |> CssParser.spans(opts)
+      |> Enum.uniq_by(& &1.value)
+
+    extras =
+      opts
+      |> CssSheets.take_urls(body, tokens)
+      |> Enum.map(&{:css, &1, :url})
+
+    tokens
+    |> Enum.map(&css_link/1)
+    |> Kernel.++(extras)
+    |> Enum.uniq_by(fn {:css, value, _kind} -> value end)
   end
+
+  defp css_elements(_body, _opts), do: []
+
+  defp css_link(token), do: {:css, token.value, span_kind(token)}
 
   defp span_kind(%{kind: kind}) when kind in [:font, :import, :url], do: kind
   defp span_kind(_span), do: :url

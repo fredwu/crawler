@@ -22,6 +22,7 @@ defmodule Crawler.Store do
   is dropped.
   """
 
+  alias Crawler.Parser.CssSheets
   alias Crawler.Store.DB
   alias Crawler.Store.Server
   alias Crawler.URL
@@ -138,6 +139,7 @@ defmodule Crawler.Store do
   token cannot write into the next crawl.
   """
   def drop_scope(scope) do
+    CssSheets.drop(scope)
     GenServer.call(__MODULE__, {:drop_scope, scope})
   end
 

@@ -25,7 +25,6 @@ defmodule Crawler.Parser.DrawingMathTest do
              {"paint.png", "http://example.com/assets/paint.png", "link", nil, "style"},
              {"wide.png", "http://example.com/assets/wide.png", "link", nil, "style"},
              {"narrow.png", "http://example.com/assets/narrow.png", "link", nil, "style"},
-             {"theme.css", "http://example.com/assets/theme.css", "link", nil, "style"},
              {"attr.png", "http://example.com/assets/attr.png", "link", nil, "rect"}
            ]
 
@@ -33,7 +32,7 @@ defmodule Crawler.Parser.DrawingMathTest do
 
     saved = rewrite(source, ["css"])
     refute saved =~ ~s|url("paint.png")|
-    refute saved =~ ~s|@import "theme.css"|
+    assert saved =~ ~s|@import "theme.css"|
     refute saved =~ "url(attr.png)"
     assert saved =~ "url(hidden.png)"
 

@@ -8,6 +8,7 @@ defmodule Crawler.Fetcher do
   alias Crawler.Charset
   alias Crawler.Cookies
   alias Crawler.Diagnostics
+  alias Crawler.Dispatcher
   alias Crawler.Fetcher.HeaderPreparer
   alias Crawler.Fetcher.Policer
   alias Crawler.Fetcher.Recorder
@@ -15,6 +16,9 @@ defmodule Crawler.Fetcher do
   alias Crawler.HTTP
   alias Crawler.Linker.Snapshot
   alias Crawler.MediaType
+  alias Crawler.Parser
+  alias Crawler.Parser.CssSheets
+  alias Crawler.Parser.LinkParser
   alias Crawler.Robots
   alias Crawler.Snapper
   alias Crawler.Store
@@ -50,14 +54,120 @@ defmodule Crawler.Fetcher do
     end
   end
 
-  defp seen_url(opts, warn), do: open_stored_document(opts) || warn
+  defp seen_url(opts, warn) do
+    replay_stylesheet(opts)
+    open_stored_document(opts) || warn
+  end
+
+  defp replay_stylesheet(opts) do
+    if stylesheet_request?(opts), do: replay_stored_sheet(opts), else: :ok
+  end
+
+  defp stylesheet_request?(%{style_group: group, html_tag: tag})
+       when is_binary(group) and group != "" do
+    tag != "a"
+  end
+
+  defp stylesheet_request?(_opts), do: false
+
+  defp replay_stored_sheet(opts) do
+    case await_css_page(opts) do
+      %Page{body: body, opts: stored} when is_binary(body) ->
+        join_stored_sheet(body, stored, opts)
+
+      _other ->
+        :ok
+    end
+  end
+
+  defp join_stored_sheet(body, stored, opts) do
+    opts = css_replay_opts(opts, stored)
+
+    if MediaType.css?(stored[:content_type]) and CssSheets.replay?(opts, body) do
+      Parser.parse_links(body, opts, &Dispatcher.dispatch/2)
+    end
+
+    :ok
+  end
+
+  # Recorder did not run for this duplicate, so children keep the depth a parsed
+  # stylesheet would have given them.
+  defp css_replay_opts(opts, stored) do
+    opts
+    |> Map.put(:content_type, stored[:content_type])
+    |> Map.put(:referrer_url, stored[:referrer_url] || opts[:url])
+    |> bump_depth()
+    |> Map.drop([:srcdoc, :document_url, :css_sheet])
+  end
+
+  defp bump_depth(%{depth: depth} = opts) when is_integer(depth), do: %{opts | depth: depth + 1}
+  defp bump_depth(opts), do: opts
+
+  defp await_css_page(opts) do
+    key = {opts[:url], opts[:scope]}
+
+    cond do
+      not current_crawl?(opts) ->
+        nil
+
+      page = ready_page(key) ->
+        page
+
+      css_fetch_running?(key) ->
+        Process.sleep(@picture_pause)
+        await_css_page(opts)
+
+      true ->
+        ready_page(key)
+    end
+  end
+
+  defp css_fetch_running?(key) do
+    case Store.find(key) do
+      %Page{picture_type: type} when is_binary(type) ->
+        MediaType.css?(type) and Store.fetch_in_flight?(key)
+
+      %Page{opts: %{content_type: type}} ->
+        MediaType.css?(type) and Store.fetch_in_flight?(key)
+
+      %Page{body: body} when not is_binary(body) ->
+        Store.fetch_in_flight?(key)
+
+      _other ->
+        false
+    end
+  end
 
   defp fetch_unseen(opts) do
+    result = fetch_recorded(opts)
+    dispatch_deferred(opts, result)
+    result
+  end
+
+  defp fetch_recorded(opts) do
     with {:ok, opts} <- Policer.police(opts),
          :ok <- permit_robots(opts),
          {:ok, opts} <- Recorder.record(opts) do
       opts[:retrier].perform(fn -> fetch_url(opts) end, opts)
     end
+  end
+
+  # The queued depth is the depth before Recorder counts this attempt. A picture
+  # deferred from a failed import stays a child of the stylesheet that imported it.
+  defp dispatch_deferred(_opts, %Page{}), do: :ok
+  defp dispatch_deferred(_opts, {:warn, :stale}), do: :ok
+  defp dispatch_deferred(_opts, {:error, {:already_registered, _}}), do: :ok
+
+  defp dispatch_deferred(_opts, {:warn, "Fetch failed check 'not_fetched_yet?'" <> _}), do: :ok
+
+  defp dispatch_deferred(opts, _result) do
+    opts
+    |> CssSheets.settle()
+    |> Enum.each(&dispatch_css_url(&1, opts))
+  end
+
+  defp dispatch_css_url(url, opts) do
+    LinkParser.parse({:css, url, :url}, opts, &Dispatcher.dispatch/2)
   end
 
   # The first fetch stores the body and keeps its reference role. A later page
@@ -264,6 +374,7 @@ defmodule Crawler.Fetcher do
          {:ok, _} <- Recorder.maybe_store_page(body, opts),
          :ok <- retain_reusable_body(body, opts),
          {:ok, opts} <- record_referrer_url(response, body, opts),
+         :ok <- retain_css_body(body, opts),
          :ok <- store_response_identity(opts) do
       case snap_page(body, opts) do
         {:ok, _} ->
@@ -382,8 +493,7 @@ defmodule Crawler.Fetcher do
   defp note_picture_type(_opts), do: :ok
 
   # The user store already ran. Keep an internal copy only when it did not write
-  # one, so a later page link can open this SVG or as=fetch document. Other
-  # media stay body-less when storage is disabled.
+  # one, so a later page link can open this SVG or as=fetch document.
   defp retain_reusable_body(body, %{html_tag: tag} = opts) when is_binary(tag) and tag != "a" do
     if MediaType.svg?(opts[:content_type]) or fetch_document?(opts) do
       retain_missing_body(body, opts)
@@ -393,6 +503,12 @@ defmodule Crawler.Fetcher do
   end
 
   defp retain_reusable_body(_body, _opts), do: :ok
+
+  # The user store can discard the body. A later document still has to join this
+  # file to its own style group, so keep the original text for that replay.
+  defp retain_css_body(body, opts) do
+    if MediaType.css?(opts[:content_type]), do: retain_missing_body(body, opts), else: :ok
+  end
 
   defp retain_missing_body(body, opts) do
     key = {opts[:url], opts[:scope]}

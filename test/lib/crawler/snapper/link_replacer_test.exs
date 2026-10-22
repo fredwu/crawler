@@ -2,6 +2,7 @@ defmodule Crawler.Snapper.LinkReplacerTest do
   use ExUnit.Case, async: true
 
   alias Crawler.Linker
+  alias Crawler.Parser.CssSheets
   alias Crawler.Snapper.LinkReplacer
 
   doctest LinkReplacer
@@ -99,7 +100,6 @@ defmodule Crawler.Snapper.LinkReplacerTest do
 
     assert {:ok, body} = LinkReplacer.replace_links(html, opts)
     image = Linker.offline_link(opts.url, "http://host/dir/a.png")
-    theme = Linker.offline_link(opts.url, "http://host/dir/theme.css")
 
     assert body =~ ~s|<p>url("a.png"), image-set("a.png" 1x), @import "theme.css";</p>|
     assert body =~ ~s|title="style=url('a.png')"|
@@ -107,8 +107,106 @@ defmodule Crawler.Snapper.LinkReplacerTest do
     assert body =~ ~s|src="#{image}"|
     assert body =~ "url(&quot;#{image}&quot;)"
     assert body =~ "image-set(&quot;#{image}&quot; 1x)"
-    assert body =~ "@import &quot;#{theme}&quot;;"
+    assert body =~ "@import &quot;theme.css&quot;;"
     assert body =~ ~s|style=background:url(#{image})|
+  end
+
+  test "a later style element rewrites a registered picture" do
+    scope = System.unique_integer([:positive])
+    on_exit(fn -> CssSheets.drop(scope) end)
+
+    opts = %{
+      url: "http://host/dir/page",
+      referrer_url: "http://host/dir/page",
+      scope: scope,
+      depth: 1,
+      max_depths: 3,
+      html_tag: "a",
+      content_type: "text/html",
+      assets: ["css", "images"]
+    }
+
+    html = """
+    <style>
+      @property --icon { syntax: "<url>"; inherits: true; }
+      :root { --icon: url("shown.png"); }
+    </style>
+    <style>
+      body { background: var(--icon); background-image: url("also.png"); }
+    </style>
+    """
+
+    assert {:ok, body} = LinkReplacer.replace_links(html, opts)
+    shown = Linker.offline_link(opts.url, "http://host/dir/shown.png")
+    also = Linker.offline_link(opts.url, "http://host/dir/also.png")
+
+    refute body =~ ~s|url("shown.png")|
+    refute body =~ ~s|url("also.png")|
+    assert body =~ shown
+    assert body =~ also
+    assert body =~ "var(--icon)"
+  end
+
+  test "a later style element rewrites an unregistered picture" do
+    scope = System.unique_integer([:positive])
+    on_exit(fn -> CssSheets.drop(scope) end)
+
+    opts = %{
+      url: "http://host/dir/page",
+      referrer_url: "http://host/dir/page",
+      scope: scope,
+      depth: 1,
+      max_depths: 3,
+      html_tag: "a",
+      content_type: "text/html",
+      assets: ["css", "images"]
+    }
+
+    html = """
+    <style>
+      :root { --bg: url("shown.png"); --idle: url("idle.png"); }
+    </style>
+    <style>
+      body { background: var(--bg); color: var(--idle); }
+    </style>
+    """
+
+    assert {:ok, body} = LinkReplacer.replace_links(html, opts)
+    shown = Linker.offline_link(opts.url, "http://host/dir/shown.png")
+
+    refute body =~ ~s|url("shown.png")|
+    assert body =~ ~s|url("idle.png")|
+    assert body =~ shown
+    assert body =~ "var(--bg)"
+    assert body =~ "var(--idle)"
+  end
+
+  test "a srcdoc rewrites a picture used by a later style element" do
+    scope = System.unique_integer([:positive])
+    on_exit(fn -> CssSheets.drop(scope) end)
+
+    opts = %{
+      url: "http://host/dir/page",
+      referrer_url: "http://host/dir/page",
+      document_url: "http://host/dir/page",
+      scope: scope,
+      depth: 1,
+      max_depths: 3,
+      html_tag: "a",
+      content_type: "text/html",
+      assets: ["css", "images"]
+    }
+
+    html =
+      ~s|<iframe srcdoc="<style>:root { --bg: url(&quot;shown.png&quot;); --idle: url(&quot;idle.png&quot;); }</style><style>body { background: var(--bg); color: var(--idle); }</style>"></iframe>|
+
+    assert {:ok, body} = LinkReplacer.replace_links(html, opts)
+    shown = Linker.offline_link(opts.url, "http://host/dir/shown.png")
+
+    refute body =~ "url(&quot;shown.png&quot;)"
+    assert body =~ "url(&quot;idle.png&quot;)"
+    assert body =~ shown
+    assert body =~ "var(--bg)"
   end
 
   test "does not rewrite prose and keeps every spelling of one url" do
@@ -136,7 +234,7 @@ defmodule Crawler.Snapper.LinkReplacerTest do
     refute body =~ "srcset=\"a.jpg 1x"
     refute body =~ "url(&quot;q.png&quot;)"
     refute body =~ "&quot;q.png&quot;"
-    refute body =~ "&#39;other.css&#39;"
+    assert body =~ "&#39;other.css&#39;"
     assert body =~ "a.jpg"
     assert body =~ "b.jpg"
     assert body =~ "q.png"
