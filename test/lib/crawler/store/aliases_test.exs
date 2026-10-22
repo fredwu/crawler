@@ -74,7 +74,9 @@ defmodule Crawler.Store.AliasesTest do
   test "requested claim keys preserve exact numeric scope identity", context do
     integer_scope = {context.scope, 1}
     float_scope = {context.scope, 1.0}
-    integer_context = %{context | scope: integer_scope}
+    integer_generation = Store.generation(integer_scope)
+    float_generation = Store.generation(float_scope)
+    integer_context = %{context | scope: integer_scope, generation: integer_generation}
     url = "http://example.com/page"
 
     on_exit(fn ->
@@ -82,13 +84,13 @@ defmodule Crawler.Store.AliasesTest do
       Store.drop_scope(float_scope)
     end)
 
-    assert :ok = Store.note_enqueued(integer_scope, context.generation, context.queue)
-    assert :ok = Store.note_enqueued(float_scope, context.generation, context.queue)
-    assert {:ok, _} = Store.add({url, float_scope}, context.generation, context.queue)
+    assert :ok = Store.note_enqueued(integer_scope, integer_generation, context.queue)
+    assert :ok = Store.note_enqueued(float_scope, float_generation, context.queue)
+    assert {:ok, _} = Store.add({url, float_scope}, float_generation, context.queue)
     worker = start_claim(integer_context, url)
 
     assert {:ok, :reused} =
-             Store.register_alias({url, float_scope}, context.generation, context.queue)
+             Store.register_alias({url, float_scope}, float_generation, context.queue)
 
     finish_claim(worker)
   end

@@ -362,15 +362,15 @@ defmodule Crawler.Sitemap do
 
   defp admit(opts, url, opts_fun, state) do
     if budget_open?(opts) do
-      Crawler.crawl(url, opts_fun.(opts))
+      Crawler.crawl_reference(url, opts_fun.(opts))
       %{state | reserved: state.reserved + 1}
     else
       state
     end
   end
 
-  defp budget_open?(%{max_pages: max, scope: scope}) when is_integer(max) do
-    Store.ops_count(scope) < max
+  defp budget_open?(%{max_pages: max} = opts) when is_integer(max) do
+    Store.ops_count(opts[:scope]) < max
   end
 
   defp budget_open?(_opts), do: true

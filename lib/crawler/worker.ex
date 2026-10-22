@@ -17,6 +17,7 @@ defmodule Crawler.Worker do
   def run(%AliasSettlement{} = job), do: AliasSettlement.run(job)
 
   def run(opts) do
+    opts = Store.bind_run(opts)
     Logger.debug(fn -> "Running worker #{Diagnostics.crawl(opts)}" end)
 
     case Store.start_work(opts) do
@@ -24,11 +25,7 @@ defmodule Crawler.Worker do
         try do
           fetch = Fetcher.fetch(opts)
 
-          fetch
-          |> opts[:parser].parse()
-          |> mark_processed()
-
-          fetch
+          finish_parse(fetch, opts)
         catch
           kind, reason ->
             Logger.error(
@@ -50,15 +47,26 @@ defmodule Crawler.Worker do
     end
   end
 
-  defp mark_processed({:ok, %Page{url: url, opts: opts}}) do
+  defp finish_parse(fetch, opts) do
+    result = opts[:parser].parse(fetch)
+    completed = mark_processed(result, opts)
+
+    if completed == :stale or not Store.current?(opts[:scope], opts[:generation], opts[:queue]) do
+      {:warn, :stale}
+    else
+      fetch
+    end
+  end
+
+  defp mark_processed({:ok, %Page{url: url, opts: page_opts}}, opts) do
     Store.complete_page(
       {url, opts[:scope]},
       opts[:generation],
       opts[:queue],
-      opts[:alias_url],
-      opts[:count_page] != false
+      page_opts[:alias_url],
+      page_opts[:count_page] != false
     )
   end
 
-  defp mark_processed(_), do: nil
+  defp mark_processed(_result, _opts), do: nil
 end

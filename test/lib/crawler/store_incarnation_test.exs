@@ -1,6 +1,12 @@
 defmodule Crawler.StoreIncarnationTest do
   use Crawler.TestCase, async: false
 
+  alias Crawler.HeldParser
+  alias Crawler.Options
+  alias Crawler.Parser.CssParser.Scanner
+  alias Crawler.Parser.CssSheets
+  alias Crawler.Robots
+  alias Crawler.Snapper
   alias Crawler.SnapshotHelpers
   alias Crawler.Store
   alias Crawler.Store.DB
@@ -31,7 +37,11 @@ defmodule Crawler.StoreIncarnationTest do
     assert {:ok, old_claim} =
              Store.start_work(%{scope: scope, generation: old.generation, max_pages: 3})
 
+    nil_publication = hold_nil_publication(phase, root, page_url)
+    nil_parser = hold_nil_parser(phase, context, queue, root)
     restart_store()
+    finish_nil_publication(nil_publication)
+    finish_nil_parser(nil_parser)
 
     refute Store.current?(scope, old.generation, queue)
     refute Crawler.running?(old)
@@ -70,6 +80,93 @@ defmodule Crawler.StoreIncarnationTest do
     assert Enum.all?(external_processes, &Process.alive?/1)
     assert :ok = Crawler.stop(fresh)
     assert Process.alive?(queue)
+  end
+
+  defp hold_nil_parser(:publication, _context, _queue, _root), do: nil
+
+  defp hold_nil_parser(:response, context, queue, root) do
+    observer = self()
+    url = context.url <> "/retired-parser-root"
+
+    ReqTestSite.expect_once(context.site, "GET", "/retired-parser-root", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("text/html")
+      |> Plug.Conn.resp(200, ~s(<a href="/retired-parser-child">child</a>))
+    end)
+
+    ReqTestSite.stub(context.site, "GET", "/retired-parser-child", fn conn ->
+      send(observer, :retired_parser_child_requested)
+      conn |> Plug.Conn.put_resp_content_type("text/html") |> Plug.Conn.resp(200, "CHILD")
+    end)
+
+    opts =
+      Options.assign_defaults(%{
+        scope: nil,
+        generation: Store.generation(nil),
+        queue: queue,
+        url: url,
+        site: context.url,
+        req_options: context.req_options,
+        respect_robots: false,
+        store: Store,
+        save_to: root,
+        retries: 0,
+        parser: HeldParser,
+        hold_parser_url: url,
+        parser_observer: observer
+      })
+
+    assert :ok = Store.note_enqueued(nil, opts.generation, queue)
+    task = Task.async(fn -> Crawler.crawl_now(opts) end)
+    assert_receive {:parser_held, worker, _page}, 2_000
+    on_exit(fn -> send(worker, :release_parser) end)
+    {task, opts}
+  end
+
+  defp finish_nil_parser(nil), do: :ok
+
+  defp finish_nil_parser({task, opts}) do
+    before = :sys.get_state(Store)
+    snapshot = File.read!(SnapshotHelpers.saved(opts.save_to, opts.url))
+    send(task.pid, :release_parser)
+    assert {:warn, :stale} = Task.await(task)
+    assert :sys.get_state(Store) == before
+    refute_receive :retired_parser_child_requested
+    refute File.exists?(SnapshotHelpers.saved(opts.save_to, opts.site <> "/retired-parser-child"))
+    assert File.read!(SnapshotHelpers.saved(opts.save_to, opts.url)) == snapshot
+  end
+
+  defp hold_nil_publication(:response, _root, _url), do: nil
+
+  defp hold_nil_publication(:publication, root, url) do
+    observer = self()
+
+    opts = %{
+      url: url <> "/nil-scope",
+      save_to: root,
+      content_type: "text/html",
+      generation: Store.generation(nil),
+      before_publish: fn -> hold(observer, :nil_publication) end
+    }
+
+    task = Task.async(fn -> Snapper.snap("OLD-NIL", opts) end)
+    assert_receive {:held, :nil_publication, worker}, 2_000
+    on_exit(fn -> send(worker, :release) end)
+    {task, opts}
+  end
+
+  defp finish_nil_publication(nil), do: :ok
+
+  defp finish_nil_publication({task, old}) do
+    fresh = old |> Map.put(:generation, Store.generation(nil)) |> Map.delete(:before_publish)
+    assert {:ok, _} = Snapper.snap("FRESH-NIL", fresh)
+    file = SnapshotHelpers.saved(fresh.save_to, fresh.url)
+    snapshot = File.read!(file)
+    assert snapshot == <<0xEF, 0xBB, 0xBF, "FRESH-NIL">>
+    send(task.pid, :release)
+    assert {:error, :stale} = Task.await(task)
+    assert File.read!(file) == snapshot
+    Store.dispose_scope(nil)
   end
 
   defp crawl_options(context, scope, queue, root) do
@@ -197,6 +294,24 @@ defmodule Crawler.StoreIncarnationTest do
     assert :stale = Store.complete_page(key, generation, queue)
     assert :stale = Store.delete(key, generation, queue)
     assert :stale = Store.rollback_alias(key, generation, queue, true)
+    css = ~s|:root { --retired: url("retired.png"); }|
+    css_before = Map.get(:sys.get_state(CssSheets).scopes, {scope, old.generation})
+    assert {:ok, []} = CssSheets.remember(old, css, Scanner.analyze(css))
+    assert [] = CssSheets.take_urls(old, css, [])
+    refute CssSheets.replay?(old, css)
+    assert [] = CssSheets.settle(old)
+    assert Map.get(:sys.get_state(CssSheets).scopes, {scope, old.generation}) == css_before
+    origin = Crawler.Site.origin(old.url)
+    assert {:error, :stale} = Store.claim_robots(scope, origin, generation, queue)
+
+    assert {:error, :stale} =
+             Store.finish_robots(scope, origin, Robots.allow_all(), generation, queue)
+
+    assert {:error, :stale} =
+             Store.forget_robots(scope, origin, Robots.allow_all(), generation, queue)
+
+    Store.save_cookies(scope, old.url, ["retired=1"], generation, %{queue: queue})
+    assert Store.cookie_header(scope, old.url, generation, %{queue: queue}) == nil
     assert :ok = Store.ops_inc(scope, generation, queue)
     assert :ok = Store.inflight_dec(scope, generation, queue)
     temp = file <> ".stale"

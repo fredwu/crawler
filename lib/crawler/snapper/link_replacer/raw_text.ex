@@ -75,7 +75,7 @@ defmodule Crawler.Snapper.LinkReplacer.RawText do
     cond do
       tag.name == "style" and HTMLReferences.enabled?(opts, "css") and
           HTMLReferences.css_style_element?(attrs) ->
-        style_source(tag, base)
+        Map.put(style_source(tag, base), :document_style_id, tag.span)
 
       speculation_inline?(tag, attrs) ->
         speculation_source(base)

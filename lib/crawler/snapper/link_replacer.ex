@@ -95,6 +95,7 @@ defmodule Crawler.Snapper.LinkReplacer do
 
   defp html_body(body, opts) do
     opts = put_srcdoc_style_group(body, opts)
+    opts = Map.put(opts, :document_styles, Parser.document_styles(body, opts))
     raw_links = links(body, opts)
     {body, saved} = RawText.protect(body, opts)
     document_links = if saved == [], do: raw_links, else: links(body, opts)
@@ -232,6 +233,8 @@ defmodule Crawler.Snapper.LinkReplacer do
     |> Map.delete(:fetch_kind)
     |> Map.delete(:json_span)
     |> Map.delete(:style_group)
+    |> Map.delete(:document_styles)
+    |> Map.delete(:document_style_id)
     |> Map.put(:srcdoc, true)
   end
 
@@ -370,10 +373,14 @@ defmodule Crawler.Snapper.LinkReplacer do
       mode: :stylesheet,
       css_sheet: :replace,
       scope: opts[:scope],
+      generation: opts[:generation],
+      queue: opts[:queue],
       url: opts[:url],
       referrer_url: opts[:referrer_url],
       style_group: opts[:style_group],
-      document_url: opts[:document_url]
+      document_url: opts[:document_url],
+      document_styles: opts[:document_styles],
+      document_style_id: opts[:document_style_id]
     ]
   end
 

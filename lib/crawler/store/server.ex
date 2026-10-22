@@ -6,6 +6,7 @@ defmodule Crawler.Store.Server do
   alias Crawler.QueueHandler
   alias Crawler.Robots
   alias Crawler.Store.Aliases
+  alias Crawler.Store.Authority
   alias Crawler.Store.Claims
   alias Crawler.Store.DB
   alias Crawler.Store.Page
@@ -15,6 +16,7 @@ defmodule Crawler.Store.Server do
   @impl true
   def init(_opts) do
     await_registry_shutdown()
+    Authority.init()
     {:ok, _} = Registry.start_link(keys: :unique, name: DB)
 
     {:ok, State.new()}
@@ -178,44 +180,64 @@ defmodule Crawler.Store.Server do
   end
 
   def handle_call({:drop_scope, scope}, _from, state) do
-    unregister_scope(scope)
-    state = discard_claims(state, Claims.retire_scope(state.claims, scope))
-    state = Settlements.drop_scope(state, scope)
-    {waiters, state} = State.drop_scope(state, scope)
-    reply_robots(waiters, Robots.allow_all())
+    state = State.ensure_scope(retire_scope(state, scope), scope)
+    Authority.put(state, scope)
     {:reply, State.generation(state, scope), state}
   end
 
-  def handle_call({:claim_robots, scope, origin}, from, state) do
+  def handle_call({:dispose_scope, scope}, _from, state) do
+    {:reply, :ok, retire_scope(state, scope)}
+  end
+
+  def handle_call({:claim_robots, scope, origin, generation, queue}, from, state) do
     {pid, _tag} = from
 
-    case State.claim_robots(state, scope, origin, from, pid) do
-      {{:reply, reply}, state} -> {:reply, reply, state}
-      {{:noreply, :wait}, state} -> {:noreply, state}
+    if current_work?(state, scope, generation, queue) and not is_nil(generation) do
+      case State.claim_robots(state, scope, origin, from, pid, queue) do
+        {{:reply, reply}, state} -> {:reply, reply, state}
+        {{:noreply, :wait}, state} -> {:noreply, state}
+      end
+    else
+      {:reply, {:error, :stale}, state}
     end
   end
 
-  def handle_call({:finish_robots, scope, origin, rules}, {pid, _tag}, state) do
-    {waiters, state} = State.finish_robots(state, scope, origin, rules, pid)
-    reply_robots(waiters, rules)
-    {:reply, :ok, state}
-  end
+  def handle_call({action, scope, origin, rules, generation, queue}, {pid, _tag}, state)
+      when action in [:finish_robots, :forget_robots] do
+    if current_work?(state, scope, generation, queue) and not is_nil(generation) do
+      {waiters, state} =
+        case action do
+          :finish_robots -> State.finish_robots(state, scope, origin, rules, pid, queue)
+          :forget_robots -> State.forget_robots(state, scope, origin, pid, queue)
+        end
 
-  def handle_call({:forget_robots, scope, origin, rules}, {pid, _tag}, state) do
-    {waiters, state} = State.forget_robots(state, scope, origin, pid)
-    reply_robots(waiters, rules)
-    {:reply, :ok, state}
+      reply_robots(waiters, {:ready, rules})
+      {:reply, :ok, state}
+    else
+      {:reply, {:error, :stale}, state}
+    end
   end
 
   def handle_call({:save_cookies, scope, url, headers, generation, context}, _from, state) do
-    {:reply, :ok, State.save_cookies(state, scope, url, headers, generation, context)}
+    state =
+      if current_work?(state, scope, generation, context[:queue]),
+        do: State.save_cookies(state, scope, url, headers, generation, context),
+        else: state
+
+    {:reply, :ok, state}
   end
 
   def handle_call({:cookie_header, scope, url, generation, context}, _from, state) do
-    {:reply, State.cookie_header(state, scope, url, generation, context), state}
+    header =
+      if current_work?(state, scope, generation, context[:queue]),
+        do: State.cookie_header(state, scope, url, generation, context)
+
+    {:reply, header, state}
   end
 
   def handle_call({:generation, scope}, _from, state) do
+    state = State.ensure_scope(state, scope)
+    Authority.put(state, scope)
     {:reply, State.generation(state, scope), state}
   end
 
@@ -258,7 +280,8 @@ defmodule Crawler.Store.Server do
   end
 
   def handle_call({:start_work, opts}, {worker, _tag}, state) do
-    if current_work?(state, opts[:scope], opts[:generation], opts[:queue]) do
+    if not is_nil(opts[:generation]) and
+         current_work?(state, opts[:scope], opts[:generation], opts[:queue]) do
       {reply, state} = State.start_work(state, opts)
 
       if reply == :ok do
@@ -305,8 +328,10 @@ defmodule Crawler.Store.Server do
   end
 
   def handle_call({:note_enqueued, scope, generation, queue}, _from, state) do
-    if State.current?(state, scope, generation) and queue_available?(state, queue) do
+    if not is_nil(generation) and State.current?(state, scope, generation) and
+         queue_available?(state, queue) do
       state = state |> monitor_queue(queue) |> State.note_enqueued(scope, queue)
+      Authority.put(state, scope)
       {:reply, :ok, state}
     else
       {:reply, :stale, state}
@@ -360,7 +385,7 @@ defmodule Crawler.Store.Server do
     case State.robots_down(state, ref) do
       {waiters, state} when waiters != [] ->
         # The owner died before it stored the file. That is not permission to fetch.
-        reply_robots(waiters, Robots.disallow_all())
+        reply_robots(waiters, {:ready, Robots.disallow_all()})
         {:noreply, state}
 
       {[], state} ->
@@ -373,8 +398,18 @@ defmodule Crawler.Store.Server do
     end
   end
 
-  defp reply_robots(waiters, rules) do
-    Enum.each(waiters, &GenServer.reply(&1, {:ready, rules}))
+  defp reply_robots(waiters, reply) do
+    Enum.each(waiters, fn {from, _queue} -> GenServer.reply(from, reply) end)
+  end
+
+  defp retire_scope(state, scope) do
+    Authority.delete(scope)
+    unregister_scope(scope)
+    state = discard_claims(state, Claims.retire_scope(state.claims, scope))
+    state = Settlements.drop_scope(state, scope)
+    {waiters, state} = State.drop_scope(state, scope)
+    reply_robots(waiters, {:error, :stale})
+    state
   end
 
   defp release_claim(state, token, worker) do
@@ -420,12 +455,32 @@ defmodule Crawler.Store.Server do
 
   defp retire_queue(state, queue) do
     scopes = State.queue_scopes(state, queue)
+    generations = Map.new(scopes, &{&1, State.generation(state, &1)})
     state = discard_claims(state, Claims.retire_queue(state.claims, queue))
     state = Settlements.drop_queue(state, queue)
     {pages, state} = State.release_queue(state, queue)
+
+    Enum.each(scopes, &Authority.put(state, &1))
+    {waiters, state} = State.retire_robots_queue(state, queue)
+    reply_robots(waiters, :retry)
+
+    state =
+      Enum.reduce(scopes, state, fn scope, state ->
+        if State.generation(state, scope) != generations[scope] do
+          {waiters, state} = State.clear_scope_caches(state, scope)
+          reply_robots(waiters, {:error, :stale})
+          state
+        else
+          state
+        end
+      end)
+
     Enum.each(pages, &Registry.unregister(DB, &1))
 
-    state = Enum.reduce(scopes, state, &settle_scope_work(&2, &1))
+    state =
+      Enum.reduce(scopes, state, fn scope, state ->
+        if Map.has_key?(state.scopes, scope), do: settle_scope_work(state, scope), else: state
+      end)
 
     if Process.alive?(queue) do
       state

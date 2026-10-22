@@ -64,6 +64,7 @@ defmodule Crawler.HTTP do
     {max_body, opts} = Keyword.pop(opts, :crawler_max_body)
     {user_cookie, opts} = Keyword.pop(opts, :crawler_user_cookie)
     {generation, opts} = Keyword.pop(opts, :crawler_generation)
+    {queue, opts} = Keyword.pop(opts, :crawler_queue)
     {cookie_site, opts} = Keyword.pop(opts, :crawler_cookie_site)
     {cookie_navigation, opts} = Keyword.pop(opts, :crawler_cookie_navigation, true)
     {cookie_credentials, opts} = Keyword.pop(opts, :crawler_cookie_credentials, :include)
@@ -78,6 +79,7 @@ defmodule Crawler.HTTP do
       :crawler_max_body,
       :crawler_user_cookie,
       :crawler_generation,
+      :crawler_queue,
       :crawler_cookie_site,
       :crawler_cookie_navigation,
       :crawler_cookie_credentials
@@ -87,6 +89,7 @@ defmodule Crawler.HTTP do
       crawler_max_body: max_body,
       crawler_user_cookie: user_cookie,
       crawler_generation: generation,
+      crawler_queue: queue,
       crawler_cookie_site: cookie_site,
       crawler_cookie_navigation: cookie_navigation,
       crawler_cookie_credentials: cookie_credentials
@@ -284,6 +287,7 @@ defmodule Crawler.HTTP do
 
   defp cookie_context(request) do
     %{
+      queue: Req.Request.get_option(request, :crawler_queue),
       site: Req.Request.get_option(request, :crawler_cookie_site),
       navigation: Req.Request.get_option(request, :crawler_cookie_navigation, true),
       credentials: Req.Request.get_option(request, :crawler_cookie_credentials, :include)

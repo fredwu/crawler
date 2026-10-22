@@ -3,6 +3,7 @@ defmodule Crawler.QueueHandler do
   Handles the queueing of crawl requests.
   """
 
+  alias Crawler.Fetcher.AliasSettlement
   alias Crawler.Queue
   alias Crawler.Store
 
@@ -15,6 +16,8 @@ defmodule Crawler.QueueHandler do
   An unavailable named queue returns `{:error, {:queue_unavailable, name}}`.
   """
   def enqueue(opts) do
+    opts = Store.bind_run(opts)
+
     with {:ok, opts, started?} <- init_queue(opts[:queue], opts) do
       opts = if started?, do: opts, else: assign_queue_owner(opts)
 
@@ -27,7 +30,8 @@ defmodule Crawler.QueueHandler do
     end
   end
 
-  def requeue(%{queue: queue} = opts), do: OPQ.enqueue(queue, opts)
+  def requeue(%AliasSettlement{queue: queue} = job), do: OPQ.enqueue(queue, job)
+  def requeue(%{queue: queue} = opts), do: OPQ.enqueue(queue, Store.bind_run(opts))
 
   defp note_and_enqueue(opts, started?) do
     case Store.note_enqueued(opts[:scope], opts[:generation], opts[:queue]) do
@@ -52,7 +56,9 @@ defmodule Crawler.QueueHandler do
 
   defp queue_alive?(_queue), do: false
 
-  defp assign_queue_owner(%{queue: queue, scope: scope} = opts) when is_pid(queue) do
+  defp assign_queue_owner(%{queue: queue} = opts) when is_pid(queue) do
+    scope = opts[:scope]
+
     case Store.queue_record(queue) do
       %{owner: owner, scope: ^scope} when is_pid(owner) -> Map.put(opts, :queue_owner, owner)
       _ -> Map.delete(opts, :queue_owner)

@@ -37,18 +37,40 @@ defmodule Crawler do
   crawl should happen based on the available workers and the rate limit. The
   queue kicks off `Crawler.Dispatcher.Worker` which in turn calls
   `Crawler.crawl_now/1`.
+
+  Copying crawl options into a different scope acquires authority for that
+  scope. A stale token for the same scope stays stale unless `:force` resets it.
   """
   def crawl(url, opts \\ []) do
     opts =
-      opts
-      |> Enum.into(%{})
-      |> Options.assign_defaults()
+      url
+      |> prepare_options(opts)
       |> Options.assign_scope()
-      |> Options.assign_url(url)
-      |> assign_site()
+      |> stamp_generation()
 
-    opts = stamp_generation(opts)
+    enqueue_allowed(opts)
+  end
 
+  @doc false
+  def crawl_reference(url, opts) do
+    opts = Enum.into(opts, %{})
+
+    if is_nil(opts[:generation]) do
+      crawl(url, opts)
+    else
+      url |> prepare_options(opts) |> enqueue_allowed()
+    end
+  end
+
+  defp prepare_options(url, opts) do
+    opts
+    |> Enum.into(%{})
+    |> Options.assign_defaults()
+    |> Options.assign_url(url)
+    |> assign_site()
+  end
+
+  defp enqueue_allowed(opts) do
     if page_allowed?(opts) do
       QueueHandler.enqueue(opts)
     else
@@ -63,11 +85,14 @@ defmodule Crawler do
     Map.put(opts, :generation, Store.drop_scope(scope))
   end
 
-  defp stamp_generation(%{generation: generation} = opts) when not is_nil(generation), do: opts
-
-  defp stamp_generation(%{scope: scope} = opts) do
+  defp stamp_generation(
+         %{generation: {_incarnation, generation_scope, _revision}, scope: scope} = opts
+       )
+       when generation_scope !== scope do
     Map.put(opts, :generation, Store.generation(scope))
   end
+
+  defp stamp_generation(opts), do: Store.bind_run(opts)
 
   @doc """
   Stops a crawl.
@@ -77,7 +102,8 @@ defmodule Crawler do
   the queue and the processes it started are shut down. A queue created
   outside Crawler keeps running. Stopping the scope that started a queue
   shuts that queue down when these options contain its `queue:` and `scope:`.
-  This does not change the caller's exit trapping.
+  This does not change the caller's exit trapping. Direct fetch options with
+  a generation can also stop their run when the scope is `nil`.
 
   Stopping the crawl that created a shared queue shuts that queue down. Other
   scopes using it stop making progress. Pages they have already stored stay
@@ -88,7 +114,7 @@ defmodule Crawler do
     scope = opts[:scope]
     owner = owning_queue(opts)
 
-    if not is_nil(scope), do: Store.drop_scope(scope)
+    if not is_nil(scope) or not is_nil(opts[:generation]), do: Store.dispose_scope(scope)
 
     if is_pid(owner), do: Queue.stop(owner)
 
@@ -139,7 +165,9 @@ defmodule Crawler do
 
   defp page_allowed?(_opts), do: true
 
-  defp owning_queue(%{queue: queue, scope: scope}) when is_pid(queue) do
+  defp owning_queue(%{queue: queue} = opts) when is_pid(queue) do
+    scope = opts[:scope]
+
     case Store.queue_record(queue) do
       %{owner: owner, scope: ^scope} when is_pid(owner) -> owner
       _ -> nil

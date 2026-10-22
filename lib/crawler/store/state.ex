@@ -21,10 +21,12 @@ defmodule Crawler.Store.State do
 
   def new, do: %__MODULE__{incarnation: make_ref()}
 
-  def generation(state, scope), do: {state.incarnation, get_scope(state, scope).revision}
+  def generation(state, scope), do: {state.incarnation, scope, get_scope(state, scope).revision}
+
+  def ensure_scope(state, scope), do: update_scope(state, scope, & &1)
 
   def current?(_state, _scope, nil), do: true
-  def current?(state, scope, generation), do: generation(state, scope) == generation
+  def current?(state, scope, generation), do: generation(state, scope) === generation
 
   def queue_active?(_state, _scope, nil), do: true
   def queue_active?(state, scope, queue), do: Map.has_key?(get_scope(state, scope).work, queue)
@@ -162,25 +164,25 @@ defmodule Crawler.Store.State do
   end
 
   def drop_scope(state, scope) do
+    {waiters, state} = clear_scope_caches(state, scope)
+    {waiters, %{state | scopes: Map.delete(state.scopes, scope)}}
+  end
+
+  def clear_scope_caches(state, scope) do
     waiters =
       state.robots
       |> Map.get(scope, %{})
       |> Map.values()
       |> Enum.flat_map(&loading_waiters/1)
 
-    state =
-      state
-      |> update_scope(scope, &%Scope{revision: &1.revision + 1})
-      |> Map.update!(:cookies, &Map.delete(&1, scope))
-      |> Map.update!(:robots, &Map.delete(&1, scope))
-
-    {waiters, state}
+    {waiters,
+     %{state | cookies: Map.delete(state.cookies, scope), robots: Map.delete(state.robots, scope)}}
   end
 
   def save_cookies(state, nil, _url, _headers, _generation, _context), do: state
 
   def save_cookies(state, scope, url, headers, generation, context) do
-    if current?(state, scope, generation) do
+    if current?(state, scope, generation) and queue_active?(state, scope, context[:queue]) do
       jar = Cookies.store(Map.get(state.cookies, scope, []), url, headers, context)
       %{state | cookies: Map.put(state.cookies, scope, jar)}
     else
@@ -191,31 +193,31 @@ defmodule Crawler.Store.State do
   def cookie_header(_state, nil, _url, _generation, _context), do: nil
 
   def cookie_header(state, scope, url, generation, context) do
-    if current?(state, scope, generation) do
+    if current?(state, scope, generation) and queue_active?(state, scope, context[:queue]) do
       state.cookies
       |> Map.get(scope, [])
       |> Cookies.header(url, context)
     end
   end
 
-  def claim_robots(state, scope, origin, from, pid) do
+  def claim_robots(state, scope, origin, from, pid, queue) do
     case robot(state, scope, origin) do
       {:ready, rules} ->
         {{:reply, {:ready, rules}}, state}
 
-      {:loading, ref, owner, waiters} ->
-        entry = {:loading, ref, owner, [from | waiters]}
+      {:loading, ref, owner, owner_queue, waiters} ->
+        entry = {:loading, ref, owner, owner_queue, [{from, queue} | waiters]}
         {{:noreply, :wait}, put_robot(state, scope, origin, entry)}
 
       nil ->
         ref = Process.monitor(pid)
-        {{:reply, :owner}, put_robot(state, scope, origin, {:loading, ref, pid, []})}
+        {{:reply, :owner}, put_robot(state, scope, origin, {:loading, ref, pid, queue, []})}
     end
   end
 
-  def finish_robots(state, scope, origin, rules, pid) do
+  def finish_robots(state, scope, origin, rules, pid, queue) do
     case robot(state, scope, origin) do
-      {:loading, ref, ^pid, waiters} ->
+      {:loading, ref, ^pid, ^queue, waiters} ->
         Process.demonitor(ref, [:flush])
         {waiters, put_robot(state, scope, origin, {:ready, rules})}
 
@@ -224,9 +226,9 @@ defmodule Crawler.Store.State do
     end
   end
 
-  def forget_robots(state, scope, origin, pid) do
+  def forget_robots(state, scope, origin, pid, queue) do
     case robot(state, scope, origin) do
-      {:loading, ref, ^pid, waiters} ->
+      {:loading, ref, ^pid, ^queue, waiters} ->
         Process.demonitor(ref, [:flush])
         {waiters, delete_robot(state, scope, origin)}
 
@@ -235,10 +237,16 @@ defmodule Crawler.Store.State do
     end
   end
 
+  def retire_robots_queue(state, queue) do
+    Enum.reduce(state.robots, {[], state}, fn {scope, origins}, acc ->
+      Enum.reduce(origins, acc, &retire_robot_queue(&1, &2, scope, queue))
+    end)
+  end
+
   def robots_down(state, ref) do
     Enum.find_value(state.robots, {[], state}, fn {scope, origins} ->
       Enum.find_value(origins, fn
-        {origin, {:loading, ^ref, _pid, waiters}} ->
+        {origin, {:loading, ^ref, _pid, _queue, waiters}} ->
           state = delete_robot(state, scope, origin)
           {waiters, state}
 
@@ -248,7 +256,31 @@ defmodule Crawler.Store.State do
     end)
   end
 
-  defp loading_waiters({:loading, ref, _pid, waiters}) do
+  defp retire_robot_queue(
+         {origin, {:loading, ref, _pid, queue, waiters}},
+         {replies, state},
+         scope,
+         queue
+       ) do
+    Process.demonitor(ref, [:flush])
+    {waiters ++ replies, delete_robot(state, scope, origin)}
+  end
+
+  defp retire_robot_queue(
+         {origin, {:loading, ref, pid, owner_queue, waiters}},
+         {replies, state},
+         scope,
+         queue
+       ) do
+    {retired, kept} =
+      Enum.split_with(waiters, fn {_from, waiting_queue} -> waiting_queue == queue end)
+
+    {retired ++ replies, put_robot(state, scope, origin, {:loading, ref, pid, owner_queue, kept})}
+  end
+
+  defp retire_robot_queue(_entry, acc, _scope, _queue), do: acc
+
+  defp loading_waiters({:loading, ref, _pid, _queue, waiters}) do
     Process.demonitor(ref, [:flush])
     waiters
   end
@@ -280,8 +312,15 @@ defmodule Crawler.Store.State do
   def release_queue(state, queue) do
     {scopes, pages} =
       Enum.reduce(state.scopes, {%{}, MapSet.new()}, fn {name, scope}, {scopes, pages} ->
+        attached? = Map.has_key?(scope.work, queue)
         {scope, removed} = release_scope_queue(scope, queue)
-        {Map.put(scopes, name, scope), MapSet.union(pages, removed)}
+
+        scopes =
+          if attached? and scope.work == %{} and scope.ops == 0,
+            do: scopes,
+            else: Map.put(scopes, name, scope)
+
+        {scopes, MapSet.union(pages, removed)}
       end)
 
     state = %{
@@ -300,7 +339,7 @@ defmodule Crawler.Store.State do
         {scope, MapSet.new()}
 
       {removed, work} ->
-        revision = if map_size(work) == 0, do: scope.revision + 1, else: scope.revision
+        revision = if map_size(work) == 0, do: make_ref(), else: scope.revision
         {%{scope | work: work, revision: revision}, removed.pages}
     end
   end
@@ -308,7 +347,11 @@ defmodule Crawler.Store.State do
   defp get_scope(state, scope), do: Map.get(state.scopes, scope, %Scope{})
 
   defp update_scope(state, scope, fun) do
-    %{state | scopes: Map.put(state.scopes, scope, fun.(get_scope(state, scope)))}
+    %{
+      state
+      | scopes:
+          Map.put(state.scopes, scope, fun.(Map.get_lazy(state.scopes, scope, &Scope.new/0)))
+    }
   end
 
   defp update_work(state, scope, queue, fun) do

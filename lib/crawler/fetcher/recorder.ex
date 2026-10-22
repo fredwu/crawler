@@ -52,8 +52,19 @@ defmodule Crawler.Fetcher.Recorder do
     {:ok, nil}
   end
 
+  defp store_page(body, %{store: Store} = opts) do
+    result =
+      Store.add_page_data({opts[:url], opts[:scope]}, body, opts, opts[:generation], opts[:queue])
+
+    store_result(result)
+  end
+
   defp store_page(body, opts) do
-    case opts[:store].add_page_data({opts[:url], opts[:scope]}, body, opts) do
+    store_result(opts[:store].add_page_data({opts[:url], opts[:scope]}, body, opts))
+  end
+
+  defp store_result(result) do
+    case result do
       {:error, _} = error -> error
       result -> {:ok, result}
     end

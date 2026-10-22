@@ -66,7 +66,7 @@ defmodule Crawler.Options do
         retries: retries(),
         store: store(),
         force: force(),
-        scope: scope(),
+        scope: scope(opts),
         user_agent: user_agent(),
         url_filter: url_filter(),
         retrier: retrier(),
@@ -106,16 +106,27 @@ defmodule Crawler.Options do
   end
 
   @doc """
-  Gives each crawl its own scope unless the caller already set one.
+  Gives an unbound crawl its own scope unless the caller already set one.
 
   A shared scope shares the seen-URL set and the `:max_pages` budget.
-  `:force` with no scope still receives a fresh scope through this function.
+  Explicit scope options take precedence over a supplied generation's scope,
+  which takes precedence over the application default. A bound run keeps its
+  identity, including `nil`, when its options pass through child dispatch.
+  `:force` with no existing run still receives a fresh scope.
   """
-  def assign_scope(%{scope: nil} = opts) do
-    Map.put(opts, :scope, System.unique_integer([:positive]))
+  def assign_scope(opts) do
+    scope = scope(opts)
+
+    if is_nil(scope) and is_nil(opts[:generation]) do
+      Map.put(opts, :scope, System.unique_integer([:positive]))
+    else
+      Map.put(opts, :scope, scope)
+    end
   end
 
-  def assign_scope(opts), do: opts
+  defp scope(%{scope: scope}), do: scope
+  defp scope(%{generation: {_incarnation, scope, _revision}}), do: scope
+  defp scope(_opts), do: scope()
 
   defp assets, do: Application.get_env(:crawler, :assets, @assets)
   defp javascript_goal, do: Application.get_env(:crawler, :javascript_goal, @javascript_goal)

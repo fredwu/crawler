@@ -35,8 +35,16 @@ defmodule Crawler.Fetcher do
   - recording data for internal use through `Crawler.Fetcher.Recorder.record/1`
   - fetching the URL
   - performing retries upon failed fetches through `Crawler.Fetcher.Retrier.perform/2`
+
+  A direct call acquires one generation when none is supplied and preserves
+  the caller's scope, including `nil`. A supplied stale generation is rejected.
   """
   def fetch(opts) do
+    opts = Store.bind_run(opts)
+    if stale?(opts), do: {:warn, :stale}, else: fetch_current(opts)
+  end
+
+  defp fetch_current(opts) do
     case fetch_unseen(opts) do
       {:warn, "Fetch failed check 'not_fetched_yet?'" <> _} = warn ->
         seen_url(opts, warn)
@@ -257,7 +265,9 @@ defmodule Crawler.Fetcher do
         case Store.add_page_data(
                {opts[:url], opts[:scope]},
                body,
-               Map.put(stored, :html_tag, "a")
+               Map.put(stored, :html_tag, "a"),
+               opts[:generation],
+               opts[:queue]
              ) do
           {:error, _} = error -> error
           _ -> %Page{url: opts[:url], body: body, opts: opts}
@@ -328,8 +338,8 @@ defmodule Crawler.Fetcher do
     if stale?(opts), do: {:warn, :stale}, else: request(opts)
   end
 
-  defp stale?(%{generation: generation, scope: scope} = opts) when not is_nil(generation) do
-    not Store.current?(scope, generation, opts[:queue])
+  defp stale?(%{generation: generation} = opts) when not is_nil(generation) do
+    not Store.current?(opts[:scope], generation, opts[:queue])
   end
 
   defp stale?(_opts), do: false
@@ -518,7 +528,7 @@ defmodule Crawler.Fetcher do
         :ok
 
       _ ->
-        case Store.add_page_data(key, body, opts) do
+        case Store.add_page_data(key, body, opts, opts[:generation], opts[:queue]) do
           {:error, :stale} = error -> error
           _ -> :ok
         end
@@ -539,7 +549,7 @@ defmodule Crawler.Fetcher do
           |> put_alias_url(opts[:alias_url])
           |> put_worker_base(opts[:worker_base])
 
-        case Store.add_page_data(key, body, stored) do
+        case Store.add_page_data(key, body, stored, opts[:generation], opts[:queue]) do
           {:error, :stale} = error -> error
           _ -> :ok
         end
@@ -568,9 +578,9 @@ defmodule Crawler.Fetcher do
 
   defp drop_owned_alias(%{alias_candidate: ref}), do: Store.discard_retained_alias(ref)
 
-  defp drop_owned_alias(%{alias_url: url, alias_created: created?, scope: scope} = opts)
+  defp drop_owned_alias(%{alias_url: url, alias_created: created?} = opts)
        when is_binary(url) do
-    Store.rollback_alias({url, scope}, opts[:generation], opts[:queue], created?)
+    Store.rollback_alias({url, opts[:scope]}, opts[:generation], opts[:queue], created?)
   end
 
   defp drop_owned_alias(_opts), do: :ok

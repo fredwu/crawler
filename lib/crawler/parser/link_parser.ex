@@ -181,6 +181,8 @@ defmodule Crawler.Parser.LinkParser do
           |> Map.delete(:credentials)
           |> Map.delete(:page_open)
           |> Map.delete(:style_group)
+          |> Map.delete(:document_styles)
+          |> Map.delete(:document_style_id)
           |> Map.put(:srcdoc, true)
 
         Crawler.Parser.parse_links(srcdoc, opts, handler)
@@ -286,7 +288,18 @@ defmodule Crawler.Parser.LinkParser do
 
   defp style_span_opts(attr, opts) do
     opts
-    |> Map.take([:scope, :url, :referrer_url, :style_group, :document_url, :css_sheet])
+    |> Map.take([
+      :scope,
+      :generation,
+      :queue,
+      :url,
+      :referrer_url,
+      :style_group,
+      :document_url,
+      :css_sheet,
+      :document_styles,
+      :document_style_id
+    ])
     |> Map.put(:mode, style_mode(attr))
     |> Map.put(:entity_quotes, false)
   end

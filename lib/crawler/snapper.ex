@@ -92,7 +92,7 @@ defmodule Crawler.Snapper do
   end
 
   defp publish?(opts) do
-    not is_nil(opts[:generation]) and not is_nil(opts[:scope])
+    not is_nil(opts[:generation])
   end
 
   defp publish(body, file_path, opts) do

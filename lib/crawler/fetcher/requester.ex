@@ -89,6 +89,7 @@ defmodule Crawler.Fetcher.Requester do
     |> Keyword.put(:crawler_max_body, max_body(opts))
     |> Keyword.put(:crawler_user_cookie, user_cookie)
     |> Keyword.put(:crawler_generation, opts[:generation])
+    |> Keyword.put(:crawler_queue, opts[:queue])
     |> Keyword.put(:crawler_cookie_site, context.site)
     |> Keyword.put(:crawler_cookie_navigation, context.navigation)
     |> Keyword.put(:crawler_cookie_credentials, context.credentials)
@@ -131,6 +132,7 @@ defmodule Crawler.Fetcher.Requester do
 
   defp cookie_context(opts) do
     %{
+      queue: opts[:queue],
       site: opts[:cookie_site] || opts[:url],
       navigation: Cookies.request_navigation?(opts),
       credentials: Cookies.credential_mode(opts)

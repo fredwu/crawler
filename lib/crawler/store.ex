@@ -12,6 +12,26 @@ defmodule Crawler.Store do
   other queues in the same scope continues. Retirement preserves the scope's
   generation while other work contexts remain.
 
+  Crawl authority consists of the scope, its opaque generation, and the
+  registered queue. Revocation returns `:stale` (or `{:error, :stale}` for
+  result APIs). Cancellation does not represent successful completion.
+  `dispose_scope/1` removes a stopped run without retaining a revision record.
+  CSS entries use scope and generation keys. Revocation does not wait for the
+  derived CSS cache; its bounded sweep removes retired entries asynchronously.
+  Internal page writes pass the executing generation and queue separately from
+  stored metadata. Reading a page does not transfer its authority to a worker.
+  Run entry points bind missing authority before submitting work or claiming a
+  slot. Job submission and claim acquisition reject missing as well as retired
+  generations. Internal references preserve run identity and authority; only
+  explicit crawl startup can reset or select a different run.
+
+  Logical URLs use canonical URL identity for pages, aliases, and shared page
+  counts. Request representations are the bytes fetched with a frozen effective
+  request, including eligible credentials, cookies, headers, and partition.
+  Interpretation contexts apply document bases, stylesheet groups, and script
+  goals to those bytes. A logical URL alone does not establish representation
+  equivalence; interpretation identity does not grant run authority.
+
   A Store restart invalidates every previous generation. Managed queues stop.
   External queues remain running, but their old work cannot change new pages,
   counters, or snapshots.
@@ -22,7 +42,6 @@ defmodule Crawler.Store do
   is dropped.
   """
 
-  alias Crawler.Parser.CssSheets
   alias Crawler.Store.DB
   alias Crawler.Store.Server
   alias Crawler.URL
@@ -102,10 +121,15 @@ defmodule Crawler.Store do
   @doc """
   Adds the page data for a URL to the registry.
   """
-  def add_page_data({url, scope}, body, opts) do
+  def add_page_data(key, body, opts) do
+    add_page_data(key, body, opts, opts[:generation], opts[:queue])
+  end
+
+  @doc false
+  def add_page_data({url, scope}, body, opts, generation, queue) do
     GenServer.call(
       __MODULE__,
-      {:add_page_data, identity(url, scope), body, opts, opts[:generation], opts[:queue]}
+      {:add_page_data, identity(url, scope), body, opts, generation, queue}
     )
   end
 
@@ -139,23 +163,25 @@ defmodule Crawler.Store do
   token cannot write into the next crawl.
   """
   def drop_scope(scope) do
-    CssSheets.drop(scope)
     GenServer.call(__MODULE__, {:drop_scope, scope})
   end
 
   @doc false
-  def claim_robots(scope, origin) do
-    GenServer.call(__MODULE__, {:claim_robots, scope, origin}, :infinity)
+  def dispose_scope(scope), do: GenServer.call(__MODULE__, {:dispose_scope, scope})
+
+  @doc false
+  def claim_robots(scope, origin, generation, queue \\ nil) do
+    GenServer.call(__MODULE__, {:claim_robots, scope, origin, generation, queue}, :infinity)
   end
 
   @doc false
-  def finish_robots(scope, origin, rules) do
-    GenServer.call(__MODULE__, {:finish_robots, scope, origin, rules})
+  def finish_robots(scope, origin, rules, generation, queue \\ nil) do
+    GenServer.call(__MODULE__, {:finish_robots, scope, origin, rules, generation, queue})
   end
 
   @doc false
-  def forget_robots(scope, origin, rules) do
-    GenServer.call(__MODULE__, {:forget_robots, scope, origin, rules})
+  def forget_robots(scope, origin, rules, generation, queue \\ nil) do
+    GenServer.call(__MODULE__, {:forget_robots, scope, origin, rules, generation, queue})
   end
 
   @doc false
@@ -186,6 +212,15 @@ defmodule Crawler.Store do
   its previous token. Other scopes keep their tokens during a scope reset.
   """
   def generation(scope), do: GenServer.call(__MODULE__, {:generation, scope})
+
+  @doc false
+  def bind_run(opts) do
+    opts = Enum.into(opts, %{})
+
+    if is_nil(opts[:generation]),
+      do: Map.put(opts, :generation, generation(opts[:scope])),
+      else: opts
+  end
 
   def current?(scope, generation, queue \\ nil) do
     GenServer.call(__MODULE__, {:current?, scope, generation, queue})
@@ -227,6 +262,7 @@ defmodule Crawler.Store do
     GenServer.call(__MODULE__, {:try_claim, scope, max_pages, generation, queue})
   end
 
+  @doc false
   def start_work(opts) do
     opts = Map.put(opts, :page_key, identity(opts[:url], opts[:scope]))
     GenServer.call(__MODULE__, {:start_work, opts})

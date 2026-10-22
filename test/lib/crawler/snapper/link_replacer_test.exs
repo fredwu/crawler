@@ -2,7 +2,6 @@ defmodule Crawler.Snapper.LinkReplacerTest do
   use ExUnit.Case, async: true
 
   alias Crawler.Linker
-  alias Crawler.Parser.CssSheets
   alias Crawler.Snapper.LinkReplacer
 
   doctest LinkReplacer
@@ -113,7 +112,6 @@ defmodule Crawler.Snapper.LinkReplacerTest do
 
   test "a later style element rewrites a registered picture" do
     scope = System.unique_integer([:positive])
-    on_exit(fn -> CssSheets.drop(scope) end)
 
     opts = %{
       url: "http://host/dir/page",
@@ -149,7 +147,6 @@ defmodule Crawler.Snapper.LinkReplacerTest do
 
   test "a later style element rewrites an unregistered picture" do
     scope = System.unique_integer([:positive])
-    on_exit(fn -> CssSheets.drop(scope) end)
 
     opts = %{
       url: "http://host/dir/page",
@@ -183,7 +180,6 @@ defmodule Crawler.Snapper.LinkReplacerTest do
 
   test "a srcdoc rewrites a picture used by a later style element" do
     scope = System.unique_integer([:positive])
-    on_exit(fn -> CssSheets.drop(scope) end)
 
     opts = %{
       url: "http://host/dir/page",

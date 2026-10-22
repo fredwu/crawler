@@ -4,7 +4,11 @@ defmodule Crawler.Parser.CssSheets do
   use GenServer
 
   alias Crawler.Parser.CssParser.Variables
+  alias Crawler.Store.Authority
   alias Crawler.URL
+
+  @cleanup_batch 64
+  @cleanup_interval 100
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -17,6 +21,7 @@ defmodule Crawler.Parser.CssSheets do
     cond do
       not stylesheet?(opts) -> :local
       not server?() -> :local
+      is_nil(opts[:generation]) -> :local
       replace?(opts) -> call_sheet(opts, body, analysis, :preview)
       placeholder?(body) -> :local
       true -> call_sheet(opts, body, analysis, :remember)
@@ -32,7 +37,7 @@ defmodule Crawler.Parser.CssSheets do
          true <- server?(),
          false <- rewrite?(opts),
          {:ok, key} <- sheet_key(opts, body) do
-      GenServer.call(__MODULE__, {:take, key, span_tokens})
+      authorized_call(opts, {:take, key, span_tokens})
     else
       _other -> []
     end
@@ -47,7 +52,7 @@ defmodule Crawler.Parser.CssSheets do
          true <- server?(),
          false <- placeholder?(body),
          {:ok, key} <- sheet_key(opts, body) do
-      not GenServer.call(__MODULE__, {:member, key})
+      authorized_call(opts, {:replay, key})
     else
       _other -> false
     end
@@ -61,41 +66,84 @@ defmodule Crawler.Parser.CssSheets do
     urls = settle_urls(opts)
 
     if server?() and present_scope?(opts[:scope]) and urls != [] do
-      GenServer.call(__MODULE__, {:settle, opts[:scope], urls})
+      authorized_call(opts, {:settle, scope_key(opts), urls})
     else
       []
     end
   end
 
-  def drop(scope) do
-    if server?(), do: GenServer.call(__MODULE__, {:drop, scope}), else: :ok
+  @impl GenServer
+  def init(_opts) do
+    schedule_cleanup()
+    {:ok, %{scopes: %{}, cleanup: :queue.new()}}
   end
 
   @impl GenServer
-  def init(_opts), do: {:ok, %{scopes: %{}}}
+  def handle_call({:authorized, scope, generation, queue, request}, _from, state) do
+    if Authority.current?(scope, generation, queue) do
+      {:reply, reply, next} = transition(request, state)
+
+      if Authority.current?(scope, generation, queue) do
+        {:reply, reply, next}
+      else
+        {:reply, rejected(request), state}
+      end
+    else
+      {:reply, rejected(request), state}
+    end
+  end
 
   @impl GenServer
-  def handle_call({:remember, key, analysis, request_url}, _from, state) do
+  def handle_info(:cleanup, state) do
+    state = cleanup(state, min(@cleanup_batch, map_size(state.scopes)))
+    schedule_cleanup()
+    {:noreply, state}
+  end
+
+  defp schedule_cleanup, do: Process.send_after(self(), :cleanup, @cleanup_interval)
+
+  defp transition(request, state) do
+    handle_request(request, state)
+  rescue
+    error in Variables.LimitError -> {:reply, {:error, error}, state}
+  end
+
+  defp cleanup(state, 0), do: state
+
+  defp cleanup(state, remaining) do
+    {{:value, {scope, generation} = key}, queue} = :queue.out(state.cleanup)
+
+    state =
+      if Authority.current?(scope, generation, nil) do
+        %{state | cleanup: :queue.in(key, queue)}
+      else
+        %{state | scopes: Map.delete(state.scopes, key), cleanup: queue}
+      end
+
+    cleanup(state, remaining - 1)
+  end
+
+  defp handle_request({:remember, key, analysis, request_url}, state) do
     state = put_analysis(state, key, analysis, request_url)
     {:reply, {:ok, sheet_tokens(state, key)}, state}
   end
 
-  def handle_call({:preview, key, analysis, request_url}, _from, state) do
+  defp handle_request({:preview, key, analysis, request_url}, state) do
     preview = put_analysis(state, key, analysis, request_url)
     {:reply, {:ok, sheet_tokens(preview, key)}, state}
   end
 
-  def handle_call({:settle, scope, urls}, _from, state) do
+  defp handle_request({:settle, scope, urls}, state) do
     {fresh, state} = settle_scope(state, scope, urls)
     {:reply, fresh, state}
   end
 
-  def handle_call({:member, {scope, group_id, sheet_id, _base}}, _from, state) do
+  defp handle_request({:replay, {scope, group_id, sheet_id, _base}}, state) do
     sheets = state |> group(scope, group_id) |> Map.fetch!(:sheets)
-    {:reply, Map.has_key?(sheets, sheet_id), state}
+    {:reply, not Map.has_key?(sheets, sheet_id), state}
   end
 
-  def handle_call({:take, {scope, group_id, _sheet_id, base}, span_tokens}, _from, state) do
+  defp handle_request({:take, {scope, group_id, _sheet_id, base}, span_tokens}, state) do
     group = group(state, scope, group_id)
     sheets = ordered(group)
     {fresh, covered} = fresh_urls(sheets, span_tokens, base, group)
@@ -111,16 +159,32 @@ defmodule Crawler.Parser.CssSheets do
     {:reply, fresh, state}
   end
 
-  def handle_call({:drop, scope}, _from, state) do
-    {:reply, :ok, %{state | scopes: Map.delete(state.scopes, scope)}}
-  end
-
   defp call_sheet(opts, body, analysis, action) do
     case sheet_key(opts, body) do
-      {:ok, key} -> GenServer.call(__MODULE__, {action, key, analysis, opts[:url]})
+      {:ok, key} -> authorized_call(opts, {action, key, analysis, opts[:url]})
       :skip -> :local
     end
   end
+
+  defp authorized_call(opts, request) do
+    if is_nil(opts[:generation]) do
+      rejected(request)
+    else
+      case GenServer.call(
+             __MODULE__,
+             {:authorized, opts[:scope], opts[:generation], opts[:queue], request}
+           ) do
+        {:error, %Variables.LimitError{} = error} -> raise error
+        reply -> reply
+      end
+    end
+  end
+
+  defp rejected({action, _key, _analysis, _url}) when action in [:remember, :preview],
+    do: {:ok, []}
+
+  defp rejected({:replay, _key}), do: false
+  defp rejected(_request), do: []
 
   defp put_analysis(state, {scope, group_id, sheet_id, base}, analysis, request_url) do
     state = insert(state, scope, group_id, sheet_id, base, analysis)
@@ -191,7 +255,12 @@ defmodule Crawler.Parser.CssSheets do
         &update_scope(&1, group_id, sheet_id, base, analysis)
       )
 
-    %{state | scopes: scopes}
+    cleanup =
+      if Map.has_key?(state.scopes, scope),
+        do: state.cleanup,
+        else: :queue.in(scope, state.cleanup)
+
+    %{state | scopes: scopes, cleanup: cleanup}
   end
 
   defp new_scope(group_id, sheet_id, base, analysis) do
@@ -365,11 +434,13 @@ defmodule Crawler.Parser.CssSheets do
     base = sheet_base(opts)
 
     if present_scope?(scope) and present?(group) and present?(base) do
-      {:ok, {scope, group, {base, :erlang.phash2(body), byte_size(body)}, base}}
+      {:ok, {scope_key(opts), group, {base, :erlang.phash2(body), byte_size(body)}, base}}
     else
       :skip
     end
   end
+
+  defp scope_key(opts), do: {opts[:scope], opts[:generation]}
 
   defp group_id(opts), do: first_of(opts[:style_group], opts[:document_url], opts[:url])
   defp sheet_base(opts), do: first_of(opts[:referrer_url], opts[:url])

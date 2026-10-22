@@ -230,11 +230,12 @@ defmodule Crawler.RobotsCrawlTest do
   test "a dead robots owner does not allow a page that was waiting" do
     scope = unique_scope("robots-owner")
     origin = "http://robots-owner.test"
+    generation = Store.generation(scope)
     parent = self()
 
     owner =
       spawn(fn ->
-        send(parent, {:claimed, Store.claim_robots(scope, origin)})
+        send(parent, {:claimed, Store.claim_robots(scope, origin, generation)})
 
         receive do
           :stop -> :ok
@@ -243,14 +244,14 @@ defmodule Crawler.RobotsCrawlTest do
 
     assert_receive {:claimed, :owner}, 1_000
 
-    waiter = Task.async(fn -> Store.claim_robots(scope, origin) end)
+    waiter = Task.async(fn -> Store.claim_robots(scope, origin, generation) end)
     wait(2_000, fn -> assert waiting_robots?(scope, origin) end)
     Process.exit(owner, :kill)
 
     assert {:ready, rules} = Task.await(waiter, 2_000)
     refute Robots.allowed?(rules, origin <> "/private", "Crawler/1")
-    assert Store.claim_robots(scope, origin) == :owner
-    assert Store.finish_robots(scope, origin, Robots.allow_all()) == :ok
+    assert Store.claim_robots(scope, origin, generation) == :owner
+    assert Store.finish_robots(scope, origin, Robots.allow_all(), generation) == :ok
   end
 
   test "a sitemap on another host lists only same-site pages" do
@@ -455,7 +456,7 @@ defmodule Crawler.RobotsCrawlTest do
 
   defp waiting_robots?(scope, origin) do
     state = :sys.get_state(Store)
-    match?({:loading, _, _, [_ | _]}, get_in(state.robots, [scope, origin]))
+    match?({:loading, _, _, _, [_ | _]}, get_in(state.robots, [scope, origin]))
   end
 
   defp crawl(url, context, extra \\ []) do

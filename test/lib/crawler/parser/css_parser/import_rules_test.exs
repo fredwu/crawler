@@ -149,7 +149,7 @@ defmodule Crawler.Parser.CssParser.ImportRulesTest do
 
   test "an unregistered picture uses the sheet that reads the variable" do
     scope = System.unique_integer([:positive])
-    on_exit(fn -> CssSheets.drop(scope) end)
+    on_exit(fn -> Crawler.Store.dispose_scope(scope) end)
     group = "http://example.com/start"
 
     app = """
@@ -210,7 +210,7 @@ defmodule Crawler.Parser.CssParser.ImportRulesTest do
 
   test "a later page and a srcdoc keep their own style groups" do
     scope = System.unique_integer([:positive])
-    on_exit(fn -> CssSheets.drop(scope) end)
+    on_exit(fn -> Crawler.Store.dispose_scope(scope) end)
     page = "http://example.com/a.html"
 
     html = """
@@ -222,6 +222,7 @@ defmodule Crawler.Parser.CssParser.ImportRulesTest do
 
     opts = %{
       scope: scope,
+      generation: Crawler.Store.generation(scope),
       url: page,
       referrer_url: page,
       content_type: "text/html",
@@ -452,7 +453,7 @@ defmodule Crawler.Parser.CssParser.ImportRulesTest do
 
   test "a fallback waits until the imported sheet joins" do
     scope = System.unique_integer([:positive])
-    on_exit(fn -> CssSheets.drop(scope) end)
+    on_exit(fn -> Crawler.Store.dispose_scope(scope) end)
     group = "http://example.com/start"
     app_url = "http://example.com/css/app.css"
     tokens_url = "http://example.com/tokens/tokens.css"
@@ -476,7 +477,7 @@ defmodule Crawler.Parser.CssParser.ImportRulesTest do
            ]
 
     alias_scope = System.unique_integer([:positive])
-    on_exit(fn -> CssSheets.drop(alias_scope) end)
+    on_exit(fn -> Crawler.Store.dispose_scope(alias_scope) end)
 
     alias_parent = """
     @import "/tokens/tokens.css";
@@ -499,7 +500,7 @@ defmodule Crawler.Parser.CssParser.ImportRulesTest do
 
   test "an import that leaves the variable unset still loads the fallback" do
     scope = System.unique_integer([:positive])
-    on_exit(fn -> CssSheets.drop(scope) end)
+    on_exit(fn -> Crawler.Store.dispose_scope(scope) end)
     group = "http://example.com/start"
     app_url = "http://example.com/css/app.css"
     tokens_url = "http://example.com/tokens/tokens.css"
@@ -525,7 +526,7 @@ defmodule Crawler.Parser.CssParser.ImportRulesTest do
 
   test "a missing import still loads the fallback" do
     scope = System.unique_integer([:positive])
-    on_exit(fn -> CssSheets.drop(scope) end)
+    on_exit(fn -> Crawler.Store.dispose_scope(scope) end)
     group = "http://example.com/start"
     app_url = "http://example.com/css/app.css"
     tokens_url = "http://example.com/tokens/tokens.css"
@@ -539,12 +540,16 @@ defmodule Crawler.Parser.CssParser.ImportRulesTest do
              {"/tokens/tokens.css", tokens_url}
            ]
 
-    assert CssSheets.settle(%{scope: scope, url: tokens_url}) == [
+    assert CssSheets.settle(%{
+             scope: scope,
+             generation: Crawler.Store.generation(scope),
+             url: tokens_url
+           }) == [
              "http://example.com/css/fallback.png"
            ]
 
     initial_scope = System.unique_integer([:positive])
-    on_exit(fn -> CssSheets.drop(initial_scope) end)
+    on_exit(fn -> Crawler.Store.dispose_scope(initial_scope) end)
 
     initial = """
     @import "/tokens/tokens.css";
@@ -556,14 +561,18 @@ defmodule Crawler.Parser.CssParser.ImportRulesTest do
              {"/tokens/tokens.css", tokens_url}
            ]
 
-    assert CssSheets.settle(%{scope: initial_scope, url: tokens_url}) == [
+    assert CssSheets.settle(%{
+             scope: initial_scope,
+             generation: Crawler.Store.generation(initial_scope),
+             url: tokens_url
+           }) == [
              "http://example.com/css/initial.png"
            ]
   end
 
   test "a later sheet does not wait on an import that already failed" do
     scope = System.unique_integer([:positive])
-    on_exit(fn -> CssSheets.drop(scope) end)
+    on_exit(fn -> Crawler.Store.dispose_scope(scope) end)
     group = "http://example.com/start"
     app_url = "http://example.com/css/app.css"
     missing = "http://example.com/css/missing.css"
@@ -580,7 +589,11 @@ defmodule Crawler.Parser.CssParser.ImportRulesTest do
              {"later.css", later_url}
            ]
 
-    assert CssSheets.settle(%{scope: scope, url: missing}) == []
+    assert CssSheets.settle(%{
+             scope: scope,
+             generation: Crawler.Store.generation(scope),
+             url: missing
+           }) == []
 
     later = """
     @import "missing.css";
@@ -609,7 +622,7 @@ defmodule Crawler.Parser.CssParser.ImportRulesTest do
 
   test "a redirected import stays joined for a later sheet in that group" do
     scope = System.unique_integer([:positive])
-    on_exit(fn -> CssSheets.drop(scope) end)
+    on_exit(fn -> Crawler.Store.dispose_scope(scope) end)
     group = "http://example.com/start"
     app_url = "http://example.com/css/app.css"
     request = "http://example.com/css/b.css"
@@ -719,6 +732,7 @@ defmodule Crawler.Parser.CssParser.ImportRulesTest do
   defp sheet_links(body, scope, group, url, referrer) do
     opts = %{
       scope: scope,
+      generation: Crawler.Store.generation(scope),
       url: url,
       referrer_url: referrer,
       style_group: group,

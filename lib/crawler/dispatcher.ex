@@ -9,7 +9,9 @@ defmodule Crawler.Dispatcher do
   - `{_, link, _, url}` when it's a link that got transformed into a URL
   - `{_, url}` when it's a URL already
 
-  And issues `Crawler.crawl/2` to initiate the crawl.
+  Submits a reference under the existing run authority. Reference discovery
+  does not repeat root commands such as `:force` or change the run's scope.
+  Standalone options without a generation start an ordinary crawl.
 
   Response data from the parent page is removed first. A linked page must not
   keep the parent's redirect target or response headers.
@@ -32,8 +34,8 @@ defmodule Crawler.Dispatcher do
       ])
 
     case request do
-      {_, _link, _, url} -> Crawler.crawl(url, opts)
-      {_, url} -> Crawler.crawl(url, opts)
+      {_, _link, _, url} -> Crawler.crawl_reference(url, opts)
+      {_, url} -> Crawler.crawl_reference(url, opts)
     end
   end
 end

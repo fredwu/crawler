@@ -81,21 +81,28 @@ defmodule Crawler.Robots do
   end
 
   defp load_origin(opts, origin) do
-    case Store.claim_robots(opts[:scope], origin) do
+    case Store.claim_robots(opts[:scope], origin, opts[:generation], opts[:queue]) do
       {:ready, rules} -> rules
       :owner -> store_fetch(opts, origin)
+      :retry -> load_origin(opts, origin)
+      {:error, :stale} -> disallow_all()
     end
   end
 
   defp store_fetch(opts, origin) do
     case fetch(opts, origin) do
       {:cache, rules} ->
-        Store.finish_robots(opts[:scope], origin, rules)
-        follow_site_sitemaps(opts, origin, rules)
-        rules
+        case Store.finish_robots(opts[:scope], origin, rules, opts[:generation], opts[:queue]) do
+          :ok ->
+            follow_site_sitemaps(opts, origin, rules)
+            rules
+
+          {:error, :stale} ->
+            disallow_all()
+        end
 
       {:temporary, rules} ->
-        Store.forget_robots(opts[:scope], origin, rules)
+        Store.forget_robots(opts[:scope], origin, rules, opts[:generation], opts[:queue])
         rules
     end
   end

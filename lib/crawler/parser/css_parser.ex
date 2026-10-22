@@ -4,6 +4,7 @@ defmodule Crawler.Parser.CssParser do
   """
 
   alias Crawler.HTMLSpans
+  alias Crawler.Parser.CssParser.DocumentStyles
   alias Crawler.Parser.CssParser.Scanner
   alias Crawler.Parser.CssParser.Value
   alias Crawler.Parser.CssParser.Variables
@@ -126,9 +127,13 @@ defmodule Crawler.Parser.CssParser do
   end
 
   defp variable_tokens(opts, body, analysis) do
-    case CssSheets.remember(opts, body, analysis) do
-      {:ok, tokens} -> tokens
-      :local -> Variables.span_tokens(analysis)
+    if opts[:document_styles] && Map.get(opts, :mode, :stylesheet) == :stylesheet do
+      DocumentStyles.tokens(opts.document_styles, opts[:document_style_id], analysis)
+    else
+      case CssSheets.remember(opts, body, analysis) do
+        {:ok, tokens} -> tokens
+        :local -> Variables.span_tokens(analysis)
+      end
     end
   end
 

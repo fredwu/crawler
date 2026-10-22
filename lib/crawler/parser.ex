@@ -10,6 +10,7 @@ defmodule Crawler.Parser do
   alias Crawler.ImportMap
   alias Crawler.MediaType
   alias Crawler.Parser.CssParser
+  alias Crawler.Parser.CssParser.DocumentStyles
   alias Crawler.Parser.CssSheets
   alias Crawler.Parser.Guarder
   alias Crawler.Parser.HtmlParser
@@ -160,6 +161,14 @@ defmodule Crawler.Parser do
   @doc false
   def assigned_style_group(body, opts), do: assign_style_group(body, opts)[:style_group]
 
+  @doc false
+  def document_styles(body, opts) do
+    if is_nil(opts[:generation]) and document?(opts) do
+      opts = put_base_href(body, opts)
+      DocumentStyles.new(HtmlParser.references(body, opts), opts[:referrer_url] || opts[:url])
+    end
+  end
+
   defp put_robots_nofollow(body, opts) do
     cond do
       opts[:respect_robots] == false ->
@@ -287,6 +296,12 @@ defmodule Crawler.Parser do
 
     if document?(opts) do
       base = opts[:referrer_url] || opts[:url]
+
+      styles =
+        opts[:document_styles] ||
+          if(is_nil(opts[:generation]), do: DocumentStyles.new(elements, base))
+
+      opts = Map.put(opts, :document_styles, styles)
       walk_document(elements, Map.put(opts, :document_base, base), link_handler)
     else
       Enum.map(elements, &LinkParser.parse(&1, opts, link_handler))
@@ -298,16 +313,27 @@ defmodule Crawler.Parser do
   end
 
   defp walk_document(elements, opts, link_handler) do
+    handler = fn link, link_opts ->
+      link_handler.(link, Map.drop(link_opts, [:document_styles, :document_style_id]))
+    end
+
     {results, _state} =
       Enum.map_reduce(elements, %{map: ImportMap.empty(), manifest: false}, fn element, state ->
-        opts = Map.put(opts, :import_map, state.map)
-        {result, manifest} = parse_document_element(element, opts, link_handler, state.manifest)
+        opts =
+          opts
+          |> Map.put(:import_map, state.map)
+          |> Map.put(:document_style_id, document_style_id(element))
+
+        {result, manifest} = parse_document_element(element, opts, handler, state.manifest)
 
         {result, %{map: register_import_map(element, state.map, opts), manifest: manifest}}
       end)
 
     results
   end
+
+  defp document_style_id(%{span: span}), do: span
+  defp document_style_id(_element), do: nil
 
   defp parse_document_element(element, opts, link_handler, manifest_seen) do
     if manifest_candidate?(element) and manifest_seen do
