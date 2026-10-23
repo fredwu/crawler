@@ -114,8 +114,15 @@ defmodule Crawler.Export.StageTest do
                  Stage.stage(runtime, page.interpretation, page.credit, export.assignment, %{})
 
         resources = fn ->
-          state = :sys.get_state(Store).resources
-          {state.used, state.pending_grants, MapSet.new(Map.keys(state.receipts))}
+          state = :sys.get_state(Store)
+          arena = state.executions[opts.execution_lease].arena
+
+          %{
+            arena: state.resources.arenas[arena],
+            run: state.resources.runs[{opts.scope, opts.generation}],
+            receipts:
+              Map.filter(state.resources.receipts, fn {_ref, record} -> record.arena == arena end)
+          }
         end
 
         before = resources.()

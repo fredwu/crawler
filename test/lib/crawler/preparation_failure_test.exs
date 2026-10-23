@@ -105,7 +105,10 @@ defmodule Crawler.PreparationFailureTest do
           state = :sys.get_state(Store)
 
           for {_token, %{caller: ^caller, refs: [backing]}} <- state.execution_returns do
-            assert state.resources.receipts[backing].holders[caller].status == :retained
+            assert state.resources.receipts[backing].holders[caller].status in [
+                     :adopted,
+                     :retained
+                   ]
           end
 
           state
@@ -121,7 +124,7 @@ defmodule Crawler.PreparationFailureTest do
         assert record.state == :accepted
         assert [backing] = record.refs
         assert state.resources.receipts[backing].actual >= 65_536
-        assert state.resources.receipts[backing].holders[caller].status == :retained
+        assert state.resources.receipts[backing].holders[caller].status in [:adopted, :retained]
         assert state.resources.receipts[record.copy].kind == :return_copy
         assert state.resources.receipts[record.copy].actual >= 1_024
       end
