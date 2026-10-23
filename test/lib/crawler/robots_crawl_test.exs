@@ -43,6 +43,188 @@ defmodule Crawler.RobotsCrawlTest do
     refute Store.find({"#{context.url}/robots.txt", opts.scope})
   end
 
+  test "the last queue releases robots receipts and preserves completed pages", context do
+    url = context.url <> "/robots-retained-page"
+    body = "completed page remains readable"
+
+    ReqTestSite.expect_once(context.site, "GET", "/robots.txt", fn conn ->
+      resp(conn, 200, "User-agent: *\nAllow: /\n")
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/robots-retained-page", &html(&1, body))
+
+    opts =
+      crawl(url, context,
+        respect_robots: true,
+        store: Store,
+        max_body: 1_024,
+        max_analysis_bytes: 2_097_152
+      )
+
+    on_exit(fn -> Store.dispose_scope(opts.scope) end)
+    key = {url, opts.scope}
+    run = {opts.scope, opts.generation}
+    origin = Crawler.Site.origin(url)
+    store = Process.whereis(Store)
+    assert %{body: ^body, opts: page_opts} = completed = Store.find_processed(key)
+
+    receipts =
+      [page_opts[:page_resource], page_opts[:body_resource]]
+      |> Enum.filter(&is_reference/1)
+      |> Enum.uniq()
+
+    assert [_ | _] = receipts
+    state = :sys.get_state(Store)
+    robots_receipt = state.robots_receipts |> Map.fetch!(run) |> Map.fetch!(origin)
+    assert is_reference(robots_receipt)
+    assert state.resources.receipts[robots_receipt].run === run
+    assert Map.has_key?(state.resources.receipts[robots_receipt].holders, store)
+    assert Map.has_key?(state.retained_pages[opts.scope].members, robots_receipt)
+
+    assert :gb_sets.is_member(
+             {:grant, robots_receipt},
+             state.resources.holders[store].entries
+           )
+
+    assert [_] = :ets.lookup(Crawler.Store.Resources, {:grant, robots_receipt, store})
+    refute MapSet.member?(state.persistent_resources, robots_receipt)
+    refute robots_receipt in receipts
+    counts = Map.take(state.persistent_counts, receipts)
+    assert map_size(counts) == length(receipts)
+
+    for receipt <- receipts do
+      assert Map.fetch!(counts, receipt) > 0
+      assert MapSet.member?(state.persistent_resources, receipt)
+      assert Map.has_key?(state.resources.receipts[receipt].holders, store)
+    end
+
+    assert :ok = Crawler.Queue.stop(opts.queue_owner)
+    refute Process.alive?(opts.queue)
+    assert Store.queue_scopes(opts.queue) == []
+
+    for release <- [:initial, :repeated] do
+      if release == :repeated, do: assert(:ok = Store.release_queue(opts.queue))
+
+      wait(fn ->
+        state = :sys.get_state(Store)
+        refute Map.has_key?(state.robots_receipts, run)
+        refute Map.has_key?(state.robots, opts.scope)
+        refute Map.has_key?(state.resources.receipts, robots_receipt)
+        refute Map.has_key?(state.retained_pages[opts.scope].members, robots_receipt)
+
+        refute :gb_sets.is_member(
+                 {:grant, robots_receipt},
+                 state.resources.holders[store].entries
+               )
+
+        assert :ets.lookup(Crawler.Store.Resources, {:grant, robots_receipt, store}) == []
+        assert Store.find_processed(key) === completed
+        assert Store.find_processed(key).body === body
+        assert Map.take(state.persistent_counts, receipts) === counts
+
+        for receipt <- receipts do
+          assert MapSet.member?(state.persistent_resources, receipt)
+          assert Map.has_key?(state.retained_pages[opts.scope].members, receipt)
+          assert Map.has_key?(state.resources.receipts[receipt].holders, store)
+        end
+      end)
+    end
+  end
+
+  test "a run deadline releases robots custody without removing completed pages", context do
+    url = context.url <> "/robots-deadline-page"
+    body = "completed page survives its run deadline"
+
+    ReqTestSite.expect_once(context.site, "GET", "/robots.txt", fn conn ->
+      resp(conn, 200, "User-agent: *\nAllow: /\n")
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/robots-deadline-page", &html(&1, body))
+
+    opts =
+      crawl(url, context,
+        respect_robots: true,
+        store: Store,
+        max_body: 1_024,
+        max_analysis_bytes: 2_097_152,
+        run_timeout: 2_000
+      )
+
+    on_exit(fn -> Store.dispose_scope(opts.scope) end)
+    key = {url, opts.scope}
+    run = {opts.scope, opts.generation}
+    origin = Crawler.Site.origin(url)
+    store = Process.whereis(Store)
+    assert %{body: ^body, opts: page_opts} = completed = Store.find_processed(key)
+
+    receipts =
+      [page_opts[:page_resource], page_opts[:body_resource]]
+      |> Enum.filter(&is_reference/1)
+      |> Enum.uniq()
+
+    assert [_ | _] = receipts
+    state = :sys.get_state(Store)
+    assert state.scopes[opts.scope].outcome == :open
+    assert is_reference(state.scopes[opts.scope].run_timer)
+    assert Store.current?(opts.scope, opts.generation, opts.queue)
+    assert Process.alive?(opts.queue)
+    assert Process.alive?(opts.queue_owner)
+    assert {:ready, rules} = get_in(state.robots, [opts.scope, origin])
+    assert Robots.allowed?(rules, url, opts.user_agent)
+    robots_receipt = state.robots_receipts |> Map.fetch!(run) |> Map.fetch!(origin)
+    assert state.resources.receipts[robots_receipt].run === run
+    assert Map.has_key?(state.resources.receipts[robots_receipt].holders, store)
+    assert Map.has_key?(state.retained_pages[opts.scope].members, robots_receipt)
+
+    assert :gb_sets.is_member(
+             {:grant, robots_receipt},
+             state.resources.holders[store].entries
+           )
+
+    assert [_] = :ets.lookup(Crawler.Store.Resources, {:grant, robots_receipt, store})
+    refute MapSet.member?(state.persistent_resources, robots_receipt)
+    refute robots_receipt in receipts
+    counts = Map.take(state.persistent_counts, receipts)
+    assert map_size(counts) == length(receipts)
+
+    for receipt <- receipts do
+      assert Map.fetch!(counts, receipt) > 0
+      assert MapSet.member?(state.persistent_resources, receipt)
+      assert Map.has_key?(state.resources.receipts[receipt].holders, store)
+    end
+
+    wait(fn ->
+      state = :sys.get_state(Store)
+      assert state.scopes[opts.scope].outcome == {:limited, {:deadline, :run}}
+      assert Store.generation(opts.scope) === opts.generation
+      refute Store.current?(opts.scope, opts.generation, opts.queue)
+      assert Process.alive?(opts.queue)
+      assert Process.alive?(opts.queue_owner)
+      assert Store.queue_scopes(opts.queue) == [opts.scope]
+      refute Map.has_key?(Map.get(state.robots, opts.scope, %{}), origin)
+      refute Map.has_key?(state.robots_receipts, run)
+      refute Map.has_key?(state.resources.receipts, robots_receipt)
+      refute Map.has_key?(state.retained_pages[opts.scope].members, robots_receipt)
+
+      refute :gb_sets.is_member(
+               {:grant, robots_receipt},
+               state.resources.holders[store].entries
+             )
+
+      assert :ets.lookup(Crawler.Store.Resources, {:grant, robots_receipt, store}) == []
+      assert Store.find_processed(key) === completed
+      assert Store.find_processed(key).body === body
+      assert Map.take(state.persistent_counts, receipts) === counts
+
+      for receipt <- receipts do
+        assert MapSet.member?(state.persistent_resources, receipt)
+        assert Map.has_key?(state.retained_pages[opts.scope].members, receipt)
+        assert Map.has_key?(state.resources.receipts[receipt].holders, store)
+        assert [_] = :ets.lookup(Crawler.Store.Resources, {:grant, receipt, store})
+      end
+    end)
+  end
+
   test "a query wildcard blocks only URLs that have a query", context do
     page = "#{context.url}/docs"
     queried = "#{context.url}/docs?x=1"
@@ -184,9 +366,232 @@ defmodule Crawler.RobotsCrawlTest do
     refute Store.find({page, opts.scope})
     assert :counters.get(calls, 1) == 1
 
-    crawl(page, context, scope: opts.scope)
+    crawl(page, context, scope: opts.scope, force: true)
     refute Store.find({page, opts.scope})
     assert :counters.get(calls, 1) == 2
+  end
+
+  test "an oversized robots response reports the root body limit", context do
+    page = context.url <> "/robots-body-limit"
+    max_body = 1_000
+    body = "User-agent: *\nAllow: /\n" <> String.duplicate("#", 2_000)
+    calls = :counters.new(1, [:atomics])
+
+    assert byte_size(body) > max_body
+
+    ReqTestSite.expect_once(context.site, "GET", "/robots.txt", &resp(&1, 200, body))
+
+    ReqTestSite.stub(context.site, "GET", "/robots-body-limit", fn conn ->
+      :counters.add(calls, 1, 1)
+      html(conn, "root must stay unfetched")
+    end)
+
+    opts =
+      crawl(page, context,
+        max_body: max_body,
+        max_control_bytes: 16_384,
+        max_analysis_bytes: 2_097_152
+      )
+
+    assert opts.max_control_bytes > byte_size(body)
+
+    assert %{status: :limited, reason: {:limit, :max_body}} =
+             Store.target_outcome(opts.target_handle)
+
+    assert {:ok,
+            %{
+              state: :limited,
+              root_status: :limited,
+              reported_limit: {:limit, :max_body},
+              reason: {:limit, :max_body},
+              terminal?: true,
+              pending: 0,
+              inflight: 0
+            }} = Crawler.run_status(opts)
+
+    assert :counters.get(calls, 1) == 0
+    assert Store.ops_count(opts.scope) == 0
+    refute Store.find({page, opts.scope})
+    refute Store.find({context.url <> "/robots.txt", opts.scope})
+    assert_robots_failure_cleanup(opts, Crawler.Site.origin(page))
+    assert :sys.get_state(Store).scopes[opts.scope].control_bytes <= opts.max_control_bytes
+  end
+
+  test "a subresource redirect preserves the destination robots body limit", context do
+    root = context.url <> "/redirect-limit-root"
+    script = context.url <> "/redirect-limit.js"
+    destination = context.url2 <> "/redirect-limit-destination.js"
+    oversized = "User-agent: *\nAllow: /\n" <> String.duplicate("#", 2_000)
+    destination_calls = :counters.new(1, [:atomics])
+
+    ReqTestSite.expect_once(context.site, "GET", "/robots.txt", fn conn ->
+      resp(conn, 200, "User-agent: *\nAllow: /\n")
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/redirect-limit-root", fn conn ->
+      html(conn, ~s|<script src="/redirect-limit.js"></script>|)
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/redirect-limit.js", fn conn ->
+      conn |> put_resp_header("location", destination) |> resp(302, "")
+    end)
+
+    ReqTestSite.expect_once(context.site2, "GET", "/robots.txt", &resp(&1, 200, oversized))
+
+    ReqTestSite.stub(context.site2, "GET", "/redirect-limit-destination.js", fn conn ->
+      :counters.add(destination_calls, 1, 1)
+      conn |> put_resp_header("content-type", "text/javascript") |> resp(200, "blocked")
+    end)
+
+    opts =
+      crawl(root, context,
+        assets: ["js"],
+        max_body: 1_000,
+        max_control_bytes: 16_384,
+        max_analysis_bytes: 2_097_152
+      )
+
+    assert byte_size(oversized) > opts.max_body
+    assert opts.max_control_bytes > byte_size(oversized)
+    assert Crawler.Site.origin(root) != Crawler.Site.origin(destination)
+    assert Store.find_processed({root, opts.scope})
+    refute Store.find({script, opts.scope})
+    refute Store.find({destination, opts.scope})
+    assert :counters.get(destination_calls, 1) == 0
+    run = {opts.scope, opts.generation}
+    state = :sys.get_state(Store)
+
+    assert [{_, %{outcome: %{status: :limited, reason: {:limit, :max_body}}}}] =
+             Enum.filter(state.scheduler.frontier.jobs, fn {_ref, record} ->
+               record.job.logical_key == script and Crawler.Frontier.run_key(record.job) == run
+             end)
+
+    assert {:ok,
+            %{
+              state: :limited,
+              root_status: :succeeded,
+              reported_limit: {:limit, :max_body},
+              reason: {:limit, :max_body},
+              terminal?: true,
+              pending: 0,
+              inflight: 0
+            }} = Crawler.run_status(opts)
+
+    refute Map.has_key?(Map.get(state.robots, opts.scope, %{}), Crawler.Site.origin(destination))
+
+    refute Map.has_key?(
+             Map.get(state.robots_receipts, run, %{}),
+             Crawler.Site.origin(destination)
+           )
+
+    assert state.scopes[opts.scope].control_bytes <= opts.max_control_bytes
+  end
+
+  for {failure, reason} <- [
+        overflow: {:limit, :max_body},
+        expiry: {:deadline, :attempt}
+      ] do
+    test "a robots owner #{failure} reaches its waiting target", context do
+      scope = unique_scope("robots-waiter-#{unquote(failure)}")
+      observer = self()
+      calls = :counters.new(2, [:atomics])
+      origin = Crawler.Site.origin(context.url)
+      body = "User-agent: *\nAllow: /\n" <> String.duplicate("#", 2_000)
+      reason = unquote(Macro.escape(reason))
+
+      ReqTestSite.expect_once(context.site, "GET", "/robots.txt", fn conn ->
+        :counters.add(calls, 1, 1)
+        send(observer, {:robots_response_held, self()})
+
+        receive do
+          :release_robots_response -> resp(conn, 200, body)
+        end
+      end)
+
+      for path <- ["/robots-owner", "/robots-waiter"] do
+        ReqTestSite.stub(context.site, "GET", path, fn conn ->
+          :counters.add(calls, 2, 1)
+          html(conn, "root must stay unfetched")
+        end)
+      end
+
+      assert {:ok, first} =
+               start_crawl(context.url <> "/robots-owner",
+                 scope: scope,
+                 workers: 2,
+                 store: Store,
+                 retries: 0,
+                 respect_robots: true,
+                 max_body: 1_000,
+                 max_control_bytes: 16_384,
+                 max_analysis_bytes: 2_097_152,
+                 attempt_timeout: 2_000,
+                 run_timeout: 10_000,
+                 req_options: context.req_options
+               )
+
+      assert_receive {:robots_response_held, handler}, 2_000
+      on_exit(fn -> send(handler, :release_robots_response) end)
+
+      assert {:loading, _, owner, queue, []} =
+               get_in(:sys.get_state(Store).robots, [scope, origin])
+
+      monitor = Process.monitor(owner)
+
+      assert {:ok, second} =
+               start_crawl(
+                 context.url <> "/robots-waiter",
+                 Map.put(first, :attempt_timeout, 5_000)
+               )
+
+      assert second.generation === first.generation
+      assert second.queue === queue
+      refute second.target_handle === first.target_handle
+
+      waiter_deadline =
+        wait(fn ->
+          state = :sys.get_state(Store)
+
+          assert {:loading, _, ^owner, ^queue, [{{waiter, _}, ^queue}]} =
+                   get_in(state.robots, [scope, origin])
+
+          owner_lease = Map.fetch!(state.execution_workers, owner)
+          waiter_lease = Map.fetch!(state.execution_workers, waiter)
+          owner_deadline = state.executions[owner_lease].deadline
+          waiter_deadline = state.executions[waiter_lease].deadline
+          assert owner_deadline.at < waiter_deadline.at
+          assert Crawler.Deadline.check(owner_deadline) == :ok
+          waiter_deadline
+        end)
+
+      if unquote(failure) == :overflow, do: send(handler, :release_robots_response)
+      assert_receive {:DOWN, ^monitor, :process, ^owner, _}, 5_000
+
+      wait(fn ->
+        for opts <- [first, second] do
+          assert %{status: :limited, reason: ^reason} = Store.target_outcome(opts.target_handle)
+
+          assert {:ok,
+                  %{
+                    state: :limited,
+                    root_status: :limited,
+                    reported_limit: ^reason,
+                    reason: ^reason,
+                    terminal?: true,
+                    pending: 0,
+                    inflight: 0
+                  }} = Crawler.run_status(opts)
+        end
+      end)
+
+      assert Crawler.Deadline.check(waiter_deadline) == :ok
+      assert :counters.get(calls, 1) == 1
+      assert :counters.get(calls, 2) == 0
+      assert Store.ops_count(scope) == 0
+      refute Store.find({first.url, scope})
+      refute Store.find({second.url, scope})
+      assert_robots_failure_cleanup(first, origin)
+    end
   end
 
   test "a gzip sitemap above the body cap is not a page", context do
@@ -452,6 +857,23 @@ defmodule Crawler.RobotsCrawlTest do
     assert Store.find_processed({"#{cdn.url}/app.js", opts.scope}).body == "app"
     refute Store.find({"#{cdn.url}/widget", opts.scope})
     refute Store.find({"#{hosts.url}/injected", opts.scope})
+  end
+
+  defp assert_robots_failure_cleanup(opts, origin) do
+    run = {opts.scope, opts.generation}
+
+    wait(fn ->
+      state = :sys.get_state(Store)
+      refute Map.has_key?(Map.get(state.robots, opts.scope, %{}), origin)
+      refute Map.has_key?(state.robots_receipts, run)
+      refute Map.has_key?(state.resources.runs, run)
+      refute Enum.any?(state.resources.receipts, fn {_ref, receipt} -> receipt.run == run end)
+      refute Enum.any?(state.scheduler.claims, fn {_ref, claim} -> claim.run == run end)
+
+      refute Enum.any?(state.executions, fn {_ref, record} ->
+               {record.opts.scope, record.opts.generation} == run
+             end)
+    end)
   end
 
   defp waiting_robots?(scope, origin) do

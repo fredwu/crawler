@@ -1,7 +1,6 @@
 defmodule Crawler.URLPercentTest do
   use ExUnit.Case, async: true
 
-  alias Crawler.Linker.Snapshot
   alias Crawler.URL
   alias Crawler.URL.Percent
 
@@ -117,12 +116,10 @@ defmodule Crawler.URLPercentTest do
     assert URL.normalize(left) == right
     assert URL.canonical(left) == URL.canonical(right)
     assert URL.resolve(left, nil) == {:ok, right}
-    assert Snapshot.path(left) == Snapshot.path(right)
   end
 
   defp refute_same(left, right) do
     refute URL.normalize(left) == URL.normalize(right)
     refute URL.canonical(left) == URL.canonical(right)
-    refute Snapshot.path(left) == Snapshot.path(right)
   end
 end

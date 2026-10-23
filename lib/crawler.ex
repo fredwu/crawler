@@ -22,6 +22,7 @@ defmodule Crawler do
   """
   def start(_type, _args) do
     children = [
+      {Crawler.QueueTickets, Crawler.QueueTickets.application_options()},
       Store,
       {DynamicSupervisor, name: Crawler.QueueSupervisor, strategy: :one_for_one},
       CssSheets
@@ -46,20 +47,17 @@ defmodule Crawler do
       url
       |> prepare_options(opts)
       |> Options.assign_scope()
-      |> stamp_generation()
+      |> select_scope()
 
-    enqueue_allowed(opts)
+    enqueue_allowed(opts, :root)
   end
 
   @doc false
   def crawl_reference(url, opts) do
-    opts = Enum.into(opts, %{})
+    opts = prepare_options(url, Map.put(Enum.into(opts, %{}), :force, false))
+    opts = if is_nil(opts[:generation]), do: Options.assign_scope(opts), else: opts
 
-    if is_nil(opts[:generation]) do
-      crawl(url, opts)
-    else
-      url |> prepare_options(opts) |> enqueue_allowed()
-    end
+    enqueue_allowed(opts, :reference)
   end
 
   defp prepare_options(url, opts) do
@@ -70,29 +68,18 @@ defmodule Crawler do
     |> assign_site()
   end
 
-  defp enqueue_allowed(opts) do
-    if page_allowed?(opts) do
-      QueueHandler.enqueue(opts)
-    else
-      {:ok, opts}
-    end
+  defp select_scope(%{scope: scope, generation: {_incarnation, selected, _revision}} = opts)
+       when scope !== selected,
+       do: Map.drop(opts, [:generation, :run_deadline])
+
+  defp select_scope(opts), do: opts
+
+  defp enqueue_allowed(opts, ingress) do
+    QueueHandler.enqueue(opts, ingress)
   end
 
   defp assign_site(%{site: site} = opts) when is_binary(site), do: opts
   defp assign_site(opts), do: Map.put(opts, :site, opts[:url])
-
-  defp stamp_generation(%{force: true, depth: 0, scope: scope} = opts) do
-    Map.put(opts, :generation, Store.drop_scope(scope))
-  end
-
-  defp stamp_generation(
-         %{generation: {_incarnation, generation_scope, _revision}, scope: scope} = opts
-       )
-       when generation_scope !== scope do
-    Map.put(opts, :generation, Store.generation(scope))
-  end
-
-  defp stamp_generation(opts), do: Store.bind_run(opts)
 
   @doc """
   Stops a crawl.
@@ -104,6 +91,7 @@ defmodule Crawler do
   shuts that queue down when these options contain its `queue:` and `scope:`.
   This does not change the caller's exit trapping. Direct fetch options with
   a generation can also stop their run when the scope is `nil`.
+  Options from an older generation leave the current run and queue unchanged.
 
   Stopping the crawl that created a shared queue shuts that queue down. Other
   scopes using it stop making progress. Pages they have already stored stay
@@ -114,9 +102,14 @@ defmodule Crawler do
     scope = opts[:scope]
     owner = owning_queue(opts)
 
-    if not is_nil(scope) or not is_nil(opts[:generation]), do: Store.dispose_scope(scope)
+    disposal =
+      cond do
+        not is_nil(opts[:generation]) -> Store.dispose_scope(scope, opts.generation)
+        not is_nil(scope) -> Store.dispose_scope(scope)
+        true -> :ok
+      end
 
-    if is_pid(owner), do: Queue.stop(owner)
+    if disposal == :ok and is_pid(owner), do: Queue.stop(owner)
 
     :ok
   end
@@ -132,6 +125,17 @@ defmodule Crawler do
   def resume(opts), do: OPQ.resume(opts[:queue])
 
   @doc """
+  Returns the redacted outcome of the run's latest cookie save, or `nil`.
+
+  This is the latest save result, not a cumulative report. A retired generation
+  or queue returns `{:error, :stale}`.
+  """
+  def cookie_outcome(opts) do
+    opts = Map.new(opts)
+    Store.cookie_outcome(opts[:scope], opts[:generation], opts[:queue])
+  end
+
+  @doc """
   Checks whether the crawler is still crawling.
 
   A scope with no remaining work reports `false` even when its queue still
@@ -143,11 +147,33 @@ defmodule Crawler do
 
     cond do
       paused?(opts) -> false
-      closed?(opts[:scope], opts[:generation], opts[:queue]) -> false
+      closed?(opts[:scope], opts[:generation], opts[:queue]) -> published_cleanup?(opts)
       Store.inflight_count(opts[:scope]) > 0 -> true
       Store.pending_count(opts[:scope]) > 0 -> true
       true -> false
     end
+  end
+
+  defp published_cleanup?(opts),
+    do: match?({:ok, %{state: :finalizing, running?: true}}, Store.export_status(opts))
+
+  @doc """
+  Returns the current run's bounded status for options returned by `crawl/2`.
+
+  `:root_status` is the canonical root target's outcome, not an assertion that
+  every descendant succeeded. `:reported_limit` exposes the first recorded run
+  limit even when the root succeeded. Active work is `:running` or `:paused`;
+  after quiescence a recorded limit takes precedence over the root outcome.
+  A run deadline reports `:limited` immediately, while `:terminal?` remains
+  false until owned work settles. Failure reasons contain no callback payloads.
+
+  Paused work is not terminal and reports `:running?` as false. A disposed or
+  replaced generation, or a target from another run, returns `{:error, :stale}`.
+  Use `export_status/1` separately to distinguish archive publication states.
+  """
+  def run_status(opts) do
+    opts = Map.new(opts)
+    Store.run_status(opts, paused?(opts))
   end
 
   @doc """
@@ -157,13 +183,20 @@ defmodule Crawler do
   """
   def crawl_now(opts), do: Worker.run(opts)
 
-  defp page_allowed?(%{max_pages: :infinity}), do: true
+  @doc """
+  Returns bounded export status without private source or request data.
 
-  defp page_allowed?(%{max_pages: max_pages, scope: scope}) when is_integer(max_pages) do
-    Store.ops_count(scope) < max_pages
-  end
-
-  defp page_allowed?(_opts), do: true
+  Cancellation remains readable while the export owner cleans up. A previous
+  failure or limit stays visible. After promotion, publication success is final;
+  status stays `:finalizing` and counts as running until cleanup succeeds and its
+  actors exit. Cleanup failure reports `{:snapshot, :cleanup_failed}` without
+  removing the promoted archive. Published status remains readable for the exact
+  generation after its deadline and cleanup. Disposal or replacement makes it
+  stale. An unproved cleanup keeps a bounded failed recovery record after disposal
+  while no replacement scope exists. Its receipt and credit remain owned until
+  cleanup is proved; other retired status ends when cleanup removes its record.
+  """
+  def export_status(opts), do: Store.export_status(opts, paused?(Map.new(opts)))
 
   defp owning_queue(%{queue: queue} = opts) when is_pid(queue) do
     scope = opts[:scope]

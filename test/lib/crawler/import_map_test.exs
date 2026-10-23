@@ -11,7 +11,7 @@ defmodule Crawler.ImportMapTest do
     assert JSON.decode("\uFEFF{}") == {:ok, {:object, []}}
 
     assert JSON.decode(~s|{"a":"/a.js","a":"/b.js"}|) ==
-             {:ok, {:object, [{"a", "/a.js"}, {"a", "/b.js"}]}}
+             {:ok, {:object, [{"a", "/b.js"}]}}
 
     assert ImportMap.parse(~s|{"imports":{"vue":"/a.js","vue":"/b.js"}}|, @base).imports["vue"] ==
              "http://example.com/b.js"

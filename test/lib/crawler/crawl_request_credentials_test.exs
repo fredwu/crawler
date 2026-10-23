@@ -63,7 +63,8 @@ defmodule Crawler.CrawlRequestCredentialsTest do
          )}
       ])
 
-    assert length(requests(hits, "https://www.example.com/app.js")) == 1
+    assert [app, repeated_app] = requests(hits, "https://www.example.com/app.js")
+    assert app == repeated_app
     assert_cookie(hits, "https://www.example.com/app.js", @both)
     assert_cookie(hits, "https://www.example.com/static.js", @both)
     assert_cookie(hits, "https://www.example.com/dynamic.js", @both)

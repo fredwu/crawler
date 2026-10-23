@@ -11,6 +11,75 @@ defmodule Crawler.SitemapCrawlTest do
     def filter(url, _opts), do: {:ok, URI.parse(url).path not in ["/skip-a", "/skip-b"]}
   end
 
+  defmodule PauseParentScraper do
+    @behaviour Crawler.Scraper.Spec
+
+    def scrape(%{opts: opts} = page) do
+      if page.url == opts[:deadline_parent_url] do
+        Crawler.pause(opts)
+
+        send(opts.deadline_observer, {
+          :sitemap_parent_paused,
+          opts.crawler_deadline,
+          opts.run_deadline
+        })
+      end
+
+      {:ok, page}
+    end
+  end
+
+  test "a queued nested sitemap gets a fresh attempt after its parent attempt expires", context do
+    body = """
+    <sitemapindex><sitemap><loc>/deadline-child.xml</loc></sitemap></sitemapindex>
+    """
+
+    observer = self()
+
+    ReqTestSite.expect_once(context.site, "GET", "/deadline-child.xml", fn conn ->
+      send(observer, {:deadline_child_requested, "/deadline-child.xml"})
+      conn |> put_resp_header("content-type", "application/xml") |> resp(200, "<urlset/>")
+    end)
+
+    {opts, children, attempt} = paused_sitemap_descendants(context, body, ["/deadline-child.xml"])
+    resume_after_parent_attempt(opts, children, attempt)
+    refute Store.find({context.url <> "/deadline-child.xml", opts.scope})
+  end
+
+  test "listed pages and images get fresh attempts after their sitemap parent expires", context do
+    body = """
+    <urlset xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+      <url>
+        <loc>/deadline-page</loc>
+        <image:image><image:loc>/deadline-image.png</image:loc></image:image>
+      </url>
+    </urlset>
+    """
+
+    observer = self()
+
+    ReqTestSite.expect_once(context.site, "GET", "/deadline-page", fn conn ->
+      send(observer, {:deadline_child_requested, "/deadline-page"})
+      html(conn, "listed page")
+    end)
+
+    ReqTestSite.expect_once(context.site, "GET", "/deadline-image.png", fn conn ->
+      send(observer, {:deadline_child_requested, "/deadline-image.png"})
+      asset(conn, "image/png")
+    end)
+
+    {opts, children, attempt} =
+      paused_sitemap_descendants(context, body, ["/deadline-page", "/deadline-image.png"])
+
+    resume_after_parent_attempt(opts, children, attempt)
+
+    assert Store.find_processed({context.url <> "/deadline-page", opts.scope}).body ==
+             "listed page"
+
+    assert Store.find_processed({context.url <> "/deadline-image.png", opts.scope}).body ==
+             "asset"
+  end
+
   test "prefixed xml queues a cdata address and a child sitemap", context do
     index = """
     <ns0:sitemapindex xmlns:ns0="http://www.sitemaps.org/schemas/sitemap/0.9">
@@ -391,7 +460,10 @@ defmodule Crawler.SitemapCrawlTest do
     opts =
       crawl("#{context.url}/start", context,
         scope: scope,
-        workers: 2,
+        workers: 6,
+        max_body: 1_048_576,
+        max_analysis_bytes: 4_194_304,
+        max_frontier_bytes: 1_048_576,
         max_pages: max_pages
       )
 
@@ -481,7 +553,7 @@ defmodule Crawler.SitemapCrawlTest do
     assert Store.ops_count(opts.scope) == 3
   end
 
-  test "a small page budget does not fetch a later sitemap file", context do
+  test "page and control budgets bound pages and later sitemap requests", context do
     max_pages = 4
 
     index =
@@ -496,7 +568,7 @@ defmodule Crawler.SitemapCrawlTest do
       resp(conn, 200, "<sitemapindex>#{index}</sitemapindex>")
     end)
 
-    for index <- 1..4 do
+    for index <- 1..3 do
       ReqTestSite.expect_once(context.site, "GET", "/child-#{index}.xml", fn conn ->
         resp(conn, 200, ~s(<urlset><url><loc>#{context.url}/page-#{index}</loc></url></urlset>))
       end)
@@ -506,9 +578,14 @@ defmodule Crawler.SitemapCrawlTest do
       ReqTestSite.expect_once(context.site, "GET", "/page-#{index}", &html(&1, "page"))
     end
 
-    opts = crawl("#{context.url}/start", context, max_pages: max_pages)
+    opts = crawl("#{context.url}/start", context, max_pages: max_pages, max_control_documents: 5)
 
-    assert Store.ops_count(opts.scope) <= max_pages
+    assert Store.ops_count(opts.scope) == max_pages
+    assert :sys.get_state(Store).scopes[opts.scope].control_documents == 5
+
+    assert :sys.get_state(Store).scopes[opts.scope].reported_limit ==
+             {:limit, :max_control_documents}
+
     assert Store.find_processed({"#{context.url}/start", opts.scope})
     assert Store.find_processed({"#{context.url}/page-1", opts.scope})
   end
@@ -870,6 +947,76 @@ defmodule Crawler.SitemapCrawlTest do
     refute Store.find({"#{context.url}/skip-a", opts.scope})
     refute Store.find({"#{context.url}/skip-b", opts.scope})
     assert Store.ops_count(opts.scope) == 2
+  end
+
+  defp paused_sitemap_descendants(context, body, paths) do
+    parent_url = context.url <> "/deadline-parent.xml"
+
+    ReqTestSite.expect_once(context.site, "GET", "/deadline-parent.xml", fn conn ->
+      conn |> put_resp_header("content-type", "application/xml") |> resp(200, body)
+    end)
+
+    assert {:ok, opts} =
+             start_crawl(parent_url,
+               scope: unique_scope("sitemap-child-deadline"),
+               workers: 1,
+               retries: 0,
+               respect_robots: false,
+               save_to: nil,
+               store: Store,
+               assets: ["images"],
+               scraper: PauseParentScraper,
+               deadline_parent_url: parent_url,
+               deadline_observer: self(),
+               attempt_timeout: 1_000,
+               run_timeout: 10_000,
+               max_body: 262_144,
+               max_analysis_bytes: 2_000_000,
+               max_frontier_bytes: 1_048_576,
+               req_options: context.req_options
+             )
+
+    on_exit(fn -> Crawler.stop(opts) end)
+    assert_receive {:sitemap_parent_paused, attempt, run}, 2_000
+    assert run === opts.run_deadline
+    assert {:paused, _, _} = OPQ.info(opts.queue)
+    wait(fn -> assert %{status: :succeeded} = Store.target_outcome(opts.target_handle) end)
+    frontier = :sys.get_state(Store).scheduler.frontier
+
+    children =
+      for target <- frontier.runs[{opts.scope, opts.generation}].jobs,
+          target != opts.target_handle do
+        job = frontier.jobs[target].job
+        assert job.authority === {opts.scope, opts.generation, opts.queue}
+        assert job.opts.run_deadline === run
+        refute Map.has_key?(job.opts, :deadline)
+        refute Map.has_key?(job.opts, :crawler_deadline)
+        {target, URI.parse(job.opts.url).path}
+      end
+
+    assert Enum.sort(Enum.map(children, &elem(&1, 1))) == Enum.sort(paths)
+    {opts, children, attempt}
+  end
+
+  defp resume_after_parent_attempt(opts, children, attempt) do
+    token = make_ref()
+    remaining = Crawler.Deadline.remaining(attempt)
+    Process.send_after(self(), {:parent_attempt_elapsed, token}, remaining + 1)
+    assert_receive {:parent_attempt_elapsed, ^token}, 2_000
+    assert {:error, {:deadline, :attempt}} = Crawler.Deadline.check(attempt)
+    assert :ok = Crawler.Deadline.check(opts.run_deadline)
+    refute_receive {:deadline_child_requested, _}, 0
+    Crawler.resume(opts)
+
+    for {_target, path} <- children do
+      assert_receive {:deadline_child_requested, ^path}, 2_000
+    end
+
+    await_idle(opts)
+
+    for {target, _path} <- children do
+      assert %{status: :succeeded} = Store.target_outcome(target)
+    end
   end
 
   defp robots(site, sitemap) do

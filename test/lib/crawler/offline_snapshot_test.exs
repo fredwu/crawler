@@ -1,9 +1,8 @@
 defmodule Crawler.OfflineSnapshotTest do
   use Crawler.TestCase, async: false
 
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
-  alias Crawler.Linker.Snapshot
   alias Crawler.Store
 
   test "saves one file per resource and keeps the links, including fragments", %{
@@ -12,7 +11,7 @@ defmodule Crawler.OfflineSnapshotTest do
     req_options: req_options
   } do
     scope = "offline-mirror"
-    root = tmp("offline-mirror")
+    root = Path.join(tmp("offline-mirror"), "archive")
     page = "#{url}/blog/post"
     css = "#{url}/css/app.css"
     extra = "#{url}/css/extra.css"
@@ -53,12 +52,17 @@ defmodule Crawler.OfflineSnapshotTest do
       serve(site, path, "text/plain", path)
     end
 
-    {:ok, _opts} =
+    {:ok, opts} =
       start_crawl(page,
         req_options: req_options,
         save_to: root,
-        workers: 2,
-        max_depths: 4,
+        max_manifest_bytes: 16_777_216,
+        workers: 1,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_777_216,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
+        max_depths: 2,
         assets: ["images", "css", "js"],
         scope: scope
       )
@@ -88,6 +92,8 @@ defmodule Crawler.OfflineSnapshotTest do
       "#{url}/css/dot.png"
     ]
 
+    export = ready_export(opts)
+
     wait(fn ->
       Enum.each(urls, fn fetched ->
         assert Store.find_processed({fetched, scope})
@@ -100,7 +106,8 @@ defmodule Crawler.OfflineSnapshotTest do
     assert Store.find({"#{url}/blog/icons.svg#a", scope}) ==
              Store.find({"#{url}/blog/icons.svg", scope})
 
-    html = File.read!(saved(root, page))
+    source = root_resource(export, opts)
+    html = read_resource(export, source)
     assert html =~ "See postcard today"
     refute html =~ ~s(href="../../about")
     refute html =~ "src=plain.png"
@@ -114,31 +121,34 @@ defmodule Crawler.OfflineSnapshotTest do
     assert html =~ "1x"
     assert html =~ "2x"
 
-    assert_points(html, page, "#{url}/about", root)
-    assert_points(html, page, "#{url}/blog/plain.png", root)
-    assert_points(html, page, "#{url}/blog/other.html", root)
-    assert_points(html, page, "#{url}/blog/a.jpg", root)
-    assert_points(html, page, "#{url}/blog/b.jpg", root)
-    assert_points(html, page, "#{url}/blog/next.html", root)
-    assert_points(html, page, "#{url}/blog/later.html", root)
-    assert_points(html, page, "#{url}/blog/icons.svg", root, "#a")
-    assert_points(html, page, page, root, "#section")
-    assert_points(html, page, page, root, "#top")
+    assert_variant_points(html, source, "#{url}/about", export)
+    assert_variant_points(html, source, "#{url}/blog/plain.png", export)
+    assert_variant_points(html, source, "#{url}/blog/other.html", export)
+    assert_variant_points(html, source, "#{url}/blog/a.jpg", export)
+    assert_variant_points(html, source, "#{url}/blog/b.jpg", export)
+    assert_variant_points(html, source, "#{url}/blog/next.html", export)
+    assert_variant_points(html, source, "#{url}/blog/later.html", export)
+    assert_variant_points(html, source, "#{url}/blog/icons.svg", export, "#a")
+    assert_variant_points(html, source, page, export, "#section")
+    assert_variant_points(html, source, page, export, "#top")
 
-    css_body = File.read!(saved(root, css))
+    stylesheet = reference_target(export, source, css)
+    css_body = read_resource(export, stylesheet)
     refute css_body =~ "url(../../images/a.png)"
     refute css_body =~ ~s|image-set("wide.png" 1x, "narrow.png" 2x)|
     assert css_body =~ "1x"
-    assert_points(css_body, css, "#{url}/images/a.png", root)
-    assert_points(css_body, css, "#{url}/css/wide.png", root)
-    assert_points(css_body, css, "#{url}/css/narrow.png", root)
-    assert_points(css_body, css, extra, root)
+    assert_variant_points(css_body, stylesheet, "#{url}/images/a.png", export)
+    assert_variant_points(css_body, stylesheet, "#{url}/css/wide.png", export)
+    assert_variant_points(css_body, stylesheet, "#{url}/css/narrow.png", export)
+    assert_variant_points(css_body, stylesheet, extra, export)
 
-    extra_body = File.read!(saved(root, extra))
+    extra_resource = reference_target(export, stylesheet, extra)
+    extra_body = read_resource(export, extra_resource)
     refute extra_body =~ ~s|url("dot.png")|
-    assert_points(extra_body, extra, "#{url}/css/dot.png", root)
+    assert_variant_points(extra_body, extra_resource, "#{url}/css/dot.png", export)
 
-    js = File.read!(saved(root, app))
+    script = reference_target(export, source, app)
+    js = read_resource(export, script)
     refute js =~ ~s("./lib.js")
     refute js =~ ~s("../util.js")
     refute js =~ ~s("/abs.js")
@@ -146,10 +156,90 @@ defmodule Crawler.OfflineSnapshotTest do
     assert js =~ ~s("./nope.js")
     assert js =~ ~s("./also-nope.js")
     assert js =~ ~s("react")
-    assert_points(js, app, "#{url}/blog/lib.js", root)
-    assert_points(js, app, "#{url}/util.js", root)
-    assert_points(js, app, "#{url}/abs.js", root)
-    assert_points(js, app, "#{url}/blog/dyn.js", root)
+    assert_variant_points(js, script, "#{url}/blog/lib.js", export)
+    assert_variant_points(js, script, "#{url}/util.js", export)
+    assert_variant_points(js, script, "#{url}/abs.js", export)
+    assert_variant_points(js, script, "#{url}/blog/dyn.js", export)
+
+    replacements = [
+      {~s(imagesrcset="a.jpg 1x, b.jpg 2x"),
+       ~s(imagesrcset="#{relative_reference(source, reference_target(export, source, url <> "/blog/a.jpg"))} 1x, #{relative_reference(source, reference_target(export, source, url <> "/blog/b.jpg"))} 2x")},
+      {~s(href="/css/app.css"),
+       ~s(href="#{relative_reference(source, reference_target(export, source, css))}")},
+      {~s(data="file.pdf"),
+       ~s(data="#{relative_reference(source, reference_target(export, source, url <> "/blog/file.pdf"))}")},
+      {~s(src="movie.mp4"),
+       ~s(src="#{relative_reference(source, reference_target(export, source, url <> "/blog/movie.mp4"))}")},
+      {"url=next.html",
+       "url=" <>
+         relative_reference(source, reference_target(export, source, url <> "/blog/next.html"))},
+      {"URL='later.html'",
+       "URL='" <>
+         relative_reference(source, reference_target(export, source, url <> "/blog/later.html")) <>
+         "'"},
+      {"src=plain.png",
+       "src=" <>
+         relative_reference(source, reference_target(export, source, url <> "/blog/plain.png"))},
+      {"href=other.html",
+       "href=" <>
+         relative_reference(source, reference_target(export, source, url <> "/blog/other.html"))},
+      {~s(src="app.js"),
+       ~s(src="#{relative_reference(source, reference_target(export, source, app))}")},
+      {~s(href="../../about"),
+       ~s(href="#{relative_reference(source, reference_target(export, source, url <> "/about"))}")},
+      {~s(href="#{page}#section"),
+       ~s(href="#{relative_reference(source, reference_target(export, source, page), "#section")}")},
+      {~s(href="#top"),
+       ~s(href="#{relative_reference(source, reference_target(export, source, page), "#top")}")},
+      {~s(href="icons.svg#a"),
+       ~s(href="#{relative_reference(source, reference_target(export, source, url <> "/blog/icons.svg"), "#a")}")}
+    ]
+
+    assert html ==
+             <<0xEF, 0xBB, 0xBF>> <>
+               Enum.reduce(replacements, page_html(page), fn {from, to}, body ->
+                 String.replace(body, from, to)
+               end)
+
+    for {resource, original, refs} <- [
+          {stylesheet, app_css(),
+           [
+             {"extra.css", extra},
+             {"wide.png", url <> "/css/wide.png"},
+             {"narrow.png", url <> "/css/narrow.png"},
+             {"../../images/a.png", url <> "/images/a.png"}
+           ]},
+          {extra_resource, ~s|body { background: url("dot.png"); }|,
+           [{"dot.png", url <> "/css/dot.png"}]},
+          {script, app_js(),
+           [
+             {"./lib.js", url <> "/blog/lib.js"},
+             {"../util.js", url <> "/util.js"},
+             {"/abs.js", url <> "/abs.js"},
+             {"./dyn.js", url <> "/blog/dyn.js"}
+           ]}
+        ] do
+      expected =
+        Enum.reduce(refs, original, fn {literal, target_url}, body ->
+          target = reference_target(export, resource, target_url)
+
+          if target_url == extra do
+            assert target["id"] == extra_resource["id"]
+          else
+            assert read_resource(export, target) == URI.parse(target_url).path
+          end
+
+          String.replace(body, literal, relative_reference(resource, target))
+        end)
+
+      assert read_resource(export, resource) == expected
+    end
+
+    for target_url <- urls -- [page, css, extra, app] do
+      resources = Enum.filter(export.manifest["resources"], &(&1["url"] == target_url))
+      assert resources != []
+      assert Enum.all?(resources, &(read_resource(export, &1) == URI.parse(target_url).path))
+    end
   end
 
   test "with no assets still saves refresh, object, and embed targets", %{
@@ -158,6 +248,7 @@ defmodule Crawler.OfflineSnapshotTest do
     req_options: req_options
   } do
     scope = "offline-bare"
+    root = Path.join(tmp(unique_scope(scope)), "archive")
     page = "#{url}/bare/post"
 
     serve(site, "/bare/post", "text/html", """
@@ -175,12 +266,18 @@ defmodule Crawler.OfflineSnapshotTest do
       serve(site, path, "text/plain", path)
     end
 
-    {:ok, _opts} =
+    {:ok, opts} =
       start_crawl(page,
         req_options: req_options,
         workers: 1,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
         max_depths: 2,
         assets: [],
+        save_to: root,
+        max_manifest_bytes: 16_777_216,
         scope: scope
       )
 
@@ -189,6 +286,14 @@ defmodule Crawler.OfflineSnapshotTest do
         assert Store.find_processed({"#{url}#{path}", scope})
       end
     end)
+
+    export = ready_export(opts)
+    source = resource_for_url(export, page)
+
+    for path <- ~w(/bare/file.pdf /bare/movie.mp4 /bare/next.html /bare/other.html) do
+      target = reference_target(export, source, url <> path)
+      assert read_resource(export, target) == path
+    end
   end
 
   test "fetches host-case and dot-segment aliases once", %{
@@ -197,6 +302,7 @@ defmodule Crawler.OfflineSnapshotTest do
     req_options: req_options
   } do
     scope = "offline-identity"
+    root = Path.join(tmp(unique_scope(scope)), "archive")
     entry = "#{url}/identity/entry"
     same = "#{url}/identity/same"
     upper = String.replace(same, "://localhost:", "://LocalHost:")
@@ -215,11 +321,17 @@ defmodule Crawler.OfflineSnapshotTest do
     serve(site, "/identity/same", "text/plain", "same")
     serve(site, "/identity/a/.../other", "text/plain", "ellipsis")
 
-    {:ok, _opts} =
+    {:ok, opts} =
       start_crawl(entry,
         req_options: req_options,
         workers: 1,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
         max_depths: 2,
+        save_to: root,
+        max_manifest_bytes: 16_777_216,
         scope: scope
       )
 
@@ -231,10 +343,21 @@ defmodule Crawler.OfflineSnapshotTest do
     assert Store.find_processed({upper, scope})
     assert Store.find_processed({dotted, scope})
     assert Store.find_processed({dot, scope})
-    assert Snapshot.path(upper) == Snapshot.path(same)
-    assert Snapshot.path(dotted) == Snapshot.path(same)
-    assert Snapshot.path(dot) == Snapshot.path(same)
-    refute Snapshot.path(ellipsis) == Snapshot.path(same)
+    export = ready_export(opts)
+    source = resource_for_url(export, entry)
+    hrefs = Floki.attribute(Floki.parse_document!(read_resource(export, source)), "a", "href")
+
+    targets =
+      for {href, index} <- Enum.with_index(hrefs) do
+        target = edge_target(export, source, index)
+        assert_opens(export, source, target, href)
+        target
+      end
+
+    assert [first, first, first, first, other] = targets
+    refute first["id"] == other["id"]
+    assert read_resource(export, first) == "same"
+    assert read_resource(export, other) == "ellipsis"
   end
 
   defp page_html(page) do
@@ -283,5 +406,17 @@ defmodule Crawler.OfflineSnapshotTest do
       |> Plug.Conn.put_resp_header("content-type", type)
       |> Plug.Conn.send_resp(200, body)
     end)
+  end
+
+  defp assert_variant_points(body, source, url, export, fragment \\ "") do
+    target = reference_target(export, source, url)
+    href = relative_reference(source, target, fragment)
+    assert body =~ href
+    assert_opens(export, source, target, href, fragment)
+  end
+
+  defp root_resource(export, opts) do
+    record = :sys.get_state(Store).exports[{opts.scope, opts.generation}]
+    resource_by_id(export, record.target_contexts[opts.target_handle].public_id)
   end
 end

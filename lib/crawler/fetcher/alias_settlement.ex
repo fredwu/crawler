@@ -5,36 +5,42 @@ defmodule Crawler.Fetcher.AliasSettlement do
 
   alias Crawler.Diagnostics
   alias Crawler.Fetcher.Recorder
-  alias Crawler.Snapper
   alias Crawler.Store
 
-  defstruct [:ref, :queue]
-
-  def run(%__MODULE__{ref: ref}) do
-    case Store.start_settlement(ref) do
-      {:ok, token, body, opts} ->
-        try do
-          with {:ok, _} <- Recorder.maybe_store_page(body, opts),
-               {:ok, _} <- save(body, opts) do
-            Store.complete_settlement(ref, token)
-          end
-        catch
-          kind, reason ->
-            Logger.error(
-              "Alias settlement failed for #{Diagnostics.url(opts[:url])}: " <>
-                Diagnostics.failure(kind, reason, __STACKTRACE__)
-            )
-
-            {:error, {kind, reason}}
-        after
+  def run(ref, token, options, bytes) do
+    result =
+      try do
+        Crawler.Store.Execution.run(options, fn owned ->
+          Store.settlement_payload(ref, token, owned, bytes, &store/2)
+        end)
+      catch
+        kind, reason ->
           Store.finish_claim(token)
+          :erlang.raise(kind, reason, __STACKTRACE__)
+      end
+
+    try do
+      with {:ok, _} <- result, do: Store.complete_settlement(ref, token)
+    after
+      reason =
+        case result do
+          {:error, reason} -> Crawler.Store.RunStatus.limit_reason(reason)
+          _ -> nil
         end
 
-      :skip ->
-        :ok
+      Store.finish_claim(token, reason)
     end
   end
 
-  defp save(body, %{save_to: root} = opts) when is_binary(root), do: Snapper.snap(body, opts)
-  defp save(_body, opts), do: {:ok, opts}
+  defp store(body, opts) do
+    Recorder.maybe_store_page(body, opts)
+  catch
+    kind, reason ->
+      Logger.error(
+        "Alias settlement failed for #{Diagnostics.url(opts[:url])}: " <>
+          Diagnostics.failure(kind, reason, __STACKTRACE__)
+      )
+
+      {:error, {kind, reason}}
+  end
 end

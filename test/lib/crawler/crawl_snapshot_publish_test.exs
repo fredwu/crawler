@@ -1,199 +1,199 @@
 defmodule Crawler.CrawlSnapshotPublishTest do
   use Crawler.TestCase, async: false
 
+  import Crawler.ManagedSnapshotHelpers
+
   alias Crawler.Store
 
-  @utf8_bom <<0xEF, 0xBB, 0xBF>>
-
-  test "a slower save loses when a newer fetch of the same page finishes first", %{
+  test "a retired slower export cannot replace a newer complete archive", %{
     site: site,
     url: url,
     req_options: req_options
   } do
     scope = unique_scope("lifecycle-slow-save")
     page = "#{url}/lifecycle/slow-save"
-    directory = "lifecycle-slow-save-#{System.unique_integer([:positive])}"
-    file = offline(directory, site, "/lifecycle/slow-save")
+    root = tmp("lifecycle-slow-save-#{System.unique_integer([:positive])}")
+    on_exit(fn -> cleanup_exports([scope], root) end)
     {:ok, hits} = Agent.start_link(fn -> 0 end)
-    before_publish = hold_save()
 
     ReqTestSite.stub(site, "GET", "/lifecycle/slow-save", fn conn ->
       count = Agent.get_and_update(hits, fn count -> {count, count + 1} end)
-      body = if count == 0, do: "OLD", else: "NEW"
 
       conn
-      |> Plug.Conn.put_resp_header("content-type", "text/html")
-      |> Plug.Conn.resp(200, body)
+      |> Plug.Conn.put_resp_header("content-type", "application/octet-stream")
+      |> Plug.Conn.resp(200, if(count == 0, do: "OLD", else: "NEW"))
     end)
 
-    {:ok, _first} =
-      start_crawl(page,
-        scope: scope,
-        workers: 1,
-        retries: 0,
-        store: Store,
-        save_to: tmp(directory),
-        before_publish: before_publish,
-        req_options: req_options
-      )
+    options = [url: page, scope: scope, store: Store, retries: 0, req_options: req_options]
+    assert {:ok, old} = stage_copy(options ++ [save_to: Path.join(root, "old")])
+    {first, holder, receipt} = hold_finalizer(old)
+    assert File.dir?(receipt.stage)
+    refute File.exists?(old.save_to)
 
-    assert_receive {:staged, holder}, 2_000
+    generation = Store.drop_scope(scope)
+    refute generation == old.generation
+    assert {:ok, fresh} = stage_copy(options ++ [save_to: Path.join(root, "new")])
+    assert {:ok, :committed} = finalize_copy(fresh)
+    export = ready_export(fresh)
+    resource = resource_for_url(export, page)
+    assert read_resource(export, resource) == "NEW"
+    assert %Store.Page{body: "NEW", processed: true} = Store.find_processed({page, scope})
 
-    {:ok, second} =
-      start_crawl(page,
-        scope: scope,
-        force: true,
-        workers: 1,
-        retries: 0,
-        store: Store,
-        save_to: tmp(directory),
-        req_options: req_options
-      )
-
-    wait(2_000, fn ->
-      refute Crawler.running?(second)
-      assert File.read!(file) == @utf8_bom <> "NEW"
-      assert %Store.Page{body: "NEW"} = Store.find_processed({page, scope})
-    end)
-
-    assert Process.alive?(holder)
     send(holder, :release_save)
+    assert {:error, _} = Task.await(first, 5_000)
 
     wait(fn ->
+      refute File.exists?(receipt.stage)
       refute Process.alive?(holder)
-      assert File.read!(file) == @utf8_bom <> "NEW"
-      assert %Store.Page{body: "NEW"} = Store.find_processed({page, scope})
     end)
+
+    refute File.exists?(old.save_to)
+    assert read_resource(export, resource) == "NEW"
+    assert ready_export(fresh) == export
+    cleanup_exports([scope], root)
   end
 
-  test "concurrent saves of one path keep one complete body", %{
+  test "concurrent exports of one destination keep one complete archive", %{
     site: site,
     url: url,
     req_options: req_options
   } do
     page = "#{url}/lifecycle/bodies"
-    scope_a = unique_scope("lifecycle-body-a")
-    scope_b = unique_scope("lifecycle-body-b")
-    directory = "lifecycle-bodies-#{System.unique_integer([:positive])}"
-    file = offline(directory, site, "/lifecycle/bodies")
+    a_scope = unique_scope("lifecycle-body-a")
+    b_scope = unique_scope("lifecycle-body-b")
+    root = tmp("lifecycle-bodies-#{System.unique_integer([:positive])}")
+    destination = Path.join(root, "archive")
+    on_exit(fn -> cleanup_exports([a_scope, b_scope], root) end)
     {:ok, hits} = Agent.start_link(fn -> 0 end)
-    before_publish = hold_save()
 
     ReqTestSite.stub(site, "GET", "/lifecycle/bodies", fn conn ->
       count = Agent.get_and_update(hits, fn count -> {count, count + 1} end)
 
       conn
-      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.put_resp_header("content-type", "application/octet-stream")
       |> Plug.Conn.resp(200, "BODY-#{count}")
     end)
 
-    crawl = fn scope ->
-      start_crawl(page,
-        scope: scope,
-        workers: 1,
-        retries: 0,
-        store: Store,
-        save_to: tmp(directory),
-        before_publish: before_publish,
-        req_options: req_options
-      )
-    end
+    options = [
+      url: page,
+      save_to: destination,
+      store: Store,
+      req_options: req_options,
+      max_body: 1024,
+      max_analysis_bytes: 2_097_152,
+      max_manifest_bytes: 1_048_576
+    ]
 
-    {:ok, first} = crawl.(scope_a)
-    {:ok, second} = crawl.(scope_b)
-    assert first[:queue] != second[:queue]
+    assert {:ok, first} = stage_copy(options ++ [scope: a_scope])
+    {task, holder, receipt} = hold_finalizer(first)
+    refute File.exists?(destination)
+    assert File.dir?(receipt.stage)
 
-    assert_receive {:staged, holder_a}, 2_000
-    assert_receive {:staged, holder_b}, 2_000
-    refute File.exists?(file)
+    assert {:error, reason} =
+             stage_copy(options ++ [scope: b_scope])
 
-    send(holder_a, :release_save)
-    send(holder_b, :release_save)
-
-    wait(2_000, fn ->
-      refute Crawler.running?(first)
-      refute Crawler.running?(second)
-      refute Process.alive?(holder_a)
-      refute Process.alive?(holder_b)
-
-      assert %Store.Page{body: body_a} = Store.find_processed({page, scope_a})
-      assert %Store.Page{body: body_b} = Store.find_processed({page, scope_b})
-      assert body_a != body_b
-      assert body_a in ["BODY-0", "BODY-1"]
-      assert body_b in ["BODY-0", "BODY-1"]
-      assert File.read!(file) in [@utf8_bom <> body_a, @utf8_bom <> body_b]
-    end)
+    assert reason == {:snapshot, :destination_owned}
+    send(holder, :release_save)
+    assert {:ok, :committed} = Task.await(task, 5_000)
+    export = ready_export(first)
+    assert [resource] = export.manifest["resources"]
+    assert resource == resource_for_url(export, page)
+    assert read_resource(export, resource) == "BODY-0"
+    refute File.exists?(receipt.stage)
+    assert Enum.sort(File.ls!(destination)) == ["manifest.json", "resources"]
+    cleanup_exports([a_scope, b_scope], root)
   end
 
-  test "stopping a crawl during a save removes its temp file", %{
+  test "stopping an export before commit removes private staging", %{
     site: site,
     url: url,
     req_options: req_options
   } do
     scope = unique_scope("lifecycle-stop-save")
     page = "#{url}/lifecycle/stop-save"
-    directory = "lifecycle-stop-save-#{System.unique_integer([:positive])}"
-    file = offline(directory, site, "/lifecycle/stop-save")
-    dir = Path.dirname(file)
-    before_publish = hold_save()
+
+    destination =
+      Path.join(tmp("lifecycle-stop-save-#{System.unique_integer([:positive])}"), "archive")
+
+    root = Path.dirname(destination)
+    on_exit(fn -> cleanup_exports([scope], root) end)
 
     ReqTestSite.stub(site, "GET", "/lifecycle/stop-save", fn conn ->
       conn
-      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.put_resp_header("content-type", "application/octet-stream")
       |> Plug.Conn.resp(200, "PARTIAL")
     end)
 
-    {:ok, opts} =
-      start_crawl(page,
-        scope: scope,
-        workers: 1,
-        retries: 0,
-        store: Store,
-        save_to: tmp(directory),
-        before_publish: before_publish,
-        req_options: req_options
-      )
+    assert {:ok, opts} =
+             stage_copy(
+               url: page,
+               scope: scope,
+               store: Store,
+               save_to: destination,
+               req_options: req_options
+             )
 
-    assert_receive {:staged, _holder}, 2_000
-    assert File.dir?(dir)
-    assert Enum.any?(File.ls!(dir), &String.ends_with?(&1, ".tmp"))
-
+    {task, holder, receipt} = hold_finalizer(opts)
+    assert File.dir?(receipt.stage)
+    assert File.regular?(Path.join(receipt.stage, "archive/manifest.json"))
+    refute File.exists?(destination)
     assert :ok = Crawler.stop(opts)
+    send(holder, :release_save)
+    assert {:error, _} = Task.await(task, 5_000)
 
-    wait(2_000, fn ->
-      refute Process.alive?(opts[:queue])
-      assert Enum.filter(File.ls!(dir), &String.ends_with?(&1, ".tmp")) == []
+    wait(fn ->
+      refute File.exists?(receipt.stage)
+      refute Process.alive?(holder)
     end)
 
-    refute File.exists?(file)
+    refute File.exists?(destination)
     refute Store.find({page, scope})
+    cleanup_exports([scope], root)
   end
 
-  defp offline(directory, site, path) do
-    tmp("#{directory}/#{site.path}#{path}", "__index.html")
-  end
+  defp cleanup_exports(scopes, root) do
+    owned = fn {{scope, _generation}, _record} -> Enum.any?(scopes, &(&1 === scope)) end
+    exports = Enum.filter(:sys.get_state(Store).exports, owned)
+    Enum.each(scopes, &Store.dispose_scope/1)
 
-  defp hold_save do
-    parent = self()
-    {:ok, holders} = Agent.start(fn -> [] end)
-
-    on_exit(fn ->
-      if Process.alive?(holders) do
-        holders |> Agent.get(& &1) |> Enum.each(&send(&1, :release_save))
-        Agent.stop(holders)
-      end
+    wait(fn ->
+      refute Enum.any?(:sys.get_state(Store).exports, owned)
+      Enum.each(exports, &assert_filesystem_released/1)
     end)
 
-    fn ->
-      holder = self()
-      Agent.update(holders, &[holder | &1])
-      send(parent, {:staged, holder})
+    File.rm_rf!(root)
+  end
 
-      receive do
-        :release_save -> :ok
-      after
-        5_000 -> :ok
-      end
+  defp assert_filesystem_released({_run, record}) do
+    if is_pid(record.filesystem), do: refute(Process.alive?(record.filesystem))
+
+    case record.receipt do
+      %{stage: stage} ->
+        refute File.exists?(stage)
+
+      _ ->
+        :ok
     end
+  end
+
+  defp hold_finalizer(opts) do
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        finalize_copy(opts, fn %{filesystem: %{receipt: receipt}} ->
+          send(parent, {:staged, self(), receipt})
+
+          receive do
+            :release_save -> :ok
+          after
+            5_000 -> flunk("publication gate was not released")
+          end
+        end)
+      end)
+
+    assert_receive {:staged, holder, receipt}, 2_000
+    on_exit(fn -> send(holder, :release_save) end)
+    {task, holder, receipt}
   end
 end

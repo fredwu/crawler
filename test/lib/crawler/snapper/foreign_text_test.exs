@@ -7,7 +7,7 @@ defmodule Crawler.Snapper.ForeignTextTest do
     test "a self-closing script in #{foreign} leaves later links visible" do
       foreign = unquote(foreign)
       source = ~s|<#{foreign}><script/></#{foreign}><a href="next">go</a>|
-      target = Linker.offline_link(@page, "http://example.com/blog/next")
+      target = "http://example.com/blog/next"
 
       assert rewrite(source, @page) ==
                ~s|<#{foreign}><script/></#{foreign}><a href="#{target}">go</a>|
@@ -21,7 +21,7 @@ defmodule Crawler.Snapper.ForeignTextTest do
   test "foreign CDATA keeps anchor-shaped text literal beside a real anchor" do
     literal = ~s|<![CDATA[x><a href="next">]]>|
     source = ~s|<svg>#{literal}</svg><a href="next">real</a>|
-    target = Linker.offline_link(@page, "http://example.com/blog/next")
+    target = "http://example.com/blog/next"
     body = rewrite(source, @page)
 
     assert body == ~s|<svg>#{literal}</svg><a href="#{target}">real</a>|
@@ -74,7 +74,7 @@ defmodule Crawler.Snapper.ForeignTextTest do
     source =
       ~s|<svg><font data-color="red" title="face='serif' size=2"><script/><a href="next">real</a></font></svg>|
 
-    target = Linker.offline_link(@page, "http://example.com/blog/next")
+    target = "http://example.com/blog/next"
     assert rewrite(source, @page) == String.replace(source, ~s|href="next"|, ~s|href="#{target}"|)
 
     script = source |> HTMLSpans.tags(attributes: false) |> Enum.find(&(&1.name == "script"))
@@ -94,7 +94,7 @@ defmodule Crawler.Snapper.ForeignTextTest do
     source =
       ~s|<svg><foreignObject><svg><script/></svg><a href="next">go</a></foreignObject></svg>|
 
-    target = Linker.offline_link(@page, "http://example.com/blog/next")
+    target = "http://example.com/blog/next"
     assert rewrite(source, @page) == String.replace(source, ~s|href="next"|, ~s|href="#{target}"|)
   end
 end

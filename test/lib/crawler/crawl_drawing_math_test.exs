@@ -2,10 +2,8 @@ defmodule Crawler.CrawlDrawingMathTest do
   use Crawler.TestCase, async: false
 
   import Plug.Conn
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
-  alias Crawler.Linker
-  alias Crawler.Snapper
   alias Crawler.Store
   alias Crawler.Store.Page
 
@@ -36,7 +34,7 @@ defmodule Crawler.CrawlDrawingMathTest do
   test "linked svg documents are crawled and picture svgs stay closed", context do
     page = context.url <> "/dir/page"
     scope = unique_scope("svg-document")
-    root = tmp(scope)
+    root = Path.join(tmp(scope), "archive")
 
     html = """
     <a href="/diagram.svg">Diagram</a>
@@ -63,6 +61,8 @@ defmodule Crawler.CrawlDrawingMathTest do
     end
 
     opts = crawl(page, context, root, scope, ["css", "js", "images"])
+    export = ready_export(opts)
+    assert length(export.manifest["resources"]) == 19
 
     for directory <- ["", "/frames", "/objects", "/embeds"] do
       assert Store.find_processed({context.url <> directory <> "/icon.png", scope})
@@ -78,22 +78,29 @@ defmodule Crawler.CrawlDrawingMathTest do
     refute Store.find({context.url <> "/css/paint.png", scope})
     refute Store.find({context.url <> "/dir/icon.png", scope})
 
-    diagram = File.read!(saved(root, context.url <> "/diagram.svg"))
+    diagram = read_resource(export, resource_for_url(export, context.url <> "/diagram.svg"))
     refute String.starts_with?(diagram, <<0xEF, 0xBB, 0xBF>>)
     refute diagram =~ ~s|href="icon.png"|
     refute diagram =~ ~s|href="draw.js"|
     refute diagram =~ "url(paint.png)"
 
-    assert File.read!(saved(root, context.url <> "/images/picture.svg")) == @svg
-    assert File.read!(saved(root, context.url <> "/css/background.svg")) == @svg
-    assert_link_opens(root, context.url <> "/diagram.svg", context.url <> "/icon.png")
+    assert read_resource(export, resource_for_url(export, context.url <> "/images/picture.svg")) ==
+             @svg
+
+    assert read_resource(export, resource_for_url(export, context.url <> "/css/background.svg")) ==
+             @svg
+
+    source = resource_for_url(export, context.url <> "/diagram.svg")
+    target = reference_target(export, source, context.url <> "/icon.png")
+    assert_link_opens(export, source, target)
+    assert read_resource(export, target) == "png"
     refute Crawler.running?(opts)
   end
 
   test "assetless crawls follow svg anchors and math links only", context do
     page = context.url <> "/dir/page"
     scope = unique_scope("svg-anchors")
-    root = tmp(scope)
+    root = Path.join(tmp(scope), "archive")
 
     html = ~s|<a href="/diagram.svg">D</a><math><mrow href="/math-next.html">M</mrow></math>|
 
@@ -125,7 +132,7 @@ defmodule Crawler.CrawlDrawingMathTest do
   test "svg paint files honour the base url and the image channel", context do
     page = context.url <> "/dir/page"
     scope = unique_scope("svg-paint")
-    root = tmp(scope)
+    root = Path.join(tmp(scope), "archive")
 
     html = """
     <base href="/assets/">
@@ -153,7 +160,8 @@ defmodule Crawler.CrawlDrawingMathTest do
     expect_html(context, "/assets/next.html", "next")
 
     opts = crawl(page, context, root, scope, ["images"])
-    saved = File.read!(saved(root, page))
+    export = ready_export(opts)
+    saved = read_resource(export, resource_for_url(export, page))
     refute saved =~ ~s|href="tex.png"|
     refute saved =~ ~s|xlink:href="legacy.png"|
     assert saved =~ ~s|href="#local"|
@@ -167,7 +175,7 @@ defmodule Crawler.CrawlDrawingMathTest do
   test "image assets off still follows the svg anchor", context do
     page = context.url <> "/dir/page"
     scope = unique_scope("svg-paint-off")
-    root = tmp(scope)
+    root = Path.join(tmp(scope), "archive")
 
     html = """
     <svg>
@@ -181,17 +189,18 @@ defmodule Crawler.CrawlDrawingMathTest do
     expect_html(context, "/dir/next.html", "next")
 
     opts = crawl(page, context, root, scope, ["css", "js"])
+    export = ready_export(opts)
     assert Store.find_processed({context.url <> "/dir/next.html", scope})
     refute Store.find({context.url <> "/dir/icon.png", scope})
     refute Store.find({context.url <> "/dir/tex.png", scope})
-    assert File.read!(saved(root, page)) =~ ~s|href="tex.png"|
+    assert read_resource(export, resource_for_url(export, page)) =~ ~s|href="tex.png"|
     refute Crawler.running?(opts)
   end
 
   test "css assets off leaves drawing style urls untouched", context do
     page = context.url <> "/dir/page"
     scope = unique_scope("svg-css-off")
-    root = tmp(scope)
+    root = Path.join(tmp(scope), "archive")
 
     html = """
     <base href="/assets/">
@@ -203,7 +212,8 @@ defmodule Crawler.CrawlDrawingMathTest do
 
     ReqTestSite.expect_once(context.site, "GET", "/dir/page", &html(&1, html))
     opts = crawl(page, context, root, scope, ["images", "js"])
-    saved = File.read!(saved(root, page))
+    export = ready_export(opts)
+    saved = read_resource(export, resource_for_url(export, page))
     assert saved =~ ~s|url("paint.png")|
     assert saved =~ "url(attr.png)"
     assert saved =~ "url(hidden.png)"
@@ -213,7 +223,7 @@ defmodule Crawler.CrawlDrawingMathTest do
   test "math links stay on the site and nofollow skips them without skipping scripts", context do
     page = context.url <> "/start"
     scope = unique_scope("math-links")
-    root = tmp(scope)
+    root = Path.join(tmp(scope), "archive")
 
     html = """
     <math>
@@ -236,9 +246,12 @@ defmodule Crawler.CrawlDrawingMathTest do
     expect_html(context, "/from-math.html", "from-math")
 
     opts = crawl(page, context, root, scope, ["images", "js"])
-    saved = File.read!(saved(root, page))
-    next_href = Linker.offline_link(page, context.url <> "/next")
-    out_href = Linker.offline_link(page, "https://other.test/out")
+    export = ready_export(opts)
+    saved = read_resource(export, resource_for_url(export, page))
+    source = resource_for_url(export, page)
+    target = reference_target(export, source, context.url <> "/next")
+    next_href = relative_reference(source, target)
+    out_href = "https://other.test/out"
     assert saved =~ ~s|<mrow href="#{next_href}">|
     assert saved =~ ~s|<a href="#{next_href}">Page</a>|
     assert saved =~ ~s|<mo href="#{out_href}">|
@@ -254,7 +267,7 @@ defmodule Crawler.CrawlDrawingMathTest do
   test "page nofollow skips math links and still fetches a script", context do
     page = context.url <> "/quiet"
     scope = unique_scope("math-nofollow")
-    root = tmp(scope)
+    root = Path.join(tmp(scope), "archive")
 
     html = """
     <meta name="robots" content="nofollow">
@@ -282,7 +295,7 @@ defmodule Crawler.CrawlDrawingMathTest do
   test "a saved drawing rewrites fetched resources and keeps ignored bytes", context do
     page = context.url <> "/dir/page"
     scope = unique_scope("drawing-saved")
-    root = tmp(scope)
+    root = Path.join(tmp(scope), "archive")
 
     html = """
     <svg>
@@ -303,8 +316,9 @@ defmodule Crawler.CrawlDrawingMathTest do
     expect_bytes(context, "/dir/icon.png", "image/png", "png")
 
     opts = crawl(page, context, root, scope, ["css", "js", "images"])
-    saved = File.read!(saved(root, page))
-    out = Linker.offline_link(page, "https://other.test/out")
+    export = ready_export(opts)
+    saved = read_resource(export, resource_for_url(export, page))
+    out = "https://other.test/out"
 
     assert saved =~ "url(hidden.png)"
     assert saved =~ ~s|src="ignored.js"|
@@ -325,7 +339,7 @@ defmodule Crawler.CrawlDrawingMathTest do
   test "svg paint may come from another host while a math link may not", context do
     page = context.url <> "/dir/page"
     scope = unique_scope("svg-cross-site")
-    root = tmp(scope)
+    root = Path.join(tmp(scope), "archive")
     paint = context.url2 <> "/tex.png"
     away = context.url2 <> "/math.html"
 
@@ -343,7 +357,7 @@ defmodule Crawler.CrawlDrawingMathTest do
   test "a shared svg is a document when the picture is seen first", context do
     assert_shared_document(context, "picture-first", """
     <img src="/diagram.svg">
-    <a href="/diagram.svg">Diagram</a>
+    <iframe src="/diagram.svg"></iframe>
     """)
   end
 
@@ -354,15 +368,15 @@ defmodule Crawler.CrawlDrawingMathTest do
       "picture-first-default-store",
       """
       <img src="/diagram.svg">
-      <a href="/diagram.svg">Diagram</a>
+      <iframe src="/diagram.svg"></iframe>
       """,
       store: nil
     )
   end
 
-  test "a shared svg is a document when the page link is seen first", context do
+  test "a shared svg is a document when the iframe is seen first", context do
     assert_shared_document(context, "link-first", """
-    <a href="/diagram.svg">Diagram</a>
+    <iframe src="/diagram.svg"></iframe>
     <img src="/diagram.svg">
     """)
   end
@@ -370,7 +384,7 @@ defmodule Crawler.CrawlDrawingMathTest do
   test "a cross-site anchor does not open an svg fetched as a picture", context do
     page = context.url <> "/dir/page"
     scope = unique_scope("svg-picture-cross-site")
-    root = tmp(scope)
+    root = Path.join(tmp(scope), "archive")
     picture = context.url2 <> "/pic.svg"
     html = ~s|<img src="#{picture}"><a href="#{picture}">D</a>|
 
@@ -378,9 +392,10 @@ defmodule Crawler.CrawlDrawingMathTest do
     expect_bytes(context.site2, "/pic.svg", "image/svg+xml", @svg)
 
     opts = crawl(page, context, root, scope, ["css", "js", "images"])
+    export = ready_export(opts)
     assert Store.find_processed({picture, scope})
     refute Store.find({context.url2 <> "/icon.png", scope})
-    assert File.read!(saved(root, picture)) == @svg
+    assert read_resource(export, resource_for_url(export, picture)) == @svg
     refute Crawler.running?(opts)
   end
 
@@ -395,10 +410,10 @@ defmodule Crawler.CrawlDrawingMathTest do
   test "a custom store is not written again when a document link opens its svg", context do
     page = context.url <> "/dir/page"
     scope = unique_scope("svg-custom-store")
-    root = tmp(scope)
+    root = Path.join(tmp(scope), "archive")
     svg = context.url <> "/diagram.svg"
 
-    html = ~s|<img src="/diagram.svg"><a href="/diagram.svg">Diagram</a>|
+    html = ~s|<img src="/diagram.svg"><iframe src="/diagram.svg"></iframe>|
 
     ReqTestSite.expect_once(context.site, "GET", "/dir/page", &html(&1, html))
     expect_svg(context, "/diagram.svg", @svg_document, "image/svg+xml")
@@ -413,6 +428,8 @@ defmodule Crawler.CrawlDrawingMathTest do
         storage_owner: self()
       )
 
+    export = ready_export(opts)
+
     stored = flush_stored()
     assert Enum.count(stored, &match?({^svg, _}, &1)) == 1
 
@@ -422,165 +439,236 @@ defmodule Crawler.CrawlDrawingMathTest do
       assert Enum.count(stored, &match?({^url, _}, &1)) == 1
     end
 
-    diagram = File.read!(saved(root, svg))
+    seed = resource_for_url(export, page)
+    document = linked_resource(export, seed, "iframe", "src", svg)
+    diagram = read_resource(export, document)
     refute diagram =~ ~s|href="icon.png"|
     refute diagram =~ "url(paint.png)"
     refute Crawler.running?(opts)
   end
 
   test "a document link does not wait for a picture that is not svg", context do
-    page = context.url <> "/dir/page"
-    picture = context.url <> "/photo.jpg"
-    scope = unique_scope("svg-picture-jpeg")
-    root = tmp(scope)
-    on_exit(fn -> File.rm_rf(root) end)
+    {opts, scope, picture, seed, seed_key, fetch, fetch_key, picture_target} =
+      held_picture(context, "photo.jpg", "image/jpeg", "JPEG")
 
-    ReqTestSite.expect_once(context.site, "GET", "/dir/page", &html(&1, "<p>seed</p>"))
-
-    {:ok, opts} =
-      start_crawl(page,
-        scope: scope,
-        workers: 1,
-        retries: 0,
-        max_depths: 3,
-        assets: ["images"],
-        save_to: root,
-        req_options: context.req_options
-      )
-
-    on_exit(fn -> Crawler.stop(opts) end)
-    wait(5_000, fn -> refute Crawler.running?(opts) end)
-
-    assert {:ok, _} = Store.add({picture, scope}, opts.generation, opts.queue, "img")
-
-    assert :ok ==
-             Store.note_picture_type(
-               {picture, scope},
-               "image/jpeg",
-               opts.generation,
-               opts.queue
+    assert {:ok, document} =
+             Crawler.crawl(
+               picture,
+               Map.merge(opts, %{
+                 html_tag: "a",
+                 reference_tag: "iframe",
+                 page_open: false,
+                 depth: 1
+               })
              )
 
-    {:ok, claim} =
-      Store.start_work(%{
-        url: picture,
-        scope: scope,
-        generation: opts.generation,
-        queue: opts.queue,
-        max_pages: :infinity
-      })
+    document_target = document.target_handle
+    refute document_target == picture_target
 
-    on_exit(fn -> Store.finish_claim(claim) end)
+    assert {:terminal, %Crawler.Job.Outcome{status: :succeeded},
+            %{target_handle: ^document_target}} =
+             Store.await_direct(document_target, Crawler.Deadline.after_ms(2_000))
 
-    assert {:ok, _} = Crawler.crawl(picture, Map.merge(opts, %{html_tag: "a", depth: 1}))
+    assert Process.alive?(fetch)
+    assert Store.target_outcome(picture_target) == nil
+    assert %Crawler.Job.Outcome{status: :succeeded} = Store.target_outcome(document_target)
 
-    wait(2_000, fn ->
-      assert Store.pending_count(scope) == 0
-      assert Store.inflight_count(scope) == 1
-    end)
+    assert %Page{processed: true, body: "JPEG", target_handle: ^document_target} =
+             Store.find_processed({picture, scope})
 
-    held = System.monotonic_time(:millisecond)
-
-    wait(1_000, fn ->
-      assert Store.pending_count(scope) == 0
-      assert Store.inflight_count(scope) == 1
-      assert System.monotonic_time(:millisecond) - held >= 200
-    end)
-
-    refute Store.find_processed({picture, scope})
+    assert {:ok, %{ready?: false}} = Crawler.export_status(opts)
+    send(fetch, {:managed_parser_release, fetch_key})
+    send(seed, {:managed_parser_release, seed_key})
+    export = ready_root(opts)
+    resources = Enum.filter(export.manifest["resources"], &(&1["url"] == picture))
+    assert resources != []
+    for resource <- resources, do: assert(read_resource(export, resource) == "JPEG")
   end
 
   test "a document link waits until the picture fetch finishes", context do
-    page = context.url <> "/dir/page"
-    svg = context.url <> "/diagram.svg"
-    scope = unique_scope("svg-picture-inflight")
-    root = tmp(scope)
-    on_exit(fn -> File.rm_rf(root) end)
+    for path <- ["/icon.png", "/draw.js", "/paint.png"] do
+      type = if path == "/draw.js", do: "text/javascript", else: "image/png"
+      body = if path == "/draw.js", do: "js", else: "png"
+      expect_bytes(context, path, type, body)
+    end
 
-    ReqTestSite.expect_once(context.site, "GET", "/dir/page", &html(&1, "<p>seed</p>"))
-    expect_bytes(context, "/icon.png", "image/png", "png")
-    expect_bytes(context, "/draw.js", "text/javascript", "js")
-    expect_bytes(context, "/paint.png", "image/png", "png")
     expect_html(context, "/next.html", "next")
 
-    {:ok, opts} =
-      start_crawl(page,
-        scope: scope,
-        workers: 1,
-        retries: 0,
-        max_depths: 3,
-        assets: ["css", "js", "images"],
-        store: Store,
-        save_to: root,
-        req_options: context.req_options
-      )
+    {opts, scope, svg, seed, seed_key, fetch, fetch_key, picture_target} =
+      held_picture(context, "diagram.svg", "image/svg+xml", @svg_document)
 
-    on_exit(fn -> Crawler.stop(opts) end)
-    wait(5_000, fn -> refute Crawler.running?(opts) end)
+    assert {:ok, document_admission} =
+             Crawler.crawl(
+               svg,
+               Map.merge(opts, %{
+                 html_tag: "a",
+                 reference_tag: "iframe",
+                 page_open: false,
+                 depth: 1
+               })
+             )
 
-    assert {:ok, _} = Store.add({svg, scope}, opts.generation, opts.queue, "img")
+    refute document_admission.target_handle == picture_target
+    assert Store.target_outcome(picture_target) == nil
+    assert Store.target_outcome(document_admission.target_handle) == nil
+    refute_receive {:managed_parser_held, :document, _, _, _, _}, 200
+    refute Store.find_processed({context.url <> "/next.html", scope})
+    assert {:ok, %{ready?: false}} = Crawler.export_status(opts)
+    send(fetch, {:managed_parser_release, fetch_key})
 
-    # finish_claim releases one pending slot. Count the picture worker's slot.
-    assert :ok = Store.note_enqueued(scope, opts.generation, opts.queue)
+    assert_receive {:managed_parser_held, :document, document, "image/svg+xml", revision, target},
+                   2_000
 
-    {:ok, claim} =
-      Store.start_work(%{
-        url: svg,
-        scope: scope,
-        generation: opts.generation,
-        queue: opts.queue,
-        max_pages: :infinity
-      })
-
-    on_exit(fn -> Store.finish_claim(claim) end)
-
-    stored = %{
-      url: svg,
-      scope: scope,
-      generation: opts.generation,
-      queue: opts.queue,
-      html_tag: "img",
-      content_type: "image/svg+xml",
-      referrer_url: svg,
-      store: Store,
-      save_to: root
-    }
-
-    assert {_new, %Page{}} = Store.add_page_data({svg, scope}, @svg_document, stored)
-
-    assert {:ok, _document} = Crawler.crawl(svg, Map.merge(opts, %{html_tag: "a", depth: 1}))
-
-    # The picture claim is already one in-flight slot. A document worker that does not
-    # wait returns immediately and the count falls back to one. It has to stay at two.
-    wait(1_000, fn -> assert Store.inflight_count(scope) >= 2 end)
-    held = System.monotonic_time(:millisecond)
-
-    wait(1_000, fn ->
-      assert Store.inflight_count(scope) >= 2
-      assert System.monotonic_time(:millisecond) - held >= 200
-    end)
-
-    assert {:ok, _} = Snapper.snap(@svg_document, Map.put(stored, :html_tag, "img"))
-    assert :ok = Store.complete_page({svg, scope}, opts.generation, opts.queue)
-    Store.finish_claim(claim)
-
-    wait(5_000, fn -> refute Crawler.running?(opts) end)
+    assert is_reference(revision)
+    assert target == document_admission.target_handle
+    send(document, {:managed_parser_release, :document})
+    send(seed, {:managed_parser_release, seed_key})
+    export = ready_root(opts)
 
     for path <- ["/icon.png", "/draw.js", "/paint.png", "/next.html"] do
       assert Store.find_processed({context.url <> path, scope})
     end
 
-    diagram = File.read!(saved(root, svg))
+    [resource] =
+      Enum.filter(export.manifest["resources"], fn resource ->
+        resource["url"] == svg and
+          Enum.any?(export.manifest["references"], &(&1["from"] == resource["id"]))
+      end)
+
+    diagram = read_resource(export, resource)
     refute diagram == @svg_document
     refute diagram =~ ~s|href="icon.png"|
     refute diagram =~ ~s|href="draw.js"|
     refute diagram =~ "url(paint.png)"
+    image = linked_resource(export, resource, "image", "href", context.url <> "/icon.png")
+    assert read_resource(export, image) == "png"
+  end
+
+  defp held_picture(context, name, type, body) do
+    scope = unique_scope("picture-held")
+    root = Path.join(tmp(scope), "archive")
+    on_exit(fn -> File.rm_rf(Path.dirname(root)) end)
+    page = context.url <> "/dir/page"
+    picture = context.url <> "/" <> name
+    expect_html(context, "/dir/page", "<p>seed</p>")
+    seed_key = make_ref()
+    fetch_key = make_ref()
+    observer = self()
+
+    picture_gates =
+      if type == "image/svg+xml" do
+        ReqTestSite.expect_once(context.site, "GET", "/" <> name, fn conn ->
+          send(observer, {:managed_picture_response_held, fetch_key, self()})
+
+          receive do
+            {:managed_parser_release, ^fetch_key} -> :ok
+          end
+
+          conn |> put_resp_header("content-type", type) |> resp(200, body)
+        end)
+
+        [{picture, "a", self(), :document}]
+      else
+        expect_bytes(context, "/" <> name, type, body)
+        [{picture, "img", self(), fetch_key}]
+      end
+
+    assert {:ok, opts} =
+             start_crawl(page,
+               scope: scope,
+               workers: 3,
+               max_body: 1_048_576,
+               max_analysis_bytes: 16_777_216,
+               max_manifest_bytes: 4_194_304,
+               retries: 0,
+               max_depths: 3,
+               assets: ["css", "js", "images"],
+               store: Store,
+               save_to: root,
+               req_options: context.req_options,
+               parser: Crawler.ManagedSnapshotHelpers.GateParser,
+               managed_test_gates: [{page, "a", self(), seed_key}] ++ picture_gates
+             )
+
+    on_exit(fn -> Crawler.stop(opts) end)
+    assert_receive {:managed_parser_held, ^seed_key, seed, _, _, _}, 2_000
+    on_exit(fn -> send(seed, {:managed_parser_release, seed_key}) end)
+
+    assert {:ok, picture_admission} =
+             Crawler.crawl(
+               picture,
+               Map.merge(opts, %{html_tag: "img", reference_tag: "img", depth: 1})
+             )
+
+    picture_target = picture_admission.target_handle
+
+    fetch =
+      if type == "image/svg+xml" do
+        assert_receive {:managed_picture_response_held, ^fetch_key, responder}, 2_000
+        responder
+      else
+        assert_receive {:managed_parser_held, ^fetch_key, producer, ^type, _, ^picture_target},
+                       2_000
+
+        producer
+      end
+
+    on_exit(fn -> send(fetch, {:managed_parser_release, fetch_key}) end)
+    {opts, scope, picture, seed, seed_key, fetch, fetch_key, picture_target}
+  end
+
+  defp linked_resource(export, source, selector, attribute, expected_url) do
+    assert [href] =
+             source
+             |> then(&read_resource(export, &1))
+             |> Floki.parse_document!()
+             |> Floki.attribute(selector, attribute)
+
+    uri = URI.parse(href)
+    path = Path.expand(URI.decode(uri.path), Path.dirname(artifact_path(export, source)))
+
+    assert [target] =
+             Enum.filter(
+               export.manifest["resources"],
+               &(Path.expand(&1["path"], export.root) == path)
+             )
+
+    assert target["url"] == expected_url
+
+    assert Enum.any?(
+             export.manifest["references"],
+             &(&1["from"] == source["id"] and &1["target"] == target["id"] and
+                 &1["outcome"] == "succeeded")
+           )
+
+    assert_opens(export, source, target, href)
+  end
+
+  defp assert_registry_projection(page, url) do
+    assert %Page{
+             url: ^url,
+             processed: true,
+             body: nil,
+             opts: nil,
+             analysis: nil,
+             interpretation: nil,
+             source_revision: nil,
+             credit: nil,
+             target_handle: target
+           } = page
+
+    assert is_reference(target)
+  end
+
+  defp assert_bounded_sources(opts) do
+    state = :sys.get_state(Store)
+    assert state.resources.used + state.source_cache_bytes <= opts.max_retained_bytes
   end
 
   defp assert_shared_document(context, label, html, extra \\ []) do
     page = context.url <> "/dir/page"
     scope = unique_scope(label)
-    root = tmp(scope)
+    root = Path.join(tmp(scope), "archive")
     svg = context.url <> "/diagram.svg"
 
     ReqTestSite.expect_once(context.site, "GET", "/dir/page", &html(&1, html))
@@ -590,31 +678,48 @@ defmodule Crawler.CrawlDrawingMathTest do
     expect_bytes(context, "/paint.png", "image/png", "png")
     expect_html(context, "/next.html", "next")
 
-    opts = crawl(page, context, root, scope, ["css", "js", "images"], extra)
+    opts =
+      crawl(
+        page,
+        context,
+        root,
+        scope,
+        ["css", "js", "images"],
+        extra
+      )
 
     for path <- ["/icon.png", "/draw.js", "/paint.png", "/next.html"] do
       assert Store.find_processed({context.url <> path, scope})
     end
 
-    diagram = File.read!(saved(root, svg))
+    export = ready_export(opts)
+    seed = resource_for_url(export, page)
+    document = linked_resource(export, seed, "iframe", "src", svg)
+    picture = linked_resource(export, seed, "img", "src", svg)
+    diagram = read_resource(export, document)
+    assert read_resource(export, picture) == @svg_document
+    refute document["id"] == picture["id"]
     refute diagram =~ ~s|href="icon.png"|
     refute diagram =~ ~s|href="draw.js"|
     refute diagram =~ "url(paint.png)"
 
+    for {selector, attribute, url, body} <- [
+          {"image", "href", context.url <> "/icon.png", "png"},
+          {"script", "href", context.url <> "/draw.js", "js"},
+          {"a", "href", context.url <> "/next.html", <<0xEF, 0xBB, 0xBF>> <> "next"}
+        ] do
+      target = linked_resource(export, document, selector, attribute, url)
+      assert read_resource(export, target) == body
+    end
+
     if Keyword.get(extra, :store, Store) == nil do
-      assert %Page{body: body, opts: stored, picture_type: "image/svg+xml"} =
-               Store.find({svg, scope})
-
-      assert is_binary(body)
-      assert stored[:content_type] == "image/svg+xml"
-      assert stored[:html_tag] == "a"
-      assert stored[:referrer_url] == svg
-
-      assert %Page{processed: true, body: nil, opts: nil, picture_type: nil} =
-               Store.find({page, scope})
+      assert_registry_projection(Store.find({svg, scope}), svg)
+      assert_registry_projection(Store.find({page, scope}), page)
 
       assert %Page{processed: true, body: nil, opts: nil, picture_type: "image/png"} =
                Store.find({context.url <> "/icon.png", scope})
+
+      assert_bounded_sources(opts)
     end
 
     refute Crawler.running?(opts)
@@ -623,11 +728,11 @@ defmodule Crawler.CrawlDrawingMathTest do
   defp assert_redirected_document(context, label, extra) do
     page = context.url <> "/dir/page"
     scope = unique_scope(label)
-    root = tmp(scope)
+    root = Path.join(tmp(scope), "archive")
     old = context.url <> "/old/diagram.svg"
     new = context.url <> "/new/diagram.svg"
     icon = context.url <> "/new/icon.png"
-    html = ~s|<img src="/old/diagram.svg"><a href="/old/diagram.svg">Diagram</a>|
+    html = ~s|<img src="/old/diagram.svg"><iframe src="/old/diagram.svg"></iframe>|
 
     ReqTestSite.expect_once(context.site, "GET", "/dir/page", &html(&1, html))
 
@@ -643,7 +748,15 @@ defmodule Crawler.CrawlDrawingMathTest do
     expect_bytes(context, "/new/paint.png", "image/png", "png")
     expect_html(context, "/new/next.html", "next")
 
-    opts = crawl(page, context, root, scope, ["css", "js", "images"], extra)
+    opts =
+      crawl(
+        page,
+        context,
+        root,
+        scope,
+        ["css", "js", "images"],
+        extra
+      )
 
     for path <- ["/new/icon.png", "/new/draw.js", "/new/paint.png", "/new/next.html"] do
       assert Store.find_processed({context.url <> path, scope})
@@ -651,31 +764,59 @@ defmodule Crawler.CrawlDrawingMathTest do
 
     refute Store.find({context.url <> "/old/icon.png", scope})
     refute Store.find({context.url <> "/old/next.html", scope})
-    assert_link_opens(root, old, icon)
-    assert_link_opens(root, new, icon)
+    export = ready_export(opts)
+    seed = resource_for_url(export, page)
+    document = linked_resource(export, seed, "iframe", "src", new)
+    assert document["content_type"] == "image/svg+xml"
+    target = linked_resource(export, document, "image", "href", icon)
+    assert read_resource(export, target) == "png"
+
+    assert Enum.any?(
+             export.manifest["references"],
+             &(&1["from"] == seed["id"] and &1["url"] == old and &1["target"] == document["id"])
+           )
 
     if Keyword.get(extra, :store, Store) == nil do
-      assert %Page{body: body, opts: stored, picture_type: "image/svg+xml"} =
-               Store.find({old, scope})
+      assert_registry_projection(Store.find({old, scope}), old)
 
-      assert is_binary(body)
-      assert stored[:referrer_url] == new
-      assert stored[:alias_url] == new
-      assert stored[:content_type] == "image/svg+xml"
-      assert %Page{body: nil, opts: nil} = Store.find({new, scope})
+      assert %Page{
+               url: ^new,
+               processed: true,
+               body: nil,
+               opts: nil,
+               analysis: nil,
+               interpretation: nil,
+               source_revision: nil,
+               credit: nil,
+               target_handle: alias_target
+             } = Store.find({new, scope})
+
+      assert is_reference(alias_target)
+      assert %Crawler.Job.Outcome{status: :succeeded} = Store.target_outcome(alias_target)
+      authority = {scope, opts.generation, opts.queue}
+
+      assert %{
+               job: %Crawler.Job{id: ^alias_target, authority: ^authority, logical_key: ^old},
+               outcome: %Crawler.Job.Outcome{status: :succeeded}
+             } = :sys.get_state(Store).scheduler.frontier.jobs[alias_target]
+
+      assert_bounded_sources(opts)
     end
 
     refute Crawler.running?(opts)
   end
 
   defp crawl(page, context, root, scope, assets, extra \\ []) do
-    on_exit(fn -> File.rm_rf(root) end)
+    on_exit(fn -> File.rm_rf(Path.dirname(root)) end)
 
     settings =
       Map.merge(
         %{
           scope: scope,
           workers: 1,
+          max_body: 1_048_576,
+          max_analysis_bytes: 16_777_216,
+          max_manifest_bytes: 16_777_216,
           retries: 0,
           max_depths: 3,
           assets: assets,
@@ -689,8 +830,22 @@ defmodule Crawler.CrawlDrawingMathTest do
     {:ok, opts} = start_crawl(page, settings)
 
     on_exit(fn -> Crawler.stop(opts) end)
-    wait(5_000, fn -> refute Crawler.running?(opts) end)
+    ready_root(opts)
     opts
+  end
+
+  defp ready_root(opts) do
+    result = Store.await_direct(opts.target_handle, Crawler.Deadline.after_ms(5_000))
+
+    assert {:terminal, %Crawler.Job.Outcome{status: :succeeded}, _} = result,
+           "root canonical outcome: #{inspect(result)}"
+
+    export = ready_export(opts)
+
+    assert Enum.any?(export.manifest["resources"], &(&1["url"] == opts.url)),
+           "ready export omitted its root; canonical outcome: #{inspect(result)}"
+
+    export
   end
 
   defp flush_stored(acc \\ []) do

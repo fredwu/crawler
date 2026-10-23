@@ -2,7 +2,7 @@ defmodule Crawler.CrawlFeedTest do
   use Crawler.TestCase, async: false
 
   import Plug.Conn
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
   alias Crawler.Store
 
@@ -105,7 +105,7 @@ defmodule Crawler.CrawlFeedTest do
 
     {opts, root} = run(page, context, [])
 
-    assert File.read!(saved(root, note)) == body
+    assert read_resource(root, reference_target(root, resource_for_url(root, page), note)) == body
     refute Store.find({context.url <> "/secret", opts.scope})
     refute Store.find({context.url <> "/also", opts.scope})
   end
@@ -142,10 +142,10 @@ defmodule Crawler.CrawlFeedTest do
 
     feed = """
     <rss><channel>
-      <item><title>A < B</title><link>#{title}</link></item>
-      <item><description>1 < 2</description><link>#{raw}</link></item>
+      <item><title><![CDATA[A < B]]></title><link>#{title}</link></item>
+      <item><description><![CDATA[1 < 2]]></description><link>#{raw}</link></item>
       <item><description>See <a href="#{context.url}/secret">x</a></description><link>#{context.url}/kept</link></item>
-      <item><title>a<b</title><link>#{glued}</link></item>
+      <item><title><![CDATA[a<b]]></title><link>#{glued}</link></item>
       <item><link>#{later}</link></item>
     </channel></rss>
     """
@@ -183,7 +183,7 @@ defmodule Crawler.CrawlFeedTest do
     feed = """
     <feed xml:base="/blog/">
       <link href="/home"/>
-      <title xml:base="https://other.test/nope/">1 < 2</title>
+      <title xml:base="https://other.test/nope/"><![CDATA[1 < 2]]></title>
       <entry><link href="other"/></entry>
       <entry xml:base="#{context.url}/news/"><link href="post"/></entry>
       <entry xml:base="news/"><link href="later"/></entry>
@@ -324,7 +324,7 @@ defmodule Crawler.CrawlFeedTest do
 
     atom = """
     <feed><entry>
-      <content src="#{full}"><p>A < B</p><a href="#{context.url}/inner">x</a></content>
+      <content src="#{full}"><p><![CDATA[A < B]]></p><a href="#{context.url}/inner">x</a></content>
       <link rel="alternate" href="#{after_page}"/>
     </entry></feed>
     """
@@ -373,7 +373,7 @@ defmodule Crawler.CrawlFeedTest do
     cdn = context.url2
 
     rss = """
-    <rss><channel><item>
+    <rss xmlns:media="http://search.yahoo.com/mrss/" xmlns:video="http://www.google.com/schemas/sitemap-video/1.1"><channel><item>
       <link>#{post}</link>
       <enclosure url="#{cdn}/ep.mp3"></enclosure>
       <media:content url="#{cdn}/v.mp4"><media:thumbnail url="#{cdn}/t.jpg"/></media:content>
@@ -421,7 +421,7 @@ defmodule Crawler.CrawlFeedTest do
     cdn = context.url2
 
     rss = """
-    <rss><channel><item>
+    <rss xmlns:media="http://search.yahoo.com/mrss/"><channel><item>
       <link>#{post}</link>
       <enclosure url="#{cdn}/ep.mp3"/>
       <media:content url="#{cdn}/v.mp4"/>
@@ -465,20 +465,20 @@ defmodule Crawler.CrawlFeedTest do
     from_xml = context.url <> "/from-xml"
 
     rdf = """
-    <rdf:RDF>
+    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
       <channel><link>#{context.url}/home</link></channel>
       <item><link>#{post}</link></item>
     </rdf:RDF>
     """
 
     rss = """
-    <rdf:RDF>
+    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
       <item><link>#{from_rss}</link></item>
     </rdf:RDF>
     """
 
     xml = """
-    <rdf:RDF>
+    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
       <item rdf:about="#{context.url}/about"><link>#{from_xml}</link></item>
     </rdf:RDF>
     """
@@ -512,7 +512,7 @@ defmodule Crawler.CrawlFeedTest do
 
   defp run(page, context, extra) do
     scope = unique_scope("feed")
-    root = tmp(scope)
+    root = Path.join(tmp(), scope <> "-#{Base.encode16(:crypto.strong_rand_bytes(6))}")
     on_exit(fn -> File.rm_rf(root) end)
 
     {:ok, opts} =
@@ -522,6 +522,11 @@ defmodule Crawler.CrawlFeedTest do
           [
             scope: scope,
             workers: 1,
+            max_body: 1_048_576,
+            max_analysis_bytes: 16_000_000,
+            max_css_work: 5_000,
+            max_css_pictures: 1_000,
+            max_manifest_bytes: 16_777_216,
             retries: 0,
             max_depths: 3,
             store: Store,
@@ -534,8 +539,7 @@ defmodule Crawler.CrawlFeedTest do
       )
 
     on_exit(fn -> Crawler.stop(opts) end)
-    wait(5_000, fn -> refute Crawler.running?(opts) end)
-    {opts, root}
+    {opts, ready_export(opts)}
   end
 
   defp expect_html(context, path, body, headers \\ []) do

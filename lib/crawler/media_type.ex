@@ -61,4 +61,12 @@ defmodule Crawler.MediaType do
 
   def xml?(nil), do: false
   def xml?(type), do: normalize(type) in ["application/xml", "text/xml"]
+
+  def document_mode(type) do
+    cond do
+      xhtml?(type) or svg?(type) or xml?(type) or feed?(type) -> :xml
+      html?(type) -> :html
+      true -> nil
+    end
+  end
 end

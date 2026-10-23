@@ -1,5 +1,5 @@
 defmodule Crawler.ReqTestSite.LifecycleTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   import Crawler.TestHelpers
 
@@ -275,7 +275,7 @@ defmodule Crawler.ReqTestSite.LifecycleTest do
     refute_receive :late_side_effect
   end
 
-  test "closing a fixture stops its own queues and preserves stored pages", %{fixture: fixture} do
+  test "closing a fixture disposes tracked runs and preserves unrelated runs", %{fixture: fixture} do
     other = ReqTestSite.open(verify_on_exit: false)
     on_exit(fn -> ReqTestSite.close(other) end)
     text(fixture.site, "/owned")
@@ -286,25 +286,32 @@ defmodule Crawler.ReqTestSite.LifecycleTest do
 
     {:ok, borrowed} =
       start_crawl(fixture.url <> "/borrowed",
-        scope: unrelated.scope,
+        scope: unique_scope("fixture-borrowed"),
         queue: unrelated.queue,
         store: Store,
         req_options: fixture.req_options
       )
 
     await_idle(borrowed)
+    assert borrowed.scope != unrelated.scope
+    assert borrowed.queue == unrelated.queue
+    assert Store.find_processed({owned.url, owned.scope}).body == "done"
+    assert Store.find_processed({borrowed.url, borrowed.scope}).body == "done"
+    assert Store.find_processed({unrelated.url, unrelated.scope}).body == "done"
     assert :ok = ReqTestSite.verify!(fixture)
     assert :ok = ReqTestSite.close(fixture)
     refute Process.alive?(owned.queue)
     refute Process.alive?(owned.queue_owner)
-    assert Store.find_processed({owned.url, owned.scope}).body == "done"
+    refute Store.find({owned.url, owned.scope})
     assert Process.alive?(unrelated.queue)
     assert Process.alive?(unrelated.queue_owner)
     assert Store.find_processed({unrelated.url, unrelated.scope}).body == "done"
-    assert Store.find_processed({borrowed.url, borrowed.scope}).body == "done"
+    refute Store.find({borrowed.url, borrowed.scope})
   end
 
-  test "closing a fixture leaves an external queue alive", %{fixture: fixture} do
+  test "closing a fixture disposes its run and leaves an external queue alive", %{
+    fixture: fixture
+  } do
     scope = unique_scope("fixture-external")
 
     owner =
@@ -322,11 +329,60 @@ defmodule Crawler.ReqTestSite.LifecycleTest do
       )
 
     await_idle(crawl)
+    assert Store.find_processed({crawl.url, scope}).body == "done"
     assert :ok = ReqTestSite.verify!(fixture)
     assert :ok = ReqTestSite.close(fixture)
     assert Process.alive?(queue)
     assert Process.alive?(owner)
-    assert Store.find_processed({crawl.url, scope}).body == "done"
+    refute Store.find({crawl.url, scope})
+  end
+
+  test "closing an old fixture preserves a replacement generation on the same queue", %{
+    fixture: fixture
+  } do
+    text(fixture.site, "/old")
+    old = crawl(fixture, "/old")
+    assert Store.find_processed({old.url, old.scope}).body == "done"
+    other = ReqTestSite.open(verify_on_exit: false)
+
+    on_exit(fn ->
+      try do
+        ReqTestSite.close(other)
+      after
+        Crawler.Queue.stop(old.queue_owner)
+      end
+    end)
+
+    ReqTestSite.expect_once(other.site, "GET", "/replacement", fn conn ->
+      Plug.Conn.send_resp(conn, 200, "replacement")
+    end)
+
+    {:ok, replacement} =
+      start_crawl(other.url <> "/replacement",
+        scope: old.scope,
+        queue: old.queue,
+        force: true,
+        store: Store,
+        req_options: other.req_options
+      )
+
+    await_idle(replacement)
+    assert replacement.generation != old.generation
+    assert replacement.queue == old.queue
+    assert replacement.queue_owner == old.queue_owner
+    assert Store.find_processed({replacement.url, replacement.scope}).body == "replacement"
+    assert :ok = ReqTestSite.verify!(fixture)
+    assert :ok = ReqTestSite.verify!(other)
+    assert :ok = ReqTestSite.close(fixture)
+    assert Process.alive?(replacement.queue)
+    assert Process.alive?(old.queue_owner)
+    assert Store.current?(replacement.scope, replacement.generation, replacement.queue)
+    assert Store.find_processed({replacement.url, replacement.scope}).body == "replacement"
+    assert :ok = ReqTestSite.close(other)
+    refute Store.find({replacement.url, replacement.scope})
+    assert Process.alive?(replacement.queue)
+    assert Process.alive?(old.queue_owner)
+    assert :ok = Crawler.Queue.stop(old.queue_owner)
   end
 
   defp assert_close_stops_handler(fixture, suspend_watcher?) do

@@ -1,9 +1,17 @@
 defmodule Crawler.Snapper.JavascriptContextSnapshotTest do
   use Crawler.TestCase, async: false
 
-  import Crawler.SnapshotHelpers, only: [assert_link_opens: 3, saved: 2]
+  import Crawler.ManagedSnapshotHelpers,
+    only: [
+      assert_opens: 4,
+      read_resource: 2,
+      ready_export: 1,
+      reference_target: 3,
+      relative_reference: 2,
+      resource_for_url: 2
+    ]
 
-  alias Crawler.Linker
+  alias Crawler.Parser.JsParser
   alias Crawler.Store
   alias Crawler.URL
 
@@ -20,10 +28,10 @@ defmodule Crawler.Snapper.JavascriptContextSnapshotTest do
       name = unquote(name)
       type = unquote(type)
       scope = unique_scope("javascript-context-#{name}")
-      root = tmp(scope)
+      root = Path.join(tmp(scope), "archive")
       page = context.url <> "/modules/" <> name
       body = wrap(@source, type)
-      on_exit(fn -> File.rm_rf(root) end)
+      on_exit(fn -> File.rm_rf(Path.dirname(root)) end)
 
       ReqTestSite.expect_once(context.site, "GET", URI.parse(page).path, fn conn ->
         conn
@@ -56,7 +64,8 @@ defmodule Crawler.Snapper.JavascriptContextSnapshotTest do
                  req_options: context.req_options
                )
 
-      await_idle(opts)
+      export = ready_export(opts)
+      resource = resource_for_url(export, page)
 
       rewritten =
         Enum.reduce(@specifiers, @source, fn specifier, source ->
@@ -65,18 +74,26 @@ defmodule Crawler.Snapper.JavascriptContextSnapshotTest do
           String.replace(
             source,
             ~s|"./#{specifier}.js"|,
-            ~s|"#{Linker.offline_link(page, target)}"|
+            ~s|"#{relative_reference(resource, reference_target(export, resource, target))}"|
           )
         end)
 
       prefix = if type == "text/html", do: <<0xEF, 0xBB, 0xBF>>, else: ""
-      assert File.read!(saved(root, page)) == prefix <> wrap(rewritten, type)
+      actual = read_resource(export, resource)
+      assert actual == prefix <> wrap(rewritten, type)
+      emitted = JsParser.specs(script_source(actual, type), :module)
+      assert length(emitted) == length(targets)
       assert Store.find_processed({page, scope}).body == body
 
       for {target, dependency} <- targets do
-        assert File.read!(saved(root, target)) == dependency
+        target_resource = reference_target(export, resource, target)
+        assert read_resource(export, target_resource) == dependency
         assert Store.find_processed({target, scope}).body == dependency
-        assert_link_opens(root, page, target)
+
+        assert [href] =
+                 Enum.filter(emitted, &(&1 == relative_reference(resource, target_resource)))
+
+        assert_opens(export, resource, target_resource, href)
       end
     end
   end
@@ -94,10 +111,10 @@ defmodule Crawler.Snapper.JavascriptContextSnapshotTest do
       name = unquote(name)
       type = unquote(type)
       scope = unique_scope("javascript-goal-#{name}")
-      root = tmp(scope)
+      root = Path.join(tmp(scope), "archive")
       page = context.url <> "/modules/" <> name
       body = classic_wrap(@classic_source, type)
-      on_exit(fn -> File.rm_rf(root) end)
+      on_exit(fn -> File.rm_rf(Path.dirname(root)) end)
 
       ReqTestSite.expect_once(context.site, "GET", URI.parse(page).path, fn conn ->
         conn
@@ -131,24 +148,46 @@ defmodule Crawler.Snapper.JavascriptContextSnapshotTest do
                  req_options: context.req_options
                )
 
-      await_idle(opts)
+      export = ready_export(opts)
+      resource = resource_for_url(export, page)
 
       rewritten =
         Enum.reduce(targets, @classic_source, fn {name, target, _dependency}, source ->
-          String.replace(source, ~s|"./#{name}.js"|, ~s|"#{Linker.offline_link(page, target)}"|)
+          String.replace(
+            source,
+            ~s|"./#{name}.js"|,
+            ~s|"#{relative_reference(resource, reference_target(export, resource, target))}"|
+          )
         end)
 
       prefix = if type == "text/html", do: <<0xEF, 0xBB, 0xBF>>, else: ""
-      assert File.read!(saved(root, page)) == prefix <> classic_wrap(rewritten, type)
+      actual = read_resource(export, resource)
+      assert actual == prefix <> classic_wrap(rewritten, type)
+      emitted = JsParser.specs(script_source(actual, type), :script)
+      assert length(emitted) == length(targets)
       assert Store.find_processed({page, scope}).body == body
 
       for {_name, target, dependency} <- targets do
-        assert File.read!(saved(root, target)) == dependency
+        target_resource = reference_target(export, resource, target)
+        assert read_resource(export, target_resource) == dependency
         assert Store.find_processed({target, scope}).body == dependency
-        assert_link_opens(root, page, target)
+
+        assert [href] =
+                 Enum.filter(emitted, &(&1 == relative_reference(resource, target_resource)))
+
+        assert_opens(export, resource, target_resource, href)
       end
     end
   end
+
+  defp script_source(body, "text/html") do
+    body
+    |> String.split(">", parts: 2)
+    |> List.last()
+    |> String.replace_suffix("</script>", "")
+  end
+
+  defp script_source(body, "application/javascript"), do: body
 
   defp classic_wrap(source, "text/html"), do: "<script>#{source}</script>"
   defp classic_wrap(source, "application/javascript"), do: source

@@ -16,7 +16,7 @@ defmodule Crawler.Snapper.HtmlDeclarationTest do
     test "#{declaration} ends before its following real anchor regardless of quotes" do
       declaration = unquote(declaration)
       source = declaration <> ~s|<a href="next">real</a>|
-      target = Linker.offline_link(@page, "http://example.com/blog/next")
+      target = "http://example.com/blog/next"
 
       assert source |> HtmlParser.parse(%{}) |> Floki.attribute("href") == ["next"]
       assert rewrite(source, @page) == declaration <> ~s|<a href="#{target}">real</a>|
@@ -47,7 +47,7 @@ defmodule Crawler.Snapper.HtmlDeclarationTest do
 
       cdata = ~s|<svg><![CDATA[x><a href="next">]]></svg>|
       source = prefix <> cdata <> ~s|<a href="next">real</a>|
-      target = Linker.offline_link(@page, "http://example.com/blog/next")
+      target = "http://example.com/blog/next"
 
       assert source |> HtmlParser.parse(%{}) |> Floki.attribute("href") == ["next"]
       assert rewrite(source, @page) == prefix <> cdata <> ~s|<a href="#{target}">real</a>|
@@ -69,7 +69,7 @@ defmodule Crawler.Snapper.HtmlDeclarationTest do
     source = declaration <> ~s|<a href="caf| <> <<0xE9>> <> ~s|">go</a>|
     decoded = Charset.decode(source, %{content_type: "application/xhtml+xml"})
     expected = ~s|<?xml version="1.0" encoding="utf-8"?><a href="café">go</a>|
-    target = Linker.offline_link(@page, "http://example.com/blog/café")
+    target = "http://example.com/blog/café"
 
     assert decoded == expected
     assert decoded |> HtmlParser.parse(%{}) |> Floki.attribute("href") == ["café"]

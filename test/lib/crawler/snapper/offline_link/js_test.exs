@@ -33,7 +33,7 @@ defmodule Crawler.Snapper.OfflineLink.JsTest do
     test "uses actual script type attributes when #{attrs}" do
       attrs = unquote(attrs)
       body = rewrite(~s|<script #{attrs}>import "./shared.js";</script>|, @page)
-      offline = Linker.offline_link(@page, "http://example.com/blog/shared.js")
+      offline = "http://example.com/blog/shared.js"
 
       assert body == ~s|<script #{attrs}>import "#{offline}";</script>|
     end
@@ -42,7 +42,7 @@ defmodule Crawler.Snapper.OfflineLink.JsTest do
   test "uses a missing type, not a type named inside another attribute" do
     attrs = ~s|data-note="type='application/json'"|
     body = rewrite(~s|<script #{attrs}>import("./shared.js");</script>|, @page)
-    offline = Linker.offline_link(@page, "http://example.com/blog/shared.js")
+    offline = "http://example.com/blog/shared.js"
 
     assert body == ~s|<script #{attrs}>import("#{offline}");</script>|
   end
@@ -54,7 +54,7 @@ defmodule Crawler.Snapper.OfflineLink.JsTest do
     """
 
     body = rewrite(html, @page)
-    offline = Linker.offline_link(@page, "http://example.com/blog/shared.js")
+    offline = "http://example.com/blog/shared.js"
 
     assert body =~
              ~s|<script data-type="module" type="application/ld+json">import "./shared.js";</script>|
@@ -199,13 +199,13 @@ defmodule Crawler.Snapper.OfflineLink.JsTest do
       target = "http://example.com/blog/chunk.js"
       app = "http://example.com/blog/app.js"
       js = rewrite(source, app, "application/javascript", "script")
-      js_import = ~s|import("#{Linker.offline_link(app, target)}")|
+      js_import = ~s|import("#{target}")|
 
       assert js == String.replace(source, ~s|import("./chunk.js")|, js_import)
       assert_points(js, app, target)
 
       html = rewrite(~s|<script type="module">#{source}</script>|, @page)
-      html_import = ~s|import("#{Linker.offline_link(@page, target)}")|
+      html_import = ~s|import("#{target}")|
       expected_source = String.replace(source, ~s|import("./chunk.js")|, html_import)
 
       assert html == ~s|<script type="module">#{expected_source}</script>|
@@ -225,7 +225,7 @@ defmodule Crawler.Snapper.OfflineLink.JsTest do
 
     assert js =~ "export { a } from"
     refute js =~ ~s("./lib.js")
-    assert occurrences(js, Linker.offline_link(app, target)) == 2
+    assert occurrences(js, target) == 2
 
     html = ~s|<script type="module">import "./lib.js"; export { a } from "./lib.js";</script>|
     page = rewrite(html, @page)
@@ -234,17 +234,17 @@ defmodule Crawler.Snapper.OfflineLink.JsTest do
     assert page =~ ~s|<script type="module">|
     assert page =~ "export { a } from"
     refute page =~ ~s("./lib.js")
-    assert occurrences(page, Linker.offline_link(@page, page_target)) == 2
+    assert occurrences(page, page_target) == 2
   end
 
-  test "rewrites two forms of one remote specifier" do
+  test "preserves two forms of one already absolute remote specifier" do
     app = "http://example.com/app.js"
     source = ~s|import("https://a.co/a.js");import "https://a.co/a.js";|
     body = rewrite(source, app, "application/javascript", "script")
     {:ok, target} = Crawler.URL.resolve("https://a.co/a.js", app)
 
-    refute body =~ "https://a.co/a.js"
-    assert occurrences(body, Linker.offline_link(app, target)) == 2
+    assert body == source
+    assert occurrences(body, target) == 2
   end
 
   test "rewrites a dynamic import inside a template and keeps concatenation" do
@@ -373,12 +373,12 @@ defmodule Crawler.Snapper.OfflineLink.JsTest do
     target = "http://example.com/blog/real.js"
     app = "http://example.com/blog/app.js"
     js = rewrite(source, app, "application/javascript", "script")
-    js_import = ~s|import("#{Linker.offline_link(app, target)}")|
+    js_import = ~s|import("#{target}")|
     assert js == String.replace(source, ~s|import("./real.js")|, js_import)
     assert_points(js, app, target)
 
     html = rewrite(~s|<script type="module">#{source}</script>|, @page)
-    html_import = ~s|import("#{Linker.offline_link(@page, target)}")|
+    html_import = ~s|import("#{target}")|
     expected = String.replace(source, ~s|import("./real.js")|, html_import)
     assert html == ~s|<script type="module">#{expected}</script>|
     assert_points(html, @page, target)

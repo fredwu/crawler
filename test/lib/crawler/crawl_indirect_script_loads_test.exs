@@ -1,7 +1,7 @@
 defmodule Crawler.CrawlIndirectScriptLoadsTest do
   use Crawler.TestCase, async: false
 
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
   alias Crawler.Store
 
@@ -23,15 +23,20 @@ defmodule Crawler.CrawlIndirectScriptLoadsTest do
   @none %{}
   @secret "Bearer secret"
 
+  setup do
+    Req.Test.set_req_test_to_shared()
+    on_exit(fn -> Req.Test.set_req_test_to_private() end)
+  end
+
   test "new URL bases use the script, the opened page, or the document base" do
     scope = unique_scope("indirect-bases")
-    root = tmp(scope)
+    root = tmp(scope, "archive")
     on_exit(fn -> File.rm_rf(root) end)
 
     page = "https://example.com/dir/page.html"
     script = "https://example.com/js/app.js"
 
-    hits =
+    {hits, export} =
       crawl_routes(
         page,
         [
@@ -80,10 +85,32 @@ defmodule Crawler.CrawlIndirectScriptLoadsTest do
       refute_path(hits, path)
     end
 
-    assert_link_opens(root, script, "https://example.com/js/from-script.js")
-    assert_link_opens(root, script, "https://example.com/dir/from-page.js")
-    assert_link_opens(root, page, "https://example.com/assets/inline-base.js")
-    assert_link_opens(root, page, "https://example.com/dir/inline-page.js")
+    page_resource = resource_for_url(export, page)
+    script_resource = reference_target(export, page_resource, script)
+
+    assert_link_opens(
+      export,
+      script_resource,
+      reference_target(export, script_resource, "https://example.com/js/from-script.js")
+    )
+
+    assert_link_opens(
+      export,
+      script_resource,
+      reference_target(export, script_resource, "https://example.com/dir/from-page.js")
+    )
+
+    assert_link_opens(
+      export,
+      page_resource,
+      reference_target(export, page_resource, "https://example.com/assets/inline-base.js")
+    )
+
+    assert_link_opens(
+      export,
+      page_resource,
+      reference_target(export, page_resource, "https://example.com/dir/inline-page.js")
+    )
   end
 
   test "location is the page that was opened after a redirect" do
@@ -103,14 +130,14 @@ defmodule Crawler.CrawlIndirectScriptLoadsTest do
 
   test "a file named by new URL keeps the page or the worker" do
     scope = unique_scope("indirect-file-context")
-    root = tmp(scope)
+    root = tmp(scope, "archive")
     on_exit(fn -> File.rm_rf(root) end)
 
     page = "https://example.com/dir/page.html"
     chunk = "https://example.com/js/chunk.js"
     side = "https://example.com/js/side.js"
 
-    hits =
+    {hits, export} =
       crawl_routes(
         page,
         [
@@ -135,9 +162,30 @@ defmodule Crawler.CrawlIndirectScriptLoadsTest do
     refute_path(hits, "/dir/from-worker.js")
     refute_path(hits, "/assets/from-worker.js")
     refute_path(hits, "/abs.js")
-    assert_link_opens(root, chunk, "https://example.com/dir/from-page.js")
-    assert_link_opens(root, chunk, "https://example.com/assets/from-base.js")
-    assert_link_opens(root, side, "https://example.com/js/from-worker.js")
+
+    page_resource = resource_for_url(export, page)
+    app = reference_target(export, page_resource, "https://example.com/js/app.js")
+    chunk_resource = reference_target(export, app, chunk)
+    worker = reference_target(export, app, "https://example.com/js/sw.js")
+    side_resource = reference_target(export, worker, side)
+
+    assert_link_opens(
+      export,
+      chunk_resource,
+      reference_target(export, chunk_resource, "https://example.com/dir/from-page.js")
+    )
+
+    assert_link_opens(
+      export,
+      chunk_resource,
+      reference_target(export, chunk_resource, "https://example.com/assets/from-base.js")
+    )
+
+    assert_link_opens(
+      export,
+      side_resource,
+      reference_target(export, side_resource, "https://example.com/js/from-worker.js")
+    )
   end
 
   test "register(new URL) loads a service worker and the scripts it imports" do
@@ -215,7 +263,6 @@ defmodule Crawler.CrawlIndirectScriptLoadsTest do
 
     for url <- [
           "https://www.example.com/dir/mod.js",
-          "https://www.example.com/vue.js",
           "https://www.example.com/dir/local.js",
           "https://www.example.com/assets/based.js",
           "https://www.example.com/js/lib.js",
@@ -229,6 +276,10 @@ defmodule Crawler.CrawlIndirectScriptLoadsTest do
         ] do
       assert_one(hits, url)
     end
+
+    assert [vue, repeated_vue] = requests(hits, "https://www.example.com/vue.js")
+    assert vue == repeated_vue
+    assert vue.cookie == @both
 
     assert_cookie(hits, "https://www.example.com/dir/mod.js", @both)
     assert_cookie(hits, "https://cdn.example.com/mod.js", @none)
@@ -524,15 +575,33 @@ defmodule Crawler.CrawlIndirectScriptLoadsTest do
 
   defp crawl_routes(url, routes, extra \\ []) do
     hits = hits()
-    crawl(url, serve(hits, routes), extra)
-    hits
+    opts = crawl(url, serve(hits, routes), extra)
+    if extra[:save_to], do: {hits, ready_export(opts)}, else: hits
   end
 
   defp serve(hits, routes) do
-    fn request ->
+    name = {__MODULE__, make_ref()}
+
+    Req.Test.stub(name, fn conn ->
+      request =
+        Req.new(
+          url: %URI{
+            scheme: Atom.to_string(conn.scheme),
+            host: conn.host,
+            port: conn.port,
+            path: conn.request_path,
+            query: if(conn.query_string == "", do: nil, else: conn.query_string)
+          },
+          headers: conn.req_headers
+        )
+
       record(hits, request)
-      {request, route_response(request, routes)}
-    end
+      response = route_response(request, routes)
+      conn = %{conn | resp_headers: Req.get_headers_list(response)}
+      Plug.Conn.send_resp(conn, response.status, response.body || "")
+    end)
+
+    [plug: {Req.Test, name}, retry: false]
   end
 
   defp route_response(request, routes) do
@@ -559,7 +628,7 @@ defmodule Crawler.CrawlIndirectScriptLoadsTest do
     end
   end
 
-  defp crawl(url, adapter, extra) do
+  defp crawl(url, req_options, extra) do
     scope = extra[:scope] || unique_scope("indirect-scripts")
     seed_foreign_cookies(scope)
 
@@ -568,6 +637,11 @@ defmodule Crawler.CrawlIndirectScriptLoadsTest do
         [
           store: Store,
           workers: 1,
+          max_body: 1_048_576,
+          max_analysis_bytes: 16 * 1024 * 1024,
+          max_manifest_bytes: 16 * 1024 * 1024,
+          max_css_work: 5_000,
+          max_css_pictures: 1_000,
           scope: scope,
           retries: 0,
           max_depths: 4,
@@ -575,7 +649,7 @@ defmodule Crawler.CrawlIndirectScriptLoadsTest do
           url_filter: AllowAll,
           assets: ["js", "css", "images"],
           user_agent: "Crawler/1.5.0 (test)",
-          req_options: [adapter: adapter, retry: false]
+          req_options: req_options
         ],
         extra
       )

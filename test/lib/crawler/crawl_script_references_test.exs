@@ -1,9 +1,8 @@
 defmodule Crawler.CrawlScriptReferencesTest do
   use Crawler.TestCase, async: false
 
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
-  alias Crawler.Linker
   alias Crawler.Store
 
   @leaf "export {};"
@@ -62,7 +61,7 @@ defmodule Crawler.CrawlScriptReferencesTest do
 
   setup do
     scope = unique_scope("script-files")
-    root = tmp(scope)
+    root = tmp(scope, "archive")
     on_exit(fn -> File.rm_rf(root) end)
     {:ok, scope: scope, root: root}
   end
@@ -81,7 +80,7 @@ defmodule Crawler.CrawlScriptReferencesTest do
     leaf(context.site, "/mapped.js")
     leaf(context.site2, "/react.js")
 
-    crawl(page, context)
+    export = crawl(page, context)
 
     vue = url <> "/assets/vue.js"
     app = url <> "/assets/app.js"
@@ -91,32 +90,60 @@ defmodule Crawler.CrawlScriptReferencesTest do
 
     expected =
       html
-      |> String.replace(~s|from "vue"|, ~s|from "#{offline(page, vue)}"|)
-      |> String.replace(~s|import("vue")|, ~s|import("#{offline(page, vue)}")|, global: false)
-      |> String.replace(~s|import "react"|, ~s|import "#{offline(page, react)}"|, global: false)
-      |> String.replace(~s|import("react")|, ~s|import("#{offline(page, react)}")|, global: false)
-      |> String.replace(~s|import "/js/lib.js"|, ~s|import "#{offline(page, mapped)}"|,
+      |> String.replace(~s|from "vue"|, ~s|from "#{offline(export, page, vue)}"|)
+      |> String.replace(~s|import("vue")|, ~s|import("#{offline(export, page, vue)}")|,
         global: false
       )
-      |> String.replace(~s|import "./foo/../js/lib.js"|, ~s|import "#{offline(page, lib)}"|,
+      |> String.replace(~s|import "react"|, ~s|import "#{offline(export, page, react)}"|,
         global: false
       )
-      |> String.replace(~s|import "./app.js"|, ~s|import "#{offline(page, app)}"|, global: false)
-      |> String.replace(~s|src="vue"|, ~s|src="#{offline(page, bare)}"|, global: false)
-      |> String.replace(~s|<base href="#{url}/assets/">|, "")
+      |> String.replace(~s|import("react")|, ~s|import("#{offline(export, page, react)}")|,
+        global: false
+      )
+      |> String.replace(~s|import "/js/lib.js"|, ~s|import "#{offline(export, page, mapped)}"|,
+        global: false
+      )
+      |> String.replace(
+        ~s|import "./foo/../js/lib.js"|,
+        ~s|import "#{offline(export, page, lib)}"|,
+        global: false
+      )
+      |> String.replace(~s|import "./app.js"|, ~s|import "#{offline(export, page, app)}"|,
+        global: false
+      )
+      |> String.replace(~s|src="vue"|, ~s|src="#{offline(export, page, bare)}"|, global: false)
+      |> String.replace(~s|<base href="#{url}/assets/">|, "<base>")
 
-    assert File.read!(saved(context.root, page)) == <<0xEF, 0xBB, 0xBF>> <> expected
+    assert read_resource(export, resource_for_url(export, page)) ==
+             <<0xEF, 0xBB, 0xBF>> <> expected
+
     assert Store.find_processed({page, context.scope}).body == html
-    assert_link_opens(context.root, page, vue)
-    assert_link_opens(context.root, page, app)
-    assert_link_opens(context.root, page, bare)
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, page),
+      reference_target(export, resource_for_url(export, page), vue)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, page),
+      reference_target(export, resource_for_url(export, page), app)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, page),
+      reference_target(export, resource_for_url(export, page), bare)
+    )
+
     assert_goal(context, vue, :module)
     assert_goal(context, app, :module)
     assert_goal(context, lib, :module)
     assert_goal(context, mapped, :module)
     assert_goal(context, react, :module)
     assert_goal(context, bare, :script)
-    assert_raw(context, vue, @leaf)
+    assert_raw(context, export, vue, @leaf)
 
     refute_stored(context, [
       url <> "/assets/unused.js",
@@ -140,7 +167,10 @@ defmodule Crawler.CrawlScriptReferencesTest do
     leaf(context.site, "/ok.js")
     leaf(context.site, "/also.js")
 
-    crawl(page, context)
+    export = crawl(page, context)
+    source = resource_for_url(export, page)
+    assert_link_opens(export, source, reference_target(export, source, url <> "/ok.js"))
+    assert_link_opens(export, source, reference_target(export, source, url <> "/also.js"))
 
     assert_goal(context, url <> "/ok.js", :module)
     assert_goal(context, url <> "/also.js", :module)
@@ -167,12 +197,18 @@ defmodule Crawler.CrawlScriptReferencesTest do
     """)
 
     leaf(context.site, "/mapped.js")
-    crawl(page, context)
+    export = crawl(page, context)
 
-    href = offline(page, mapped)
-    assert occurrences(File.read!(saved(context.root, page)), href) == 3
-    assert_link_opens(context.root, page, mapped)
-    assert_raw(context, mapped, @leaf)
+    href = offline(export, page, mapped)
+    assert occurrences(read_resource(export, resource_for_url(export, page)), href) == 3
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, page),
+      reference_target(export, resource_for_url(export, page), mapped)
+    )
+
+    assert_raw(context, export, mapped, @leaf)
     refute_stored(context, [url <> "/js/lib.js"])
   end
 
@@ -202,9 +238,9 @@ defmodule Crawler.CrawlScriptReferencesTest do
     leaf(context.site, "/inner.js")
     leaf(context.site, "/doc-vue.js")
 
-    crawl(page, context)
+    export = crawl(page, context)
 
-    body = File.read!(saved(context.root, page))
+    body = read_resource(export, resource_for_url(export, page))
     assert occurrences(body, ~s|import "a"|) == 1
     assert body =~ ~s|import("b")|
     assert body =~ ~s|import "blocked"|
@@ -212,11 +248,39 @@ defmodule Crawler.CrawlScriptReferencesTest do
     assert body =~ ~s|import "only"|
     refute body =~ ~s|import "vue"|
     refute body =~ ~s|import "b"|
-    assert_link_opens(context.root, page, a1)
-    assert_link_opens(context.root, page, b)
-    assert_link_opens(context.root, page, inner)
-    assert_link_opens(context.root, page, vue)
-    assert occurrences(body, offline(page, vue)) == 2
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, page),
+      reference_target(export, resource_for_url(export, page), b)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, page),
+      reference_target(export, resource_for_url(export, page), inner)
+    )
+
+    source = resource_for_url(export, page)
+
+    for url <- [a1, vue] do
+      edges =
+        Enum.filter(
+          export.manifest["references"],
+          &(&1["from"] == source["id"] and &1["url"] == url)
+        )
+
+      assert length(edges) == 2
+      targets = Enum.map(edges, &edge_target(export, source, &1["edge"]))
+      hrefs = targets |> Enum.map(&relative_reference(source, &1)) |> Enum.uniq()
+      assert Enum.sum(Enum.map(hrefs, &occurrences(body, &1))) == 2
+
+      for target <- targets do
+        assert_link_opens(export, source, target)
+        assert read_resource(export, target) == @leaf
+      end
+    end
+
     assert_goal(context, a1, :module)
     assert_goal(context, inner, :module)
 
@@ -289,40 +353,42 @@ defmodule Crawler.CrawlScriptReferencesTest do
     leaf(context.site, "/extra/b.js")
     leaf(context.site, "/lib/b.js")
 
-    crawl(page, context)
+    export = crawl(page, context)
 
-    assert read_js(context, main) == ~s|import "#{offline(main, url <> "/js/app/vue.js")}";|
+    assert read_js(export, main) ==
+             ~s|import "#{offline(export, main, url <> "/js/app/vue.js")}";|
 
-    assert read_js(context, scoped) ==
-             ~s|import "#{offline(scoped, url <> "/assets/js-vue.js")}";\nimport "react";|
+    assert read_js(export, scoped) ==
+             ~s|import "#{offline(export, scoped, url <> "/assets/js-vue.js")}";\nimport "react";|
 
-    assert read_js(context, exact) == ~s|import "#{offline(exact, url <> "/exact-scope.js")}";|
+    assert read_js(export, exact) ==
+             ~s|import "#{offline(export, exact, url <> "/exact-scope.js")}";|
 
-    assert read_js(context, top) ==
+    assert read_js(export, top) ==
              top_source
              |> String.replace(
                ~s|import "vue";|,
-               ~s|import "#{offline(top, url <> "/assets/vue.js")}";|,
+               ~s|import "#{offline(export, top, url <> "/assets/vue.js")}";|,
                global: false
              )
              |> String.replace(
                ~s|import "react";|,
-               ~s|import "#{offline(top, url <> "/react.js")}";|,
+               ~s|import "#{offline(export, top, url <> "/react.js")}";|,
                global: false
              )
              |> String.replace(
                ~s|import "lib/a.js";|,
-               ~s|import "#{offline(top, url <> "/exact-a.js")}";|,
+               ~s|import "#{offline(export, top, url <> "/exact-a.js")}";|,
                global: false
              )
              |> String.replace(
                ~s|import "lib/extra/b.js";|,
-               ~s|import "#{offline(top, url <> "/extra/b.js")}";|,
+               ~s|import "#{offline(export, top, url <> "/extra/b.js")}";|,
                global: false
              )
              |> String.replace(
                ~s|import "lib/b.js";|,
-               ~s|import "#{offline(top, url <> "/lib/b.js")}";|,
+               ~s|import "#{offline(export, top, url <> "/lib/b.js")}";|,
                global: false
              )
 
@@ -330,8 +396,18 @@ defmodule Crawler.CrawlScriptReferencesTest do
     assert_goal(context, scoped, :module)
     assert_goal(context, exact, :module)
     assert_goal(context, top, :module)
-    assert_link_opens(context.root, scoped, url <> "/assets/js-vue.js")
-    assert_link_opens(context.root, top, url <> "/lib/b.js")
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, scoped),
+      reference_target(export, resource_for_url(export, scoped), url <> "/assets/js-vue.js")
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, top),
+      reference_target(export, resource_for_url(export, top), url <> "/lib/b.js")
+    )
 
     refute_stored(context, [
       url <> "/js/js-vue.js",
@@ -403,113 +479,184 @@ defmodule Crawler.CrawlScriptReferencesTest do
     png(context.site, "/root.png", "root")
     png(context.site2, "/x.png", "x")
 
-    crawl(page, context)
+    export = crawl(page, context)
 
-    assert File.read!(saved(context.root, page)) ==
+    assert read_resource(export, resource_for_url(export, page)) ==
              <<0xEF, 0xBB, 0xBF>> <>
                (html
-                |> String.replace(~s|import "vue"|, ~s|import "#{offline(page, vue)}"|,
+                |> String.replace(~s|import "vue"|, ~s|import "#{offline(export, page, vue)}"|,
                   global: false
                 )
                 |> String.replace(
                   ~s|new URL("./pic.png"|,
-                  ~s|new URL("#{offline(page, inline_pic)}"|,
+                  ~s|new URL("#{offline(export, page, inline_pic)}"|,
                   global: false
                 )
                 |> String.replace(
                   ~s|src="/js/app.js?v=2"|,
-                  ~s|src="#{offline(page, script)}"|,
+                  ~s|src="#{offline(export, page, script)}"|,
                   global: false
                 )
-                |> String.replace(~s|<base href="#{url}/assets/">|, ""))
+                |> String.replace(~s|<base href="#{url}/assets/">|, "<base>"))
 
-    assert read_js(context, script) ==
+    assert read_js(export, script) ==
              source
-             |> String.replace(~s|import "vue";|, ~s|import "#{offline(script, vue)}";|,
+             |> String.replace(~s|import "vue";|, ~s|import "#{offline(export, script, vue)}";|,
                global: false
              )
              |> String.replace(
                ~s|new URL("./pic.png"|,
-               ~s|new URL("#{offline(script, script_pic)}"|,
+               ~s|new URL("#{offline(export, script, script_pic)}"|,
                global: false
              )
-             |> String.replace(~s|new URL("../up.png"|, ~s|new URL("#{offline(script, up)}"|,
+             |> String.replace(
+               ~s|new URL("../up.png"|,
+               ~s|new URL("#{offline(export, script, up)}"|,
                global: false
              )
              |> String.replace(
                ~s|new URL("/root.png"|,
-               ~s|new URL("#{offline(script, root)}"|,
+               ~s|new URL("#{offline(export, script, root)}"|,
                global: false
              )
-             |> String.replace(~s|new URL("#{cross}"|, ~s|new URL("#{offline(script, cross)}"|,
+             |> String.replace(
+               ~s|new URL("#{cross}"|,
+               ~s|new URL("#{offline(export, script, cross)}"|,
                global: false
              )
              |> String.replace(
                ~s|new URL("vue"|,
-               ~s|new URL("#{offline(script, relative_vue)}"|,
+               ~s|new URL("#{offline(export, script, relative_vue)}"|,
                global: false
              )
              |> String.replace(
                ~s|new Worker("./worker.js"|,
-               ~s|new Worker("#{offline(script, worker)}"|,
+               ~s|new Worker("#{offline(export, script, worker)}"|,
                global: false
              )
              |> String.replace(
                ~s|new SharedWorker("./shared.js"|,
-               ~s|new SharedWorker("#{offline(script, shared)}"|,
+               ~s|new SharedWorker("#{offline(export, script, shared)}"|,
                global: false
              )
-             |> String.replace(~s|register("/sw.js"|, ~s|register("#{offline(script, sw)}"|,
+             |> String.replace(
+               ~s|register("/sw.js"|,
+               ~s|register("#{offline(export, script, sw)}"|,
                global: false
              )
              |> String.replace(
                ~s|register("./sw-module.js"|,
-               ~s|register("#{offline(script, sw_module)}"|,
+               ~s|register("#{offline(export, script, sw_module)}"|,
                global: false
              )
              |> String.replace(
                ~s|new URL("./mod-worker.js"|,
-               ~s|new URL("#{offline(script, mod_worker)}"|,
+               ~s|new URL("#{offline(export, script, mod_worker)}"|,
                global: false
              )
 
-    assert read_js(context, worker) ==
+    assert read_js(export, worker) ==
              @worker_js
-             |> String.replace(~s|"./dep.js"|, ~s|"#{offline(worker, dep)}"|, global: false)
-             |> String.replace(~s|"./other.js"|, ~s|"#{offline(worker, other)}"|, global: false)
-             |> String.replace(~s|"./lib/dyn.js"|, ~s|"#{offline(worker, dyn)}"|, global: false)
+             |> String.replace(~s|"./dep.js"|, ~s|"#{offline(export, worker, dep)}"|,
+               global: false
+             )
+             |> String.replace(~s|"./other.js"|, ~s|"#{offline(export, worker, other)}"|,
+               global: false
+             )
+             |> String.replace(~s|"./lib/dyn.js"|, ~s|"#{offline(export, worker, dyn)}"|,
+               global: false
+             )
 
-    assert read_js(context, dyn) ==
+    assert read_js(export, dyn) ==
              @dyn_js
-             |> String.replace(~s|"./nested.js"|, ~s|"#{offline(dyn, nested)}"|, global: false)
-             |> String.replace(~s|"./win.js"|, ~s|"#{offline(dyn, win)}"|, global: false)
-             |> String.replace(~s|"./meta.js"|, ~s|"#{offline(dyn, meta)}"|, global: false)
+             |> String.replace(~s|"./nested.js"|, ~s|"#{offline(export, dyn, nested)}"|,
+               global: false
+             )
+             |> String.replace(~s|"./win.js"|, ~s|"#{offline(export, dyn, win)}"|, global: false)
+             |> String.replace(~s|"./meta.js"|, ~s|"#{offline(export, dyn, meta)}"|,
+               global: false
+             )
 
-    assert read_js(context, mod_worker) ==
+    assert read_js(export, mod_worker) ==
              @mod_worker_js
-             |> String.replace(~s|"./inside.js"|, ~s|"#{offline(mod_worker, inside)}"|,
+             |> String.replace(~s|"./inside.js"|, ~s|"#{offline(export, mod_worker, inside)}"|,
                global: false
              )
              |> String.replace(
                ~s|"./from-entry.js"|,
-               ~s|"#{offline(mod_worker, from_entry)}"|,
+               ~s|"#{offline(export, mod_worker, from_entry)}"|,
                global: false
              )
 
-    assert_link_opens(context.root, page, vue)
-    assert_link_opens(context.root, page, inline_pic)
-    assert_link_opens(context.root, script, script_pic)
-    assert_link_opens(context.root, script, worker)
-    assert_link_opens(context.root, script, relative_vue)
-    assert_link_opens(context.root, worker, dep)
-    assert_link_opens(context.root, dyn, nested)
-    assert_link_opens(context.root, dyn, win)
-    assert_link_opens(context.root, dyn, meta)
-    assert_link_opens(context.root, mod_worker, inside)
-    assert_link_opens(context.root, mod_worker, from_entry)
-    assert_raw(context, inline_pic, "inline-pic")
-    assert_raw(context, script_pic, "script-pic")
-    assert_raw(context, cross, "x")
+    assert_link_opens(
+      export,
+      resource_for_url(export, page),
+      reference_target(export, resource_for_url(export, page), vue)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, page),
+      reference_target(export, resource_for_url(export, page), inline_pic)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, script),
+      reference_target(export, resource_for_url(export, script), script_pic)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, script),
+      reference_target(export, resource_for_url(export, script), worker)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, script),
+      reference_target(export, resource_for_url(export, script), relative_vue)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, worker),
+      reference_target(export, resource_for_url(export, worker), dep)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, dyn),
+      reference_target(export, resource_for_url(export, dyn), nested)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, dyn),
+      reference_target(export, resource_for_url(export, dyn), win)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, dyn),
+      reference_target(export, resource_for_url(export, dyn), meta)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, mod_worker),
+      reference_target(export, resource_for_url(export, mod_worker), inside)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, mod_worker),
+      reference_target(export, resource_for_url(export, mod_worker), from_entry)
+    )
+
+    assert_raw(context, export, inline_pic, "inline-pic")
+    assert_raw(context, export, script_pic, "script-pic")
+    assert_raw(context, export, cross, "x")
     assert_goal(context, script, :module)
     assert_goal(context, worker, :script)
     assert_goal(context, shared, :script)
@@ -574,20 +721,27 @@ defmodule Crawler.CrawlScriptReferencesTest do
     leaf(context.site, "/nested.js")
     leaf(context.site, "/fresh.js")
 
-    crawl(page, context)
+    export = crawl(page, context)
 
-    assert read_js(context, early) == ~s|import "added";|
-    assert read_js(context, before) == ~s|import "added";|
-    assert read_js(context, late) == ~s|import "#{offline(late, added)}";|
-    assert read_js(context, after_preload) == ~s|import "#{offline(after_preload, added)}";|
+    assert read_js(export, early) == ~s|import "added";|
+    assert read_js(export, before) == ~s|import "added";|
+    assert read_js(export, late) == ~s|import "#{offline(export, late, added)}";|
 
-    assert read_js(context, classic) ==
-             ~s|import("#{offline(classic, added)}");\nimport "stays";|
+    assert read_js(export, after_preload) ==
+             ~s|import "#{offline(export, after_preload, added)}";|
 
-    assert read_js(context, after_js) ==
-             ~s|import "#{offline(after_js, added)}";\nimport "#{offline(after_js, fresh)}";|
+    assert read_js(export, classic) ==
+             ~s|import("#{offline(export, classic, added)}");\nimport "stays";|
 
-    assert read_js(context, added) == ~s|import "#{offline(added, nested)}";|
+    assert read_js(export, after_js) ==
+             ~s|import "#{offline(export, after_js, added)}";\nimport "#{offline(export, after_js, fresh)}";|
+
+    added_resource = reference_target(export, resource_for_url(export, late), added)
+    nested_resource = reference_target(export, added_resource, nested)
+
+    assert read_resource(export, added_resource) ==
+             ~s|import "#{relative_reference(added_resource, nested_resource)}";|
+
     assert_goal(context, early, :module)
     assert_goal(context, before, :module)
     assert_goal(context, late, :module)
@@ -596,11 +750,37 @@ defmodule Crawler.CrawlScriptReferencesTest do
     assert_goal(context, added, :module)
     assert_goal(context, nested, :module)
     assert_goal(context, fresh, :module)
-    assert_link_opens(context.root, page, early)
-    assert_link_opens(context.root, page, late)
-    assert_link_opens(context.root, late, added)
-    assert_link_opens(context.root, added, nested)
-    assert_link_opens(context.root, after_js, fresh)
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, page),
+      reference_target(export, resource_for_url(export, page), early)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, page),
+      reference_target(export, resource_for_url(export, page), late)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, late),
+      reference_target(export, resource_for_url(export, late), added)
+    )
+
+    assert_link_opens(
+      export,
+      added_resource,
+      nested_resource
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, after_js),
+      reference_target(export, resource_for_url(export, after_js), fresh)
+    )
+
     refute_stored(context, [url <> "/replaced.js", url <> "/stays"])
   end
 
@@ -626,12 +806,24 @@ defmodule Crawler.CrawlScriptReferencesTest do
     leaf(context.site, "/cdn/more.js")
     leaf(context.site, "/cdn/next.js")
 
-    crawl(page, context)
+    export = crawl(page, context)
+    worker_resource = reference_target(export, resource_for_url(export, page), requested)
 
-    assert_link_opens(context.root, page, requested)
-    assert_link_opens(context.root, requested, dep)
-    assert_link_opens(context.root, requested, next)
-    assert_link_opens(context.root, dep, more)
+    assert_link_opens(
+      export,
+      resource_for_url(export, page),
+      reference_target(export, resource_for_url(export, page), requested)
+    )
+
+    assert_link_opens(export, worker_resource, reference_target(export, worker_resource, dep))
+    assert_link_opens(export, worker_resource, reference_target(export, worker_resource, next))
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, dep),
+      reference_target(export, resource_for_url(export, dep), more)
+    )
+
     assert Store.find_processed({requested, context.scope}).opts.worker_base == landed
     assert Store.find_processed({requested, context.scope}).opts.referrer_url == landed
     assert Store.find_processed({dep, context.scope}).opts.worker_base == landed
@@ -657,7 +849,13 @@ defmodule Crawler.CrawlScriptReferencesTest do
     <script type="module">import "./inline.js";</script>
     """)
 
-    crawl(page, context, assets: ["css"])
+    export = crawl(page, context, assets: ["css"])
+
+    refute Enum.any?(
+             export.manifest["resources"],
+             &(&1["url"] in [url <> "/kept.js", url <> "/inline.js"])
+           )
+
     refute_stored(context, [url <> "/kept.js", url <> "/inline.js"])
   end
 
@@ -712,7 +910,10 @@ defmodule Crawler.CrawlScriptReferencesTest do
         Keyword.merge(
           [
             scope: context.scope,
-            workers: 4,
+            workers: 1,
+            max_body: 1_048_576,
+            max_analysis_bytes: 16_000_000,
+            max_manifest_bytes: 16 * 1024 * 1024,
             max_depths: 4,
             retries: 0,
             assets: ["js"],
@@ -724,8 +925,7 @@ defmodule Crawler.CrawlScriptReferencesTest do
         )
       )
 
-    wait(8_000, fn -> refute Crawler.running?(opts) end)
-    opts
+    ready_export(opts)
   end
 
   defp html(site, path, body), do: respond(site, path, "text/html", body)
@@ -749,17 +949,20 @@ defmodule Crawler.CrawlScriptReferencesTest do
     end)
   end
 
-  defp offline(from, to), do: Linker.offline_link(from, to)
+  defp offline(export, from, to) do
+    source = resource_for_url(export, from)
+    relative_reference(source, reference_target(export, source, to))
+  end
 
-  defp read_js(context, url) do
-    body = File.read!(saved(context.root, url))
+  defp read_js(export, url) do
+    body = read_resource(export, resource_for_url(export, url))
     refute String.starts_with?(body, <<0xEF, 0xBB, 0xBF>>)
     body
   end
 
-  defp assert_raw(context, url, body) do
+  defp assert_raw(context, export, url, body) do
     assert Store.find_processed({url, context.scope}).body == body
-    assert File.read!(saved(context.root, url)) == body
+    assert read_resource(export, resource_for_url(export, url)) == body
   end
 
   defp assert_goal(context, url, goal) do

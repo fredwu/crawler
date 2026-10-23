@@ -1,9 +1,8 @@
 defmodule Crawler.CrawlHTMLAttributeEligibilityTest do
   use Crawler.TestCase, async: false
 
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
-  alias Crawler.Linker
   alias Crawler.Store
 
   test "fetches active image candidates once and preserves ignored matching attributes offline",
@@ -13,7 +12,8 @@ defmodule Crawler.CrawlHTMLAttributeEligibilityTest do
          req_options: req_options
        } do
     scope = unique_scope("html-attribute-eligibility")
-    root = tmp(scope)
+    root = Path.join(tmp(), scope <> "-#{Base.encode16(:crypto.strong_rand_bytes(6))}")
+    on_exit(fn -> File.rm_rf(root) end)
     page = url <> "/index.html"
 
     ignored =
@@ -30,8 +30,6 @@ defmodule Crawler.CrawlHTMLAttributeEligibilityTest do
         ~s|<source srcset="shared.png 1x">| <>
         ~s|<link rel="alternate&#9;PRELOAD" as="IM&#65;GE" imagesrcset="shared.png&#32;1x">| <>
         ~s|<meta http-equiv="ReFrEsH" content="0; next.html">|
-
-    on_exit(fn -> File.rm_rf(root) end)
 
     ReqTestSite.expect_once(site, "GET", "/index.html", fn conn ->
       conn
@@ -55,6 +53,10 @@ defmodule Crawler.CrawlHTMLAttributeEligibilityTest do
       start_crawl(page,
         scope: scope,
         workers: 2,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
         retries: 0,
         max_depths: 2,
         assets: ["images"],
@@ -63,26 +65,43 @@ defmodule Crawler.CrawlHTMLAttributeEligibilityTest do
         req_options: req_options
       )
 
-    wait(2_000, fn -> refute Crawler.running?(opts) end)
-    image = Linker.offline_link(page, url <> "/shared.png")
-    next = Linker.offline_link(page, url <> "/next.html")
+    export = ready_export(opts)
+    source_resource = resource_for_url(export, page)
+
+    [image, candidate, source_candidate, preload, next] =
+      for index <- 0..4, do: edge_target(export, source_resource, index)
+
+    image_href = relative_reference(source_resource, image)
+    candidate_href = relative_reference(source_resource, candidate)
+    source_href = relative_reference(source_resource, source_candidate)
+    preload_href = relative_reference(source_resource, preload)
+    next_href = relative_reference(source_resource, next)
 
     expected =
       ignored <>
-        ~s|<img src="#{image}" srcset="#{image} 1x">| <>
-        ~s|<source srcset="#{image} 1x">| <>
-        ~s|<link rel="alternate&#9;PRELOAD" as="IM&#65;GE" imagesrcset="#{image}&#32;1x">| <>
-        ~s|<meta http-equiv="ReFrEsH" content="0; #{next}">|
+        ~s|<img src="#{image_href}" srcset="#{candidate_href} 1x">| <>
+        ~s|<source srcset="#{source_href} 1x">| <>
+        ~s|<link rel="alternate&#9;PRELOAD" as="IM&#65;GE" imagesrcset="#{preload_href}&#32;1x">| <>
+        ~s|<meta http-equiv="ReFrEsH" content="0; #{next_href}">|
 
-    assert File.read!(saved(root, page)) == <<0xEF, 0xBB, 0xBF>> <> expected
+    assert read_resource(export, source_resource) == <<0xEF, 0xBB, 0xBF>> <> expected
     refute Store.find_processed({url <> "/ignored.png", scope})
 
-    for path <- ["shared.png", "next.html"] do
-      target = url <> "/" <> path
-      assert Store.find_processed({target, scope})
-      assert_link_opens(root, page, target)
+    for {target, href} <- [
+          {image, image_href},
+          {candidate, candidate_href},
+          {source_candidate, source_href},
+          {preload, preload_href}
+        ] do
+      assert target["url"] == url <> "/shared.png"
+      assert Store.find_processed({target["url"], scope})
+      assert read_resource(export, target) == "IMAGE"
+      assert_opens(export, source_resource, target, href)
     end
 
-    assert File.read!(saved(root, url <> "/shared.png")) == "IMAGE"
+    assert next["url"] == url <> "/next.html"
+    assert Store.find_processed({next["url"], scope})
+    assert read_resource(export, next) == <<0xEF, 0xBB, 0xBF>> <> "NEXT"
+    assert_opens(export, source_resource, next, next_href)
   end
 end

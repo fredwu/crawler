@@ -125,30 +125,86 @@ defmodule Crawler.HTTP.BodyTest do
     assert {_request, %{body: "ok"}} = Body.finish({request, response})
   end
 
+  test "preset identity bodies obey the cap before iodata is flattened" do
+    for body <- ["12345", ["12", [~c"34", "5"]]] do
+      assert {_request, %BodyTooLarge{max_body: 4}} = preset(body, nil, 4)
+    end
+
+    assert {_request, %{body: "1234"}} = preset(["12", [~c"34"]], "identity", 4)
+    assert {_request, %{body: ""}} = preset([], nil, 0)
+    assert {_request, %BodyTooLarge{max_body: 0}} = preset([0], nil, 0)
+  end
+
+  test "preset encoded bodies use the same bounded decoder as streamed bodies" do
+    body = "a complete page"
+
+    for {encoded, encoding} <- [
+          {:zlib.gzip(body), "gzip"},
+          {deflate(body), "deflate"},
+          {deflate(:zlib.gzip(body)), "gzip, deflate"}
+        ] do
+      assert {_request, %{body: ^body}} = preset(encoded, encoding, 1000)
+      assert {_request, %{body: ^body}} = preset([encoded], encoding, 1000)
+    end
+  end
+
+  test "preset decompression rejects oversized and incomplete output" do
+    gzip = :zlib.gzip(:binary.copy(<<0>>, 200_000))
+    truncated = binary_part(gzip, 0, byte_size(gzip) - 5)
+
+    assert {_request, %BodyTooLarge{max_body: 1000}} = preset([gzip], "gzip", 1000)
+
+    assert {_request, %UnsupportedEncoding{encoding: "gzip"}} =
+             preset(truncated, "gzip", 300_000)
+  end
+
+  test "preset decoding closes every inflate stream on success and failure" do
+    gzip = :zlib.gzip(:zlib.gzip(:binary.copy(<<0>>, 200_000)))
+
+    for max <- [1000, 300_000] do
+      assert trace_closes(fn -> preset(gzip, "gzip, gzip", max) end) == 2
+    end
+
+    assert trace_closes(fn -> preset("invalid gzip", "gzip", 1000) end) == 1
+  end
+
+  test "streamed iodata obeys the identity and decoded cap" do
+    assert decode(["12", [~c"34"]], nil, 4) == "1234"
+
+    assert {_request, %BodyTooLarge{max_body: 4}} = finish(["12", ~c"345"], nil, 4)
+
+    assert {_request, %BodyTooLarge{max_body: 4}} =
+             finish([:zlib.gzip("12345")], "gzip", 4)
+  end
+
   # StreamHeadersTest traces this same global pattern. :global.trans/2
   # reads {ResourceId, LockRequesterId}. A shared requester id grants the
   # lock to every caller, so this process has to be the requester.
   defp trace_overflow(gzip) do
+    trace_closes(fn ->
+      Body.stream({:data, gzip}, {request(1_000), response("gzip, gzip")})
+    end)
+  end
+
+  defp trace_closes(fun) do
     :global.trans({:crawler_zlib_close_trace, self()}, fn ->
       :erlang.trace_pattern({:zlib, :close, 1}, true, [])
 
       try do
-        count_overflow(gzip)
+        count_closes(fun)
       after
         :erlang.trace_pattern({:zlib, :close, 1}, false, [])
       end
     end)
   end
 
-  defp count_overflow(gzip) do
+  defp count_closes(fun) do
     parent = self()
 
     pid =
       spawn(fn ->
         :erlang.trace(self(), true, [:call, {:tracer, parent}])
-        request = request(1_000)
-        response = response("gzip, gzip")
-        Body.stream({:data, gzip}, {request, response})
+        fun.()
         send(parent, :done)
       end)
 
@@ -198,6 +254,10 @@ defmodule Crawler.HTTP.BodyTest do
       end
 
     Body.finish({request, response})
+  end
+
+  defp preset(data, encoding, max) do
+    Body.finish({request(max), %{response(encoding) | body: data}})
   end
 
   defp request(max) do

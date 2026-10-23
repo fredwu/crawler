@@ -1,6 +1,7 @@
 defmodule Crawler.HTMLSpans do
   @moduledoc false
 
+  alias Crawler.Analysis.Budget
   alias Crawler.HTMLSpans.Context
   alias Crawler.HTMLSpans.Markup
   alias Crawler.HTMLSpans.ScriptData
@@ -11,6 +12,8 @@ defmodule Crawler.HTMLSpans do
   @entity ~r/&#(?:[xX][0-9a-fA-F]+|[0-9]+);?|&[A-Za-z][A-Za-z0-9]*;?/
 
   def tags(body, opts \\ []), do: collect(body, 0, [], opts, [])
+
+  def tags_result(body, opts, budget), do: collect_result(body, 0, [], opts, [], budget)
 
   def parser_source(body) do
     edits =
@@ -57,83 +60,165 @@ defmodule Crawler.HTMLSpans do
   def css_xml_stylesheets(_body), do: []
 
   defp collect(body, offset, acc, opts, context) do
-    case next_tag(body, offset, opts, context) do
-      nil -> Enum.reverse(acc)
-      {tag, next, context} -> collect(body, next, [tag | acc], opts, context)
+    {:ok, tags, _budget} = collect_result(body, offset, acc, opts, context, Budget.unlimited())
+    tags
+  end
+
+  @doc """
+  Reduces canonical tags without retaining their scanner records.
+
+  The callback receives a borrowed tag and returns `{:cont, acc, budget}`,
+  `{:halt, acc, budget}`, or an error. It must charge any retained projections
+  separately. Tag and attribute storage is released after the callback; live
+  scanner context remains charged until it closes or the reduction ends.
+  """
+  def reduce_tags_result(body, opts, budget, acc, fun) do
+    reduce_tags(body, 0, opts, [], budget, acc, fun, :borrow, 0)
+  end
+
+  defp collect_result(body, offset, acc, opts, context, budget) do
+    collect = fn tag, tags, budget -> {:cont, [tag | tags], budget} end
+
+    with {:ok, acc, budget} <-
+           reduce_tags(body, offset, opts, context, budget, acc, collect, :retain, 0) do
+      scratch = Budget.cost(:list_cell, length(acc))
+
+      with {:ok, budget} <- Budget.reserve(budget, scratch) do
+        tags = Enum.reverse(acc)
+        with {:ok, budget} <- Budget.release(budget, scratch), do: {:ok, tags, budget}
+      end
     end
   end
 
-  defp next_tag(body, offset, opts, context) do
-    case Markup.next(body, offset, Context.foreign?(context)) do
-      {start, length, kind} ->
-        source = binary_part(body, start, length)
-        consumed = start + length
-        tail = remaining(body, consumed)
+  defp reduce_tags(body, offset, opts, context, budget, acc, fun, mode, context_bytes) do
+    before = budget.retained
 
-        case tag(source, start, opts) do
-          nil ->
-            non_tag(body, {start, length, kind}, opts, context)
+    case next_tag(body, offset, opts, context, budget) do
+      {:ok, nil, budget} ->
+        with {:ok, budget, _context_bytes} <-
+               release_tag(mode, budget.retained - before, context_bytes, [], budget),
+             do: {:ok, acc, budget}
 
-          tag ->
-            namespace = Context.namespace(tag, context)
-            {content, skip} = content_span(tail, tag, consumed, namespace)
+      {:ok, {tag, next, context}, budget} ->
+        allocated = budget.retained - before
 
-            tag =
-              Map.merge(tag, %{
-                content_span: content,
-                namespace: namespace,
-                in_template?: Context.in_template?(context),
-                in_shadow_root?: Context.in_shadow_root?(context)
-              })
+        case fun.(tag, acc, budget) do
+          {:cont, acc, budget} ->
+            with {:ok, budget, context_bytes} <-
+                   release_tag(mode, allocated, context_bytes, context, budget) do
+              reduce_tags(body, next, opts, context, budget, acc, fun, mode, context_bytes)
+            end
 
-            {tag, consumed + skip, Context.advance(tag, namespace, context)}
+          {:halt, acc, budget} ->
+            with {:ok, budget, _context_bytes} <-
+                   release_tag(mode, allocated, context_bytes, [], budget),
+                 do: {:ok, acc, budget}
+
+          {:error, _reason} = error ->
+            error
         end
 
-      nil ->
-        nil
+      {:error, _reason} = error ->
+        error
     end
   end
 
-  defp non_tag(body, {start, length, kind}, opts, context) do
+  defp release_tag(:retain, _allocated, _context_bytes, _context, budget),
+    do: {:ok, budget, 0}
+
+  defp release_tag(:borrow, allocated, context_bytes, context, budget) do
+    next_context_bytes =
+      Enum.reduce(context, 0, fn node, bytes ->
+        bytes + Budget.cost(:context) + Budget.cost(:binary) + byte_size(node.name)
+      end)
+
+    with {:ok, budget} <- Budget.refund(budget, allocated + context_bytes - next_context_bytes),
+         do: {:ok, budget, next_context_bytes}
+  end
+
+  defp next_tag(body, offset, opts, context, budget) do
+    project = fn source, attribute, name_span, budget ->
+      project_attribute(source, attribute, 0, opts, {:tag, name_span}, budget)
+    end
+
+    case Markup.next_result(body, offset, Context.foreign?(context), project, budget) do
+      {:ok, {start, length, :tag, attributes}, budget} ->
+        source = binary_part(body, start, length)
+        consumed = start + length
+
+        with {:ok, budget} <- Budget.reserve(budget, Budget.cost(:tag, 2)),
+             {:ok, tag, budget} <- tag(source, start, opts, attributes, budget),
+             {:ok, budget} <- Budget.charge(budget, Budget.cost(:context)) do
+          namespace = Context.namespace(tag, context)
+          {content, skip} = content_span(remaining(body, consumed), tag, consumed, namespace)
+
+          tag =
+            Map.merge(tag, %{
+              content_span: content,
+              namespace: namespace,
+              in_template?: Context.in_template?(context),
+              in_shadow_root?: Context.in_shadow_root?(context)
+            })
+
+          next_context = Context.advance(tag, namespace, context)
+          tag = Map.delete(tag, :context_attributes)
+
+          with {:ok, budget} <- Budget.release(budget, Budget.cost(:tag, 2)),
+               do: {:ok, {tag, consumed + skip, next_context}, budget}
+        end
+
+      {:ok, {start, length, kind, _attributes}, budget} ->
+        non_tag(body, {start, length, kind}, opts, context, budget)
+
+      {:ok, nil, budget} ->
+        {:ok, nil, budget}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp non_tag(body, {start, length, kind}, opts, context, budget) do
     consumed = declaration_end(body, start, length, kind)
 
     cond do
       kind == :declaration and Keyword.get(opts, :declarations, false) ->
-        {%{
-           declaration?: true,
-           span: {start, consumed - start},
-           in_template?: Context.in_template?(context)
-         }, consumed, context}
+        with {:ok, budget} <- Budget.charge(budget, Budget.cost(:tag), facts: 1),
+             do:
+               {:ok,
+                {%{
+                   declaration?: true,
+                   span: {start, consumed - start},
+                   in_template?: Context.in_template?(context)
+                 }, consumed, context}, budget}
 
       kind == :comment and Keyword.get(opts, :comments, false) ->
-        {%{comment?: true, span: {start, length}}, consumed, context}
+        with {:ok, budget} <- Budget.charge(budget, Budget.cost(:tag), facts: 1),
+             do: {:ok, {%{comment?: true, span: {start, length}}, consumed, context}, budget}
 
       true ->
-        next_tag(body, consumed, opts, context)
+        next_tag(body, consumed, opts, context, budget)
     end
   end
 
-  defp tag(source, start, opts) do
-    case Regex.run(@name, source, capture: :all_but_first) do
-      [closing, name] ->
-        %{
-          name: String.downcase(name, :ascii),
-          closing?: closing == "/",
-          source: source,
-          span: {start, byte_size(source)},
-          self_closing?: self_closing?(source),
-          attributes:
-            if(Keyword.get(opts, :attributes, true), do: attributes(source, start), else: [])
-        }
+  defp tag(source, start, opts, attributes, budget) do
+    [{_closing_at, closing_length}, {name_start, name_length}] =
+      Regex.run(@name, source, capture: :all_but_first, return: :index)
 
-      nil ->
-        nil
+    with {:ok, name, budget} <- downcase_result(source, {name_start, name_length}, budget) do
+      {:ok,
+       %{
+         name: name,
+         closing?: closing_length != 0,
+         source: source,
+         span: {start, byte_size(source)},
+         self_closing?:
+           String.ends_with?(source, "/>") and
+             not Enum.any?(attributes, & &1.terminal_slash?),
+         attributes: if(Keyword.get(opts, :attributes, true), do: attributes, else: []),
+         context_attributes: attributes
+       }, budget}
     end
-  end
-
-  defp self_closing?(source) do
-    String.ends_with?(source, "/>") and
-      not Enum.any?(attributes(source, 0, decode: false), & &1.terminal_slash?)
   end
 
   defp content_span(body, %{closing?: false, name: name}, offset, :html)
@@ -167,59 +252,179 @@ defmodule Crawler.HTMLSpans do
   end
 
   def attributes(source, offset \\ 0, opts \\ []) do
-    source
-    |> Markup.attributes()
-    |> Enum.map(fn %{span: span, name_span: name, value_span: value_span} ->
+    {:ok, attributes, _budget} = attributes_result(source, offset, opts, Budget.unlimited())
+    attributes
+  end
+
+  def attributes_result(source, offset, opts, budget) do
+    project = fn body, attribute, _finish, budget ->
+      project_attribute(body, attribute, offset, opts, :attributes, budget)
+    end
+
+    Markup.attributes_result(source, project, budget)
+  end
+
+  defp project_attribute(
+         source,
+         %{span: span, name_span: name_span, value_span: value_span},
+         offset,
+         opts,
+         mode,
+         budget
+       ) do
+    length = if value_span, do: elem(value_span, 1), else: 0
+
+    with {:ok, name, budget} <- downcase_result(source, name_span, budget),
+         {:ok, budget} <- Budget.charge(budget, Budget.cost(:binary) + min(length, 64)) do
       value = if value_span, do: slice(source, value_span), else: ""
 
-      %{
-        name: source |> slice(name) |> String.downcase(:ascii),
-        value: value,
-        decoded: if(Keyword.get(opts, :decode, true), do: decode(value), else: value),
-        span: shift(span, offset),
-        value_span: if(value_span, do: shift(value_span, offset)),
-        terminal_slash?: terminal_slash?(source, value_span, value)
-      }
-    end)
+      decode? =
+        case mode do
+          {:tag, name_span} ->
+            Keyword.get(opts, :attributes, true) or
+              (name == "encoding" and annotation_xml?(source, name_span) and String.valid?(value))
+
+          :attributes ->
+            Keyword.get(opts, :decode, true)
+        end
+
+      with {:ok, decoded, budget} <- attribute_decode(value, decode?, budget) do
+        {:ok,
+         %{
+           name: name,
+           value: value,
+           decoded: decoded,
+           span: shift(span, offset),
+           value_span: if(value_span, do: shift(value_span, offset)),
+           terminal_slash?: terminal_slash?(source, value_span, value, mode)
+         }, budget}
+      end
+    end
   end
 
-  defp terminal_slash?(source, {start, length}, value) do
-    start + length == byte_size(source) - 1 and String.ends_with?(value, "/") and
-      :binary.at(source, start - 1) not in [?", ?']
+  defp annotation_xml?(source, {_start, 14} = span),
+    do: source |> slice(span) |> String.downcase(:ascii) == "annotation-xml"
+
+  defp annotation_xml?(_source, _span), do: false
+
+  defp attribute_decode(value, true, budget), do: decode_result(value, budget)
+  defp attribute_decode(value, false, budget), do: {:ok, value, budget}
+
+  defp terminal_slash?(source, {start, length}, value, mode) do
+    finish = start + length
+
+    terminal? =
+      if is_tuple(mode),
+        do: finish < byte_size(source) and :binary.at(source, finish) == ?>,
+        else: finish == byte_size(source) - 1
+
+    terminal? and String.ends_with?(value, "/") and :binary.at(source, start - 1) not in [?", ?']
   end
 
-  defp terminal_slash?(_source, _span, _value), do: false
+  defp terminal_slash?(_source, _span, _value, _mode), do: false
+
+  defp downcase_result(source, {_start, length} = span, budget) do
+    reservation = Budget.cost(:binary) + length * 33
+
+    with {:ok, budget} <- Budget.reserve(budget, reservation) do
+      result = source |> slice(span) |> String.downcase(:ascii)
+
+      with {:ok, budget} <-
+             Budget.settle(budget, reservation, Budget.cost(:binary) + byte_size(result)),
+           do: {:ok, result, budget}
+    end
+  end
 
   def decode(value) do
-    source = "<i value=\"" <> String.replace(value, "\"", "&quot;") <> "\"></i>"
-    {:ok, [{"i", [{"value", decoded}], _children}]} = Floki.parse_fragment(source)
+    {:ok, decoded, _budget} = decode_result(value, Budget.unlimited())
     decoded
   end
 
+  def decode_result(value, budget) do
+    reservation = 2048 + byte_size(value) * 160
+
+    with {:ok, budget} <- Budget.reserve(budget, reservation) do
+      source = "<i value=\"" <> String.replace(value, "\"", "&quot;") <> "\"></i>"
+      {:ok, [{"i", [{"value", decoded}], _children}]} = Floki.parse_fragment(source)
+
+      with {:ok, budget} <-
+             Budget.settle(budget, reservation, Budget.cost(:binary) + byte_size(decoded)),
+           do: {:ok, decoded, budget}
+    end
+  end
+
   def decode_with_spans(value) do
-    entities = Regex.scan(@entity, value, return: :index)
+    {:ok, result, _budget} = decode_with_spans_result(value, Budget.unlimited())
+    result
+  end
 
-    {parts, segments, source_at, decoded_at} =
-      Enum.reduce(entities, {[], [], 0, 0}, fn [{start, length}], acc ->
-        {parts, segments, _source_at, decoded_at} = literal_segment(value, start, acc)
-        entity = binary_part(value, start, length)
-        after_entity = start + length
+  def decode_with_spans_result(value, budget),
+    do: decode_segments(value, {[], [], 0, 0}, budget)
 
-        next =
-          if after_entity < byte_size(value),
-            do: String.first(remaining(value, after_entity)),
-            else: ""
+  defp decode_segments(value, {parts, segments, source_at, decoded_at} = acc, budget) do
+    case Regex.run(@entity, value, offset: source_at, return: :index) do
+      [{start, length}] ->
+        with {:ok, {parts, segments, _source_at, decoded_at}, budget} <-
+               literal_segment_result(value, start, acc, budget),
+             {:ok, budget} <- Budget.charge(budget, Budget.cost(:segment), facts: 1) do
+          after_entity = start + length
+          lookahead_reservation = 256 + 32 * (byte_size(value) - after_entity) + length
 
-        decoded = decode(entity <> next)
-        decoded = binary_part(decoded, 0, byte_size(decoded) - byte_size(next))
-        segment = {decoded_at, byte_size(decoded), start, length}
-        {[parts, decoded], [segment | segments], after_entity, decoded_at + byte_size(decoded)}
-      end)
+          with {:ok, budget} <- Budget.reserve(budget, lookahead_reservation) do
+            entity = binary_part(value, start, length)
 
-    {parts, segments, _, _} =
-      literal_segment(value, byte_size(value), {parts, segments, source_at, decoded_at})
+            next =
+              if after_entity < byte_size(value),
+                do: String.first(remaining(value, after_entity)),
+                else: ""
 
-    {IO.iodata_to_binary(parts), Enum.reverse(segments)}
+            with {:ok, decoded, budget} <- decode_result(entity <> next, budget),
+                 {:ok, budget} <- Budget.release(budget, lookahead_reservation) do
+              decoded = binary_part(decoded, 0, byte_size(decoded) - byte_size(next))
+              segment = {decoded_at, byte_size(decoded), start, length}
+
+              decode_segments(
+                value,
+                {[parts, decoded], [segment | segments], after_entity,
+                 decoded_at + byte_size(decoded)},
+                budget
+              )
+            end
+          end
+        end
+
+      nil ->
+        with {:ok, {parts, segments, _, _}, budget} <-
+               literal_segment_result(
+                 value,
+                 byte_size(value),
+                 {parts, segments, source_at, decoded_at},
+                 budget
+               ) do
+          reservation =
+            Budget.cost(:binary) + byte_size(value) * 3 +
+              Budget.cost(:list_cell, length(segments))
+
+          with {:ok, budget} <- Budget.reserve(budget, reservation) do
+            decoded = IO.iodata_to_binary(parts)
+            result = {decoded, Enum.reverse(segments)}
+
+            with {:ok, budget} <-
+                   Budget.settle(budget, reservation, Budget.cost(:binary) + byte_size(decoded)),
+                 do: {:ok, result, budget}
+          end
+        end
+    end
+  end
+
+  defp literal_segment_result(value, finish, {parts, segments, source_at, decoded_at}, budget) do
+    length = finish - source_at
+
+    with {:ok, budget} <- Budget.charge(budget, Budget.cost(:segment) + min(length, 64), facts: 1) do
+      literal = binary_part(value, source_at, length)
+      segment = {decoded_at, length, source_at, length}
+      {:ok, {[parts, literal], [segment | segments], finish, decoded_at + length}, budget}
+    end
   end
 
   def source_span(_segments, {0, 0}), do: {0, 0}
@@ -232,13 +437,6 @@ defmodule Crawler.HTMLSpans do
     first = source_offset(segments, start, :start)
     last = source_offset(segments, start + length, :finish)
     {first, last - first}
-  end
-
-  defp literal_segment(value, finish, {parts, segments, source_at, decoded_at}) do
-    length = finish - source_at
-    literal = binary_part(value, source_at, length)
-    segment = {decoded_at, length, source_at, length}
-    {[parts, literal], [segment | segments], finish, decoded_at + length}
   end
 
   defp source_offset(segments, offset, boundary) do
@@ -255,6 +453,60 @@ defmodule Crawler.HTMLSpans do
       true -> source_at + source_length
     end
   end
+
+  @doc false
+  def active_attribute_name(attr, :html), do: attr.name
+
+  def active_attribute_name(attr, :xml) do
+    cond do
+      Map.get(attr, :namespace_uri) == nil and lowercase_ascii?(attr.name) ->
+        attr.name
+
+      Map.get(attr, :namespace_uri) == "http://www.w3.org/1999/xlink" and attr.name == "href" ->
+        "xlink:href"
+
+      true ->
+        nil
+    end
+  end
+
+  @doc false
+  def active_attributes(tag, kind \\ nil) do
+    kind = active_attribute_mode(tag, kind)
+
+    if kind == :html do
+      Enum.uniq_by(tag.attributes, & &1.name)
+    else
+      Enum.flat_map(tag.attributes, &active_xml_attribute/1)
+    end
+  end
+
+  defp active_xml_attribute(attr) do
+    case active_attribute_name(attr, :xml) do
+      nil -> []
+      name when name == attr.name -> [attr]
+      name -> [%{attr | name: name}]
+    end
+  end
+
+  @doc false
+  def active_attribute(tag, name, kind \\ nil) do
+    kind = active_attribute_mode(tag, kind)
+    Enum.find(tag.attributes, &(active_attribute_name(&1, kind) == name))
+  end
+
+  defp active_attribute_mode(tag, kind) do
+    cond do
+      tag[:header?] -> :html
+      kind != nil -> kind
+      Map.has_key?(tag, :namespace_uri) -> :xml
+      true -> :html
+    end
+  end
+
+  defp lowercase_ascii?(<<>>), do: true
+  defp lowercase_ascii?(<<char, _rest::binary>>) when char in ?A..?Z, do: false
+  defp lowercase_ascii?(<<_char, rest::binary>>), do: lowercase_ascii?(rest)
 
   def attribute(tag, name) do
     Enum.find(tag.attributes, &(&1.name == name))
@@ -353,7 +605,7 @@ defmodule Crawler.HTMLSpans do
     with true <- start + 2 <= size,
          "<?" <- binary_part(body, start, 2),
          {name, offset} <- take_pi_name(body, start + 2, size, <<>>),
-         true <- String.downcase(name, :ascii) == "xml-stylesheet",
+         true <- byte_size(name) == 14 and String.downcase(name, :ascii) == "xml-stylesheet",
          {kind, finish} when kind in [:pi, :gt, :open] <- pi_boundary(body, offset, size, nil) do
       {kind, finish}
     else
@@ -390,7 +642,7 @@ defmodule Crawler.HTMLSpans do
   defp xml_stylesheet(<<"<?", _rest::binary>> = source) do
     {name, offset} = take_pi_name(source, 2, byte_size(source), <<>>)
 
-    if String.downcase(name, :ascii) == "xml-stylesheet",
+    if byte_size(name) == 14 and String.downcase(name, :ascii) == "xml-stylesheet",
       do: read_pseudo_attributes(source, offset, %{}),
       else: nil
   end
@@ -460,14 +712,17 @@ defmodule Crawler.HTMLSpans do
 
   defp read_pseudo_value(_source, _offset, _name), do: :error
 
-  defp take_pi_name(_source, offset, size, acc) when offset >= size, do: {acc, offset}
+  defp take_pi_name(source, offset, size, <<>>) do
+    finish = pi_name_end(source, offset, size)
+    {binary_part(source, offset, finish - offset), finish}
+  end
 
-  defp take_pi_name(source, offset, size, acc) do
-    char = :binary.at(source, offset)
+  defp pi_name_end(_source, offset, size) when offset >= size, do: offset
 
-    if char in @pi_stop,
-      do: {acc, offset},
-      else: take_pi_name(source, offset + 1, size, <<acc::binary, char>>)
+  defp pi_name_end(source, offset, size) do
+    if :binary.at(source, offset) in @pi_stop,
+      do: offset,
+      else: pi_name_end(source, offset + 1, size)
   end
 
   defp skip_pi_space(source, offset) when offset >= byte_size(source), do: offset

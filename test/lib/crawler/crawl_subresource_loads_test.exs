@@ -2,7 +2,7 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
   use Crawler.TestCase, async: false
 
   import Plug.Conn
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
   alias Crawler.Store
 
@@ -21,21 +21,26 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
     expect_bytes(context, "/also.png", "image/png", "also")
 
     {opts, root} = run(page, context, assets: ["images"])
-    saved = File.read!(saved(root, page))
 
-    assert Store.find_processed({context.url <> "/go.png", opts.scope})
-    assert Store.find_processed({context.url <> "/also.png", opts.scope})
-    refute Store.find({context.url <> "/nope.png", opts.scope})
-    refute Store.find({context.url <> "/also-nope.png", opts.scope})
-    assert_points(saved, page, context.url <> "/go.png", root)
-    assert_points(saved, page, context.url <> "/also.png", root)
-    assert saved =~ ~s|src="/nope.png"|
-    assert saved =~ ~s|src="/also-nope.png"|
+    try do
+      saved = read_resource(root, resource_for_url(root, page))
+
+      assert Store.find_processed({context.url <> "/go.png", opts.scope})
+      assert Store.find_processed({context.url <> "/also.png", opts.scope})
+      refute Store.find({context.url <> "/nope.png", opts.scope})
+      refute Store.find({context.url <> "/also-nope.png", opts.scope})
+      assert_points(saved, page, context.url <> "/go.png", root)
+      assert_points(saved, page, context.url <> "/also.png", root)
+      assert saved =~ ~s|src="/nope.png"|
+      assert saved =~ ~s|src="/also-nope.png"|
+    after
+      Crawler.stop(opts)
+    end
 
     quiet = context.url <> "/buttons-off"
     expect_html(context, "/buttons-off", html)
     {quiet_opts, quiet_root} = run(quiet, context, assets: [])
-    quiet_saved = File.read!(saved(quiet_root, quiet))
+    quiet_saved = read_resource(quiet_root, resource_for_url(quiet_root, quiet))
 
     for path <- ["/go.png", "/also.png", "/nope.png", "/also-nope.png"] do
       refute Store.find({context.url <> path, quiet_opts.scope})
@@ -65,17 +70,22 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
     expect_bytes(context, "/preload.mp4", "video/mp4", "preload-video")
 
     {opts, root} = run(page, context, assets: ["images"])
-    saved = File.read!(saved(root, page))
 
-    for path <- ["/clip.mp3", "/film.mp4", "/poster.jpg", "/preload.mp3", "/preload.mp4"] do
-      assert Store.find_processed({context.url <> path, opts.scope})
-      assert_points(saved, page, context.url <> path, root)
+    try do
+      saved = read_resource(root, resource_for_url(root, page))
+
+      for path <- ["/clip.mp3", "/film.mp4", "/poster.jpg", "/preload.mp3", "/preload.mp4"] do
+        assert Store.find_processed({context.url <> path, opts.scope})
+        assert_points(saved, page, context.url <> path, root)
+      end
+    after
+      Crawler.stop(opts)
     end
 
     quiet = context.url <> "/media-off"
     expect_html(context, "/media-off", html)
     {quiet_opts, quiet_root} = run(quiet, context, assets: [])
-    quiet_saved = File.read!(saved(quiet_root, quiet))
+    quiet_saved = read_resource(quiet_root, resource_for_url(quiet_root, quiet))
 
     for path <- ["/clip.mp3", "/film.mp4", "/poster.jpg", "/preload.mp3", "/preload.mp4"] do
       refute Store.find({context.url <> path, quiet_opts.scope})
@@ -109,8 +119,22 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
       refute Store.find({context.url <> path, opts.scope})
     end
 
-    assert_points(File.read!(saved(root, page)), page, context.url <> "/next", root)
-    assert_link_opens(root, context.url <> "/next", context.url <> "/child")
+    assert_points(
+      read_resource(root, resource_for_url(root, page)),
+      page,
+      context.url <> "/next",
+      root
+    )
+
+    assert_link_opens(
+      root,
+      resource_for_url(root, context.url <> "/next"),
+      reference_target(
+        root,
+        resource_for_url(root, context.url <> "/next"),
+        context.url <> "/child"
+      )
+    )
   end
 
   test "a worker preload is a classic script when scripts are on", context do
@@ -139,8 +163,8 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
     expect_bytes(context, "/dyn.js", "application/javascript", "export {}\n")
 
     {opts, root} = run(page, context, assets: ["js"])
-    saved = File.read!(saved(root, page))
-    worker = File.read!(saved(root, script))
+    saved = read_resource(root, resource_for_url(root, page))
+    worker = read_resource(root, reference_target(root, resource_for_url(root, page), script))
 
     for path <- ["/next", "/child", "/notes.html", "/w.js", "/dyn.js"] do
       assert Store.find_processed({context.url <> path, opts.scope})
@@ -149,9 +173,21 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
     refute Store.find({context.url <> "/nope.js", opts.scope})
     refute Store.find({context.url <> "/secret", opts.scope})
     assert_points(saved, page, script, root)
-    assert_link_opens(root, script, context.url <> "/dyn.js")
+
+    assert_link_opens(
+      root,
+      reference_target(root, resource_for_url(root, page), script),
+      reference_target(
+        root,
+        reference_target(root, resource_for_url(root, page), script),
+        context.url <> "/dyn.js"
+      )
+    )
+
     assert worker =~ ~s|import "./nope.js"|
-    assert File.read!(saved(root, notes)) =~ ~s|href="/secret"|
+
+    assert read_resource(root, reference_target(root, resource_for_url(root, page), notes)) =~
+             ~s|href="/secret"|
   end
 
   test "paint and audio worklets are modules and ignore the page import map", context do
@@ -182,8 +218,8 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
     expect_bytes(context, "/other.js", "application/javascript", "export {}\n")
 
     {opts, root} = run(page, context, assets: ["js"])
-    saved = File.read!(saved(root, page))
-    paint_body = File.read!(saved(root, paint))
+    saved = read_resource(root, resource_for_url(root, page))
+    paint_body = read_resource(root, reference_target(root, resource_for_url(root, page), paint))
 
     for path <- ["/paint.js", "/local.js", "/proc.js", "/other.js"] do
       assert Store.find_processed({context.url <> path, opts.scope})
@@ -199,8 +235,26 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
     assert saved =~ ~s|fetch("./nope.png")|
     assert saved =~ ~s|import.meta.resolve("./nope.png")|
     assert paint_body =~ ~s|import "vue"|
-    assert_link_opens(root, paint, context.url <> "/local.js")
-    assert_link_opens(root, proc, context.url <> "/other.js")
+
+    assert_link_opens(
+      root,
+      reference_target(root, resource_for_url(root, page), paint),
+      reference_target(
+        root,
+        reference_target(root, resource_for_url(root, page), paint),
+        context.url <> "/local.js"
+      )
+    )
+
+    assert_link_opens(
+      root,
+      reference_target(root, resource_for_url(root, page), proc),
+      reference_target(
+        root,
+        reference_target(root, resource_for_url(root, page), proc),
+        context.url <> "/other.js"
+      )
+    )
   end
 
   test "a worklet preload is a module only when scripts are on", context do
@@ -233,19 +287,46 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
 
     {opts, root} = run(page, context, assets: ["js"])
 
-    for path <- ["/paint.js", "/local.js", "/heard.js", "/heard-dep.js"] do
-      assert Store.find_processed({context.url <> path, opts.scope})
-    end
+    try do
+      for path <- ["/paint.js", "/local.js", "/heard.js", "/heard-dep.js"] do
+        assert Store.find_processed({context.url <> path, opts.scope})
+      end
 
-    refute Store.find({context.url <> "/vue.js", opts.scope})
-    assert_link_opens(root, context.url <> "/paint.js", context.url <> "/local.js")
-    assert_link_opens(root, context.url <> "/heard.js", context.url <> "/heard-dep.js")
-    assert File.read!(saved(root, context.url <> "/paint.js")) =~ ~s|import "vue"|
+      refute Store.find({context.url <> "/vue.js", opts.scope})
+
+      assert_link_opens(
+        root,
+        reference_target(root, resource_for_url(root, page), context.url <> "/paint.js"),
+        reference_target(
+          root,
+          reference_target(root, resource_for_url(root, page), context.url <> "/paint.js"),
+          context.url <> "/local.js"
+        )
+      )
+
+      assert_link_opens(
+        root,
+        reference_target(root, resource_for_url(root, page), context.url <> "/heard.js"),
+        reference_target(
+          root,
+          reference_target(root, resource_for_url(root, page), context.url <> "/heard.js"),
+          context.url <> "/heard-dep.js"
+        )
+      )
+
+      assert read_resource(
+               root,
+               reference_target(root, resource_for_url(root, page), context.url <> "/paint.js")
+             ) =~
+               ~s|import "vue"|
+    after
+      Crawler.stop(opts)
+    end
 
     quiet = context.url <> "/worklet-preload-off"
     expect_html(context, "/worklet-preload-off", html)
     {quiet_opts, quiet_root} = run(quiet, context, assets: [])
-    quiet_saved = File.read!(saved(quiet_root, quiet))
+    quiet_saved = read_resource(quiet_root, resource_for_url(quiet_root, quiet))
 
     for path <- ["/paint.js", "/local.js", "/heard.js", "/heard-dep.js", "/vue.js"] do
       refute Store.find({context.url <> path, quiet_opts.scope})
@@ -275,7 +356,7 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
     expect_bytes(context, "/set.png", "image/png", "set")
 
     {opts, root} = run(page, context, assets: ["css"])
-    saved = File.read!(saved(root, sheet))
+    saved = read_resource(root, reference_target(root, resource_for_url(root, page), sheet))
 
     for path <- ["/app.css", "/wide.png", "/left.png", "/already.png", "/set.png"] do
       assert Store.find_processed({context.url <> path, opts.scope})
@@ -305,20 +386,25 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
     expect_bytes(context, "/splash.png", "image/png", "splash")
 
     {opts, root} = run(page, context, assets: ["images"])
-    saved = File.read!(saved(root, page))
 
-    for path <- ["/touch.png", "/precomposed.png", "/splash.png"] do
-      assert Store.find_processed({context.url <> path, opts.scope})
-      assert_points(saved, page, context.url <> path, root)
+    try do
+      saved = read_resource(root, resource_for_url(root, page))
+
+      for path <- ["/touch.png", "/precomposed.png", "/splash.png"] do
+        assert Store.find_processed({context.url <> path, opts.scope})
+        assert_points(saved, page, context.url <> path, root)
+      end
+
+      refute Store.find({context.url <> "/canon", opts.scope})
+      assert saved =~ ~s|href="/canon"|
+    after
+      Crawler.stop(opts)
     end
-
-    refute Store.find({context.url <> "/canon", opts.scope})
-    assert saved =~ ~s|href="/canon"|
 
     quiet = context.url <> "/icons-off"
     expect_html(context, "/icons-off", html)
     {quiet_opts, quiet_root} = run(quiet, context, assets: [])
-    quiet_saved = File.read!(saved(quiet_root, quiet))
+    quiet_saved = read_resource(quiet_root, resource_for_url(quiet_root, quiet))
 
     for path <- ["/touch.png", "/precomposed.png", "/splash.png", "/canon"] do
       refute Store.find({context.url <> path, quiet_opts.scope})
@@ -363,8 +449,8 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
     expect_bytes(context, "/dir/sprite.svg", "image/svg+xml", "<svg></svg>")
 
     {opts, root} = run(page, context, assets: ["css"])
-    saved = File.read!(saved(root, page))
-    css_saved = File.read!(saved(root, sheet))
+    saved = read_resource(root, resource_for_url(root, page))
+    css_saved = read_resource(root, reference_target(root, resource_for_url(root, page), sheet))
 
     for path <- ["/dir/app.css", "/dir/paint.png", "/dir/sprite.svg"] do
       assert Store.find_processed({context.url <> path, opts.scope})
@@ -372,7 +458,11 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
 
     assert_points(saved, page, context.url <> "/dir/paint.png", root)
     assert_points(saved, page, context.url <> "/dir/sprite.svg", root, "#icon")
-    assert_points(css_saved, sheet, context.url <> "/dir/paint.png", root)
+    stylesheet = reference_target(root, resource_for_url(root, page), sheet)
+    paint = reference_target(root, stylesheet, context.url <> "/dir/paint.png")
+    [_, href] = Regex.run(~r/background: url\("([^"]+)"\)/, css_saved)
+    assert_opens(root, stylesheet, paint, href)
+    assert read_resource(root, paint) == "paint"
 
     assert saved =~ "url(#blur)"
     assert saved =~ ~s|style="filter: url(#blur)"|
@@ -412,27 +502,32 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
     expect_bytes(context, "/dir/sprite.svg", "image/svg+xml", "<svg></svg>")
 
     {opts, root} = run(page, context, assets: ["images"])
-    saved = File.read!(saved(root, page))
 
-    for path <- ["/dir/photo.png", "/dir/photo-2x.png", "/dir/real.png", "/dir/sprite.svg"] do
-      assert Store.find_processed({context.url <> path, opts.scope})
-      assert_points(saved, page, context.url <> path, root)
+    try do
+      saved = read_resource(root, resource_for_url(root, page))
+
+      for path <- ["/dir/photo.png", "/dir/photo-2x.png", "/dir/real.png", "/dir/sprite.svg"] do
+        assert Store.find_processed({context.url <> path, opts.scope})
+        assert_points(saved, page, context.url <> path, root)
+      end
+
+      refute Store.find({context.url <> "/dir/nope.png", opts.scope})
+      refute Store.find({context.url <> "/dir/not-a-picture.svg", opts.scope})
+      assert saved =~ "<image"
+      assert saved =~ ~s|href="not-a-picture.svg"|
+      assert saved =~ ~s|src="nope.png"|
+      refute saved =~ ~s|src="photo.png"|
+      refute saved =~ ~s|srcset="photo-2x.png 2x"|
+      refute saved =~ ~s|src="real.png"|
+      refute saved =~ ~s|href="sprite.svg"|
+    after
+      Crawler.stop(opts)
     end
-
-    refute Store.find({context.url <> "/dir/nope.png", opts.scope})
-    refute Store.find({context.url <> "/dir/not-a-picture.svg", opts.scope})
-    assert saved =~ "<image"
-    assert saved =~ ~s|href="not-a-picture.svg"|
-    assert saved =~ ~s|src="nope.png"|
-    refute saved =~ ~s|src="photo.png"|
-    refute saved =~ ~s|srcset="photo-2x.png 2x"|
-    refute saved =~ ~s|src="real.png"|
-    refute saved =~ ~s|href="sprite.svg"|
 
     quiet = context.url <> "/dir/pictures-off"
     expect_html(context, "/dir/pictures-off", html)
     {quiet_opts, quiet_root} = run(quiet, context, assets: [])
-    quiet_saved = File.read!(saved(quiet_root, quiet))
+    quiet_saved = read_resource(quiet_root, resource_for_url(quiet_root, quiet))
 
     for path <- [
           "/dir/photo.png",
@@ -472,27 +567,32 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
     end
 
     {opts, root} = run(page, context, assets: ["images"])
-    saved = File.read!(saved(root, page))
 
-    for name <- names do
-      url = context.url <> "/blog/" <> name
-      assert Store.find_processed({url, opts.scope})
-      assert_points(saved, page, url, root)
-      refute saved =~ ~s|background="#{name}"|
-    end
+    try do
+      saved = read_resource(root, resource_for_url(root, page))
 
-    assert saved =~ ~s|bgcolor="red"|
-    assert saved =~ ~s|alink="navy"|
-    assert saved =~ ~s|background="nope.png"|
+      for name <- names do
+        url = context.url <> "/blog/" <> name
+        assert Store.find_processed({url, opts.scope})
+        assert_points(saved, page, url, root)
+        refute saved =~ ~s|background="#{name}"|
+      end
 
-    for path <- ["/blog/red", "/blog/navy", "/blog/nope.png", "/red", "/navy", "/nope.png"] do
-      refute Store.find({context.url <> path, opts.scope})
+      assert saved =~ ~s|bgcolor="red"|
+      assert saved =~ ~s|alink="navy"|
+      assert saved =~ ~s|background="nope.png"|
+
+      for path <- ["/blog/red", "/blog/navy", "/blog/nope.png", "/red", "/navy", "/nope.png"] do
+        refute Store.find({context.url <> path, opts.scope})
+      end
+    after
+      Crawler.stop(opts)
     end
 
     quiet = context.url <> "/plain"
     expect_html(context, "/plain", html)
     {quiet_opts, quiet_root} = run(quiet, context, assets: [])
-    quiet_saved = File.read!(saved(quiet_root, quiet))
+    quiet_saved = read_resource(quiet_root, resource_for_url(quiet_root, quiet))
 
     for name <- names do
       refute Store.find({context.url <> "/blog/" <> name, quiet_opts.scope})
@@ -505,7 +605,7 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
 
   defp run(page, context, extra) do
     scope = extra[:scope] || unique_scope("subresource")
-    root = tmp(scope)
+    root = Path.join(tmp(), scope <> "-#{Base.encode16(:crypto.strong_rand_bytes(6))}")
     on_exit(fn -> File.rm_rf(root) end)
 
     {:ok, opts} =
@@ -515,6 +615,11 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
           [
             scope: scope,
             workers: 1,
+            max_body: 1_048_576,
+            max_analysis_bytes: 16_000_000,
+            max_css_work: 5_000,
+            max_css_pictures: 1_000,
+            max_manifest_bytes: 16_777_216,
             retries: 0,
             max_depths: 4,
             store: Store,
@@ -526,8 +631,7 @@ defmodule Crawler.CrawlSubresourceLoadsTest do
       )
 
     on_exit(fn -> Crawler.stop(opts) end)
-    wait(5_000, fn -> refute Crawler.running?(opts) end)
-    {opts, root}
+    {opts, ready_export(opts)}
   end
 
   defp expect_html(context, path, body) do

@@ -151,13 +151,13 @@ defmodule Crawler.FilterErrorTest do
     assert_failed_settlement(opts, requests)
   end
 
-  test "a duplicate asset keeps the already-seen warning when the filter errors", %{opts: opts} do
+  test "an unbound Registry asset cannot suppress a new interpretation's filter", %{opts: opts} do
     assert {:ok, _} = Store.add({opts.url, opts.scope})
     opts = %{opts | html_tag: "img", filter_result: {:error, :filter_unavailable}}
 
-    assert {:warn, message} = Fetcher.fetch(opts)
-    assert message =~ "not_fetched_yet?"
-    refute_received {:filtered, _, _}
+    assert {:error, :filter_unavailable} = Fetcher.fetch(opts)
+    assert_received {:filtered, url, {:error, :filter_unavailable}}
+    assert url == opts.url
   end
 
   test "a duplicate page link still returns a url filter error", %{opts: opts} do
@@ -174,7 +174,7 @@ defmodule Crawler.FilterErrorTest do
     opts = %{opts | html_tag: "a", filter_result: {:ok, false}}
 
     assert {:warn, message} = Fetcher.fetch(opts)
-    assert message =~ "not_fetched_yet?"
+    assert message =~ "perform_url_filtering"
     refute Store.find_processed({opts.url, opts.scope})
   end
 

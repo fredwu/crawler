@@ -1,28 +1,99 @@
 defmodule Crawler.Parser.ScriptReferences do
-  @moduledoc false
+  @moduledoc """
+  Discovers script references from shared lexical facts.
 
+  The former rewrite/2 API has been removed. Bind occurrences and render through
+  Crawler.Analysis to select explicit local targets or safe online destinations.
+  """
+
+  alias Crawler.Analysis.Budget
   alias Crawler.ImportMap
-  alias Crawler.Linker
   alias Crawler.Parser.JsParser
   alias Crawler.Parser.JsParser.Calls
   alias Crawler.Parser.SourceMap
   alias Crawler.URL
 
   def list(source, opts) when is_binary(source) do
-    goal = goal(opts)
-    map = active_map(opts)
-    {notes, sources} = map_additions(source, opts)
-
-    spanned =
-      (import_refs(source, goal, map, opts) ++ call_refs(source, goal, opts) ++ notes)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq_by(& &1.at)
-      |> Enum.sort_by(& &1.at)
-
-    spanned ++ sources
+    list(source, opts, JsParser.Scanner.scan(source, goal(opts)))
   end
 
   def list(_source, _opts), do: []
+
+  def list(source, opts, scan) when is_binary(source) do
+    {:ok, refs, _budget} =
+      reduce(source, opts, scan, Budget.unlimited(), [], fn ref, refs, budget ->
+        {:ok, [ref | refs], budget}
+      end)
+
+    Enum.reverse(refs)
+  end
+
+  def reduce(source, opts, scan, budget, acc, emit) when is_binary(source) do
+    source_goal = goal(opts)
+
+    with {:ok, budget} <- Budget.charge(budget, Budget.cost(:context)),
+         {:ok, note, budget} <- source_map_note(source, opts, scan, budget),
+         {:ok, imports, budget} <-
+           JsParser.specifier_spans_result(source, source_goal, scan, budget),
+         {:ok, calls, budget} <- Calls.spans_result(source, source_goal, scan, budget) do
+      scratch =
+        (length(imports) + length(calls) + 1) *
+          (Budget.cost(:token) + Budget.cost(:map_entry) + Budget.cost(:list_cell, 6))
+
+      with {:ok, budget} <- Budget.reserve(budget, scratch) do
+        map = active_map(opts)
+
+        descriptors =
+          Enum.flat_map(imports, fn
+            {:static, _, _, _} when source_goal != :module -> []
+            {_kind, at, len, spec} -> [{at, {:import, at, len, spec}}]
+          end) ++ Enum.map(calls, fn call -> {elem(call, 1), {:call, call}} end)
+
+        descriptors =
+          if note do
+            at = if is_integer(note.at), do: note.at, else: byte_size(source)
+            descriptors ++ [{at, {:note, note}}]
+          else
+            descriptors
+          end
+
+        descriptors =
+          descriptors |> Enum.uniq_by(&elem(&1, 0)) |> Enum.sort_by(&elem(&1, 0))
+
+        result =
+          Enum.reduce_while(descriptors, {:ok, acc, budget}, fn {_at, descriptor},
+                                                                {:ok, acc, budget} ->
+            with {:ok, ref, budget} <- reference_result(descriptor, source, opts, map, budget),
+                 {:ok, acc, budget} <- emit_ref(ref, acc, budget, emit) do
+              {:cont, {:ok, acc, budget}}
+            else
+              error -> {:halt, error}
+            end
+          end)
+
+        with {:ok, acc, budget} <- result,
+             {:ok, acc, budget} <- map_sources(note, opts, budget, acc, emit),
+             {:ok, budget} <- Budget.release(budget, scratch) do
+          {:ok, acc, budget}
+        end
+      end
+    end
+  end
+
+  defp source_map_note(source, opts, scan, budget) do
+    case Map.fetch(opts, :source_map_note) do
+      {:ok, note} -> {:ok, note, budget}
+      :error -> SourceMap.javascript_result(source, opts, scan, budget)
+    end
+  end
+
+  defp emit_ref(nil, acc, budget, _emit), do: {:ok, acc, budget}
+  defp emit_ref(ref, acc, budget, emit), do: emit.(ref, acc, budget)
+
+  defp map_sources(nil, _opts, budget, acc, _emit), do: {:ok, acc, budget}
+
+  defp map_sources(note, opts, budget, acc, emit),
+    do: SourceMap.reduce_data_source_refs(note, opts, budget, acc, emit)
 
   def elements(source, opts) when is_binary(source) do
     opts = Map.put(opts, :link_html_tag, "link")
@@ -31,91 +102,77 @@ defmodule Crawler.Parser.ScriptReferences do
 
   def elements(_source, _opts), do: []
 
-  def rewrite(source, opts) when is_binary(source) do
-    page = opts[:url] || opts[:referrer_url]
-    newline? = String.ends_with?(source, "\n")
-
-    source
-    |> list(opts)
-    |> Enum.filter(&is_integer(&1[:at]))
-    |> Enum.sort_by(& &1.at, :desc)
-    |> Enum.reduce(source, fn ref, source ->
-      replace(source, ref, replacement(ref, page, opts, newline?))
-    end)
-  end
-
-  def rewrite(source, _opts), do: source
-
-  defp map_additions(source, opts) do
-    case SourceMap.javascript(source, opts) do
-      nil -> {[], []}
-      note -> {[SourceMap.annotation_ref(note, source)], SourceMap.data_source_refs(note, opts)}
+  defp reference_result({:note, note}, source, _opts, _map, budget) do
+    with {:ok, _hypothetical} <- Budget.count(budget, :occurrences) do
+      SourceMap.annotation_ref_result(note, source, budget)
     end
   end
 
-  defp replacement(%{map_note: note}, page, opts, newline?) do
-    SourceMap.rewrite_text(note, page, opts, :javascript, newline?)
-  end
-
-  defp replacement(ref, page, _opts, _newline?), do: offline(page, ref)
-
-  defp import_refs(source, goal, map, opts) do
-    source
-    |> JsParser.specifier_spans(goal)
-    |> Enum.filter(fn
-      {:static, _at, _len, _spec} -> goal == :module
-      {:dynamic, _at, _len, _spec} -> true
-    end)
-    |> Enum.map(fn {_kind, at, len, spec} -> import_ref(at, len, spec, map, opts) end)
-  end
-
-  defp call_refs(source, goal, opts) do
-    source
-    |> Calls.spans(goal)
-    |> Enum.map(&call_ref(&1, opts))
-  end
-
-  defp import_ref(at, len, spec, map, opts) do
-    case ImportMap.resolve(spec, map, script_base(opts)) do
-      {:ok, url} -> module_import_ref(at, len, spec, url, opts)
-      _other -> nil
+  defp reference_result({:import, at, len, spec}, _source, opts, map, budget) do
+    with {:ok, budget} <- reference_capacity(budget),
+         result <- ImportMap.resolve_result(spec, map, script_base(opts), budget) do
+      case result do
+        {:ok, url, budget} -> {:ok, module_import_ref(at, len, spec, url, opts), budget}
+        {:blocked, budget} -> {:ok, nil, budget}
+        {:unmapped, budget} -> {:ok, nil, budget}
+        error -> error
+      end
     end
   end
 
-  defp call_ref({:url, at, len, spec}, opts) do
-    case fetch(spec, script_base(opts)) do
-      nil -> nil
-      url -> file_ref(at, len, spec, url, opts)
-    end
+  defp reference_result({:call, call}, _source, opts, _map, budget),
+    do: call_ref_result(call, opts, budget)
+
+  defp call_ref_result({:url, at, len, spec}, opts, budget) do
+    resolve_call(spec, script_base(opts), budget, &file_ref(at, len, spec, &1, opts))
   end
 
-  defp call_ref({:import, at, len, spec, base}, opts) do
-    case fetch(spec, reference_base(base, opts)) do
-      nil -> nil
-      url -> module_import_ref(at, len, spec, url, opts)
-    end
+  defp call_ref_result({:import, at, len, spec, base}, opts, budget) do
+    resolve_call(
+      spec,
+      reference_base(base, opts),
+      budget,
+      &module_import_ref(at, len, spec, &1, opts)
+    )
   end
 
-  defp call_ref({:worker, at, len, spec, goal, base, credentials}, opts) do
-    case fetch(spec, reference_base(base, opts)) do
-      nil -> nil
-      url -> worker_ref(at, len, spec, url, goal, credentials, opts)
-    end
+  defp call_ref_result({:worker, at, len, spec, source_goal, base, credentials}, opts, budget) do
+    resolve_call(
+      spec,
+      reference_base(base, opts),
+      budget,
+      &worker_ref(at, len, spec, &1, source_goal, credentials, opts)
+    )
   end
 
-  defp call_ref({:scripts, at, len, spec}, opts) do
-    call_ref({:scripts, at, len, spec, :entry}, opts)
-  end
+  defp call_ref_result({:scripts, at, len, spec}, opts, budget),
+    do: call_ref_result({:scripts, at, len, spec, :entry}, opts, budget)
 
-  defp call_ref({:scripts, at, len, spec, base}, %{worker_base: worker} = opts)
+  defp call_ref_result({:scripts, at, len, spec, base}, %{worker_base: worker} = opts, budget)
        when is_binary(worker) do
-    case fetch(spec, reference_base(base, opts)) do
-      nil -> nil
-      url -> script_ref(at, len, spec, url, opts)
+    resolve_call(spec, reference_base(base, opts), budget, &script_ref(at, len, spec, &1, opts))
+  end
+
+  defp call_ref_result(_call, _opts, budget), do: {:ok, nil, budget}
+
+  defp resolve_call(_spec, base, budget, _build) when not is_binary(base),
+    do: {:ok, nil, budget}
+
+  defp resolve_call(spec, base, budget, build) do
+    with {:ok, budget} <- reference_capacity(budget) do
+      case URL.resolve_result(spec, base, budget) do
+        {:ok, url, budget} -> {:ok, build.(url), budget}
+        {:skip, budget} -> {:ok, nil, budget}
+        error -> error
+      end
     end
   end
 
-  defp call_ref(_call, _opts), do: nil
+  defp reference_capacity(budget) do
+    with {:ok, _hypothetical} <- Budget.count(budget, :occurrences) do
+      Budget.charge(budget, Budget.cost(:context) + Budget.cost(:token), facts: 1)
+    end
+  end
 
   defp module_import_ref(at, len, spec, url, opts) do
     %{
@@ -194,16 +251,6 @@ defmodule Crawler.Parser.ScriptReferences do
   defp active_map(%{worker_base: base}) when is_binary(base), do: ImportMap.empty()
   defp active_map(opts), do: opts[:import_map] || ImportMap.empty()
 
-  # A missing base means the call could not be evaluated, even for an absolute URL.
-  defp fetch(_spec, base) when not is_binary(base), do: nil
-
-  defp fetch(spec, base) do
-    case URL.resolve(spec, base) do
-      {:ok, url} -> url
-      :skip -> nil
-    end
-  end
-
   defp script_base(opts), do: opts[:referrer_url] || opts[:document_base] || opts[:url] || ""
   defp api_base(opts), do: opts[:worker_base] || opts[:document_base] || script_base(opts)
 
@@ -231,27 +278,5 @@ defmodule Crawler.Parser.ScriptReferences do
   # is same-origin. Workers and importScripts set that mode on their own refs.
   defp import_credentials(opts) do
     if goal(opts) == :module, do: opts[:credentials] || :same_origin, else: :same_origin
-  end
-
-  defp offline(nil, ref), do: ref.url
-
-  defp offline(page, ref) do
-    Linker.offline_link(page, with_fragment(ref.url, ref.spec))
-  end
-
-  defp with_fragment(url, spec) do
-    case String.split(spec, "#", parts: 2) do
-      [_base, fragment] ->
-        if String.contains?(url, "#"), do: url, else: url <> "#" <> fragment
-
-      _split ->
-        url
-    end
-  end
-
-  defp replace(source, ref, replacement) do
-    head = binary_part(source, 0, ref.at)
-    tail = binary_part(source, ref.at + ref.len, byte_size(source) - ref.at - ref.len)
-    head <> replacement <> tail
   end
 end

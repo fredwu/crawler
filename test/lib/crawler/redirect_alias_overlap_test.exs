@@ -1,7 +1,7 @@
 defmodule Crawler.RedirectAliasOverlapTest do
   use Crawler.TestCase, async: false
 
-  alias Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
   alias Crawler.Store
   alias Crawler.Store.Page
 
@@ -24,7 +24,7 @@ defmodule Crawler.RedirectAliasOverlapTest do
 
       if opts[:source_failure] && opts[:url] == opts[:gated_url],
         do: {:error, :source_failed},
-        else: {:ok, page}
+        else: Crawler.Parser.parse(page)
     end
 
     def parse(other), do: Crawler.Parser.parse(other)
@@ -74,7 +74,8 @@ defmodule Crawler.RedirectAliasOverlapTest do
       opts: opts,
       direct: direct,
       redirected: redirected,
-      hits: hits
+      hits: hits,
+      source_target: source_target
     } = start_overlap(context, store, result)
 
     case order do
@@ -90,7 +91,10 @@ defmodule Crawler.RedirectAliasOverlapTest do
     end
 
     await_idle(opts)
-    assert %Page{processed: true} = page = Store.find_processed({landing, scope})
+    assert %{status: :succeeded} = Store.target_outcome(source_target)
+    page = Store.find_processed({landing, scope})
+
+    assert %Page{processed: true} = page
     assert Store.find_processed({old, scope})
     expected = if result == :success, do: "DIRECT", else: "REDIRECT"
     assert page.body == if(store == Store, do: expected)
@@ -103,7 +107,7 @@ defmodule Crawler.RedirectAliasOverlapTest do
       refute_receive {:stored, {^landing, ^scope}, _}
     end
 
-    assert {:ok, again} = start_crawl(landing, opts)
+    assert {:ok, again} = Crawler.crawl_reference(landing, opts)
     await_idle(again)
     assert :counters.get(hits, 1) == 2
     assert Store.find_processed({landing, scope})
@@ -142,8 +146,13 @@ defmodule Crawler.RedirectAliasOverlapTest do
       on_exit(fn -> send(callback, {:release_settlement, :ok}) end)
       monitor = Process.monitor(callback)
       assert Process.alive?(rig.opts.queue)
-      assert Store.pending_count(rig.scope) == 1
-      assert Store.inflight_count(rig.scope) == 0
+
+      wait(fn ->
+        assert Process.alive?(callback)
+        assert Store.pending_count(rig.scope) == 1
+        assert Store.inflight_count(rig.scope) == 0
+      end)
+
       assert Store.generation(rig.scope) == rig.opts.generation
       send(callback, {:release_settlement, unquote(action)})
       assert_receive {:DOWN, ^monitor, _, _, _}, 2_000
@@ -162,22 +171,41 @@ defmodule Crawler.RedirectAliasOverlapTest do
 
   for result <- [:failure, :success] do
     test "saved landing bytes preserve the successful result after #{result}", context do
-      root = tmp(unique_scope("alias-overlap-snapshot"))
+      parent = tmp("alias-overlap-snapshot-#{System.os_time(:nanosecond)}")
+      on_exit(fn -> File.rm_rf(parent) end)
+      root = Path.join(parent, "export")
       rig = start_overlap(context, Store, unquote(result), save_to: root)
       send(rig.redirected, :release)
       wait(fn -> assert Store.find_processed({rig.old, rig.scope}) end)
       send(rig.direct, :release)
       await_idle(rig.opts)
       expected = if unquote(result) == :success, do: "DIRECT", else: "REDIRECT"
-      assert File.read!(SnapshotHelpers.saved(root, rig.landing)) == expected
-      assert File.read!(SnapshotHelpers.saved(root, rig.old)) == "REDIRECT"
+      export = ready_export(rig.opts)
+      resources = export.manifest["resources"]
+      count = if unquote(result) == :success, do: 2, else: 1
+      assert length(resources) == count
+      assert length(Enum.uniq_by(resources, & &1["id"])) == count
+
+      assert Enum.all?(
+               resources,
+               &(&1["url"] == rig.landing and &1["content_type"] == "text/plain")
+             )
+
+      expected_bodies =
+        if unquote(result) == :success, do: [expected, "REDIRECT"], else: [expected]
+
+      assert Enum.sort(Enum.map(resources, &read_resource(export, &1))) ==
+               Enum.sort(expected_bodies)
+
       assert_settled(rig.scope)
     end
   end
 
   for event <- [:scope_drop, :feeder_death, :fresh_generation] do
     test "#{event} retires a running callback without overwriting a new landing", context do
-      root = tmp(unique_scope("alias-settlement-retirement"))
+      parent = tmp("alias-settlement-retirement-#{System.os_time(:nanosecond)}")
+      on_exit(fn -> File.rm_rf(parent) end)
+      root = Path.join(parent, "retired")
       rig = start_overlap(context, GatedStore, :failure, allow_retry: true, save_to: root)
       send(rig.redirected, :release)
       wait(fn -> assert Store.find_processed({rig.old, rig.scope}) end)
@@ -187,7 +215,8 @@ defmodule Crawler.RedirectAliasOverlapTest do
       monitor = Process.monitor(callback)
       assert Store.pending_count(rig.scope) == 1
 
-      fresh_opts = %{rig.opts | store: Store}
+      fresh_root = Path.join(Path.dirname(root), "fresh")
+      fresh_opts = %{rig.opts | store: Store, save_to: fresh_root}
 
       fresh_opts =
         case unquote(event) do
@@ -212,11 +241,14 @@ defmodule Crawler.RedirectAliasOverlapTest do
       assert {:ok, fresh} = start_crawl(rig.landing, fresh_opts)
       await_idle(fresh)
       assert Store.find_processed({rig.landing, rig.scope}).body == "RETRY"
-      assert File.read!(SnapshotHelpers.saved(root, rig.landing)) == "RETRY"
+      export = ready_export(fresh)
+      resource = resource_for_url(export, rig.landing)
+      assert read_resource(export, resource) == "RETRY"
       send(callback, {:release_settlement, :ok})
       assert_receive {:DOWN, ^monitor, _, _, _}, 2_000
       assert Store.find_processed({rig.landing, rig.scope}).body == "RETRY"
-      assert File.read!(SnapshotHelpers.saved(root, rig.landing)) == "RETRY"
+      assert read_resource(export, resource) == "RETRY"
+      refute File.exists?(root)
       assert_settled(rig.scope)
       on_exit(fn -> Crawler.stop(fresh) end)
     end
@@ -291,6 +323,8 @@ defmodule Crawler.RedirectAliasOverlapTest do
                    scope: scope,
                    workers: 2,
                    max_pages: 2,
+                   max_body: 1_048_576,
+                   max_analysis_bytes: 16_000_000,
                    retries: 0,
                    parser: GatedParser,
                    gated_url: old,
@@ -306,8 +340,9 @@ defmodule Crawler.RedirectAliasOverlapTest do
     on_exit(fn -> Crawler.stop(opts) end)
     assert_receive {:landing_request, direct}, 2_000
     on_exit(fn -> send(direct, :release) end)
-    assert {:ok, _redirect} = start_crawl(old, opts)
+    assert {:ok, redirect} = start_crawl(old, opts)
     assert_receive {:parsed, redirected}, 2_000
+
     on_exit(fn -> send(redirected, :release) end)
 
     %{
@@ -317,7 +352,8 @@ defmodule Crawler.RedirectAliasOverlapTest do
       landing: landing,
       direct: direct,
       redirected: redirected,
-      hits: hits
+      hits: hits,
+      source_target: redirect.target_handle
     }
   end
 

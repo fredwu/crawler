@@ -1,24 +1,35 @@
 defmodule Crawler.Parser.CssParser.Identifier do
   @moduledoc false
 
+  alias Crawler.Analysis.Budget
+  alias Crawler.Parser.CssParser.Buffer
+
   defguard name_byte(byte)
            when byte in ?a..?z or byte in ?A..?Z or byte in ?0..?9 or byte in [?_, ?-] or
                   byte >= 128
 
   defguardp hex_byte(byte) when byte in ?0..?9 or byte in ?a..?f or byte in ?A..?F
 
-  def take(body), do: take(body, [])
-
-  defp take(<<byte, rest::binary>>, acc) when name_byte(byte) do
-    take(rest, [byte | acc])
+  def take(body) do
+    {word, rest, _budget} = take(body, Budget.unlimited())
+    {word, rest}
   end
 
-  defp take(<<"\\", _rest::binary>> = body, acc) do
-    {decoded, rest} = decode_escape(body)
-    take(rest, [decoded | acc])
+  def take(body, budget), do: read(body, Buffer.new(budget))
+
+  defp read(<<byte, rest::binary>>, buffer) when name_byte(byte) do
+    read(rest, Buffer.push(buffer, byte))
   end
 
-  defp take(rest, acc), do: {acc |> Enum.reverse() |> IO.iodata_to_binary(), rest}
+  defp read(<<"\\", _rest::binary>> = body, buffer) do
+    {buffer, rest} = Buffer.escaped(buffer, body)
+    read(rest, buffer)
+  end
+
+  defp read(rest, buffer) do
+    {value, budget} = Buffer.finish(buffer)
+    {value, rest, budget}
+  end
 
   @doc false
   def decode_escape(<<"\\", rest::binary>>) do

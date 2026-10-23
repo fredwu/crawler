@@ -52,11 +52,17 @@ defmodule Crawler.FetcherStoredAuthorityTest do
           queue: queue
         })
 
-      old = Task.async(fn -> Fetcher.fetch(opts) end)
+      supervisor = start_supervised!(Task.Supervisor)
+      old = Task.Supervisor.async_nolink(supervisor, fn -> queued_fetch(opts) end)
       assert_receive {:custom_store_written, worker}, 2_000
       gate = install_validation_gate(worker, scope, generation)
       send(worker, :continue_store)
-      assert_receive {:store_call_held, ^worker, {:current?, ^scope, ^generation, _}}, 2_000
+
+      assert_receive {:store_call_held, ^worker,
+                      {:execution, lease, {:current?, ^scope, ^generation, _}}},
+                     2_000
+
+      assert is_reference(lease)
 
       fresh_generation =
         case unquote(retirement) do
@@ -80,7 +86,9 @@ defmodule Crawler.FetcherStoredAuthorityTest do
         })
 
       StoreGate.resume(gate)
-      assert {:warn, :stale} = Task.await(old)
+      assert {:exit, :killed} = Task.yield(old, 2_000)
+      refute Process.alive?(worker)
+      refute Crawler.Store.Authority.execution_current?(lease)
       assert Store.find_processed({url, scope}) == fresh
     end
   end
@@ -90,7 +98,18 @@ defmodule Crawler.FetcherStoredAuthorityTest do
     url = context.url <> "/stored-upgrade-authority"
     generation = Store.generation(scope)
     on_exit(fn -> Store.dispose_scope(scope) end)
-    put_page(url, scope, generation, "OLD SVG", %{html_tag: "img", content_type: "image/svg+xml"})
+
+    ReqTestSite.expect_once(context.site, "GET", "/stored-upgrade-authority", fn conn ->
+      conn |> Plug.Conn.put_resp_content_type("image/svg+xml") |> Plug.Conn.resp(200, "OLD SVG")
+    end)
+
+    seed = Map.put(options(context, scope, generation, url), :html_tag, "img")
+
+    assert %Store.Page{body: "OLD SVG", opts: %{content_type: "image/svg+xml"}} =
+             page = Fetcher.fetch(seed)
+
+    assert :ok = Store.release_page(page)
+    assert {_, _} = Store.processed({url, scope}, generation)
 
     opts =
       Map.merge(options(context, scope, generation, url), %{
@@ -102,7 +121,12 @@ defmodule Crawler.FetcherStoredAuthorityTest do
     assert_receive {:upgrade_admitted, worker}, 2_000
     gate = install_validation_gate(worker, scope, generation)
     send(worker, :continue_upgrade)
-    assert_receive {:store_call_held, ^worker, {:current?, ^scope, ^generation, _}}, 2_000
+
+    assert_receive {:store_call_held, ^worker,
+                    {:execution, lease, {:current?, ^scope, ^generation, _}}},
+                   2_000
+
+    assert is_reference(lease)
     fresh_generation = Store.drop_scope(scope)
 
     fresh =
@@ -113,7 +137,7 @@ defmodule Crawler.FetcherStoredAuthorityTest do
       })
 
     StoreGate.resume(gate)
-    assert {:error, :stale} = Task.await(old)
+    assert {:warn, :stale} = Task.await(old)
     assert Store.find_processed({url, scope}) == fresh
   end
 
@@ -126,17 +150,36 @@ defmodule Crawler.FetcherStoredAuthorityTest do
     on_exit(fn -> Store.dispose_scope(scope) end)
     url = context.url <> "/stored-retired-queue"
 
-    put_page(url, scope, generation, "<svg/>", %{
-      html_tag: "img",
-      content_type: "image/svg+xml",
-      queue: queue
-    })
+    ReqTestSite.expect_once(context.site, "GET", "/stored-retired-queue", fn conn ->
+      conn |> Plug.Conn.put_resp_content_type("image/svg+xml") |> Plug.Conn.resp(200, "<svg/>")
+    end)
+
+    seed = Map.merge(options(context, scope, generation, url), %{html_tag: "img", queue: queue})
+
+    assert %Store.Page{body: "<svg/>", opts: %{queue: ^queue, content_type: "image/svg+xml"}} =
+             page = queued_fetch(seed)
+
+    assert :ok = Store.release_page(page)
+    assert {_, _} = Store.processed({url, scope}, generation)
+    assert Store.find_processed({url, scope}).opts.queue == queue
 
     assert :ok = Store.release_queue(queue)
     assert Store.generation(scope) == generation
     opts = Map.put(options(context, scope, generation, url), :queue, survivor)
-    assert %Store.Page{body: "<svg/>"} = Fetcher.fetch(opts)
+
+    assert %Store.Page{body: "<svg/>", opts: %{queue: ^survivor, content_type: "image/svg+xml"}} =
+             page = queued_fetch(opts)
+
+    assert :ok = Store.release_page(page)
     assert Store.find_processed({url, scope}).opts.html_tag == "a"
+  end
+
+  defp queued_fetch(opts) do
+    assert {:ok, _} = Crawler.crawl(opts.url, opts)
+    assert {:ok, claim, :fetch, admitted} = Store.checkout_job(opts.queue)
+    result = Fetcher.fetch(admitted)
+    Store.complete_job(claim, Crawler.Job.Outcome.from_result(result))
+    result
   end
 
   defp survivor_queue(scope, generation) do
@@ -147,7 +190,7 @@ defmodule Crawler.FetcherStoredAuthorityTest do
   end
 
   defp install_validation_gate(worker, scope, generation) do
-    StoreGate.hold(worker, &match?({:current?, ^scope, ^generation, _}, &1))
+    StoreGate.hold(worker, &match?({:execution, _, {:current?, ^scope, ^generation, _}}, &1))
   end
 
   defp put_page(url, scope, generation, body, metadata) do
@@ -166,7 +209,9 @@ defmodule Crawler.FetcherStoredAuthorityTest do
       req_options: context.req_options,
       respect_robots: false,
       store: Store,
-      retries: 0
+      retries: 0,
+      save_to: nil,
+      cookie_navigation: false
     })
   end
 end

@@ -1,16 +1,22 @@
 defmodule Crawler.Linker.SnapshotTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
-  import Crawler.SnapshotHelpers, only: [link_path: 1]
+  import Crawler.SnapshotHelpers, only: [saved_artifact: 2]
   import Crawler.TestHelpers
 
   alias Crawler.Linker
-  alias Crawler.Linker.Snapshot
+  alias Crawler.ManagedSnapshotHelpers, as: Managed
   alias Crawler.Snapper
+  alias Crawler.URL
+
+  setup do
+    Req.Test.set_req_test_to_shared()
+    on_exit(fn -> Req.Test.set_req_test_to_private() end)
+  end
 
   @utf8_bom <<0xEF, 0xBB, 0xBF>>
 
-  test "parent links expand to the file that was saved" do
+  test "parent links resolve to their canonical target URLs" do
     page = "http://example.com/blog/post"
     about = "http://example.com/about"
     css = "http://example.com/css/app.css"
@@ -23,36 +29,26 @@ defmodule Crawler.Linker.SnapshotTest do
     assert_expands("http://example.com/app.css", "../images/a.png", image)
   end
 
-  test "equivalent urls share one snapshot path" do
-    assert Snapshot.path("http://Example.com/a/../b") == Snapshot.path("http://example.com/b")
-    assert Snapshot.path("http://example.com/a/./c") == Snapshot.path("http://example.com/a/c")
-    assert Snapshot.path("http://example.com/a#section") == Snapshot.path("http://example.com/a")
+  test "equivalent URLs share one canonical identity" do
+    assert URL.canonical("http://Example.com/a/../b") == URL.canonical("http://example.com/b")
+    assert URL.canonical("http://example.com/a/./c") == URL.canonical("http://example.com/a/c")
+    assert URL.canonical("http://example.com/a#section") == URL.canonical("http://example.com/a")
 
-    refute Snapshot.path("http://example.com/a/.../c") == Snapshot.path("http://example.com/a/c")
+    refute URL.canonical("http://example.com/a/.../c") == URL.canonical("http://example.com/a/c")
   end
 
-  test "a colon does not share a file with a dash" do
-    port = Snapshot.path("http://ex.com:8080/a")
-    dashed_host = Snapshot.path("http://ex.com-8080/a")
-    colon = Snapshot.path("http://ex.com/foo:bar")
-    dashed_path = Snapshot.path("http://ex.com/foo-bar")
+  test "ports, colons, and literal markers retain distinct canonical identities" do
+    pairs = [
+      {"http://ex.com:8080/a", "http://ex.com-8080/a"},
+      {"http://ex.com/foo:bar", "http://ex.com/foo-bar"},
+      {"http://ex.com:8080/foo:bar", "http://ex.com/foo__c_bar"},
+      {"http://ex.com:8080/a", "http://ex.com__port_8080/a"}
+    ]
 
-    assert port != dashed_host
-    assert colon != dashed_path
-    refute port =~ ":"
-    refute colon =~ ":"
-    assert port =~ "ex.com__port_8080/a/__index.html"
-
-    assert Snapshot.path("http://ex.com:8080/foo:bar") ==
-             "ex.com__port_8080/foo__c_bar/__index.html"
-
-    assert colon =~ "foo__c_bar"
-    assert Snapshot.path("http://ex.com:80/a") == Snapshot.path("http://ex.com/a")
-    assert Snapshot.path("https://ex.com:443/a") == Snapshot.path("https://ex.com/a")
-    refute Snapshot.path("http://ex.com:80/a") =~ "__port_"
-    assert Snapshot.path("http://ex.com/foo__c_bar") =~ "foo__c%5fbar"
-    assert Snapshot.path("http://ex.com__port_8080/a") =~ "ex.com__port%5f8080"
-    refute Snapshot.path("http://ex.com/a?x=1:2") =~ ":"
+    for {left, right} <- pairs, do: refute(URL.canonical(left) == URL.canonical(right))
+    assert URL.canonical("http://ex.com:80/a") == URL.canonical("http://ex.com/a")
+    assert URL.canonical("https://ex.com:443/a") == URL.canonical("https://ex.com/a")
+    assert URI.parse(URL.canonical("http://ex.com/a?x=1:2")).query == "x=1:2"
   end
 
   test "saved links expand to distinct colon and dash files" do
@@ -66,22 +62,15 @@ defmodule Crawler.Linker.SnapshotTest do
     html =
       ~s(<a href="#{port}"></a><a href="#{dashed_host}"></a><a href="#{colon}"></a><a href="#{dashed_path}"></a>)
 
-    snap(html, page, root)
-    snap("PORT", port, root)
-    snap("DASH", dashed_host, root)
-    snap("COLON", colon, root)
-    snap("HYPHEN", dashed_path, root)
+    targets = [
+      {port, "PORT", "text/html"},
+      {dashed_host, "DASH", "text/html"},
+      {colon, "COLON", "text/html"},
+      {dashed_path, "HYPHEN", "text/html"}
+    ]
 
-    assert File.read!(file(root, port)) == @utf8_bom <> "PORT"
-    assert File.read!(file(root, dashed_host)) == @utf8_bom <> "DASH"
-    assert File.read!(file(root, colon)) == @utf8_bom <> "COLON"
-    assert File.read!(file(root, dashed_path)) == @utf8_bom <> "HYPHEN"
-
-    saved = File.read!(file(root, page))
-    assert_saved_expands(saved, page, port, root)
-    assert_saved_expands(saved, page, dashed_host, root)
-    assert_saved_expands(saved, page, colon, root)
-    assert_saved_expands(saved, page, dashed_path, root)
+    export = managed_export(root, page, html, targets)
+    assert_saved_targets(export, page, targets)
   end
 
   test "empty path segments do not share a file" do
@@ -93,46 +82,43 @@ defmodule Crawler.Linker.SnapshotTest do
     normal = "http://example.com/a"
     marker = "http://example.com/a/__e_/b"
 
-    assert Snapshot.path(doubled) != Snapshot.path(plain)
-    assert Snapshot.path(leading) != Snapshot.path(normal)
-    assert Snapshot.path(doubled) != Snapshot.path(marker)
-    refute Snapshot.path(doubled) =~ "//"
-    assert Snapshot.path(doubled) =~ "__e_"
+    refute URL.canonical(doubled) == URL.canonical(plain)
+    refute URL.canonical(leading) == URL.canonical(normal)
+    refute URL.canonical(doubled) == URL.canonical(marker)
 
-    snap("PAGE", page, root)
-    snap("DOUBLED", doubled, root)
-    snap("PLAIN", plain, root)
-    snap("LEAD", leading, root)
-    snap("NORM", normal, root)
-    snap("MARK", marker, root)
-    snap(~s(<a href="#{doubled}"></a>), page, root)
+    targets = [
+      {doubled, "DOUBLED", "text/html"},
+      {plain, "PLAIN", "text/html"},
+      {leading, "LEAD", "text/html"},
+      {normal, "NORM", "text/html"},
+      {marker, "MARK", "text/html"}
+    ]
 
-    assert File.read!(file(root, doubled)) == @utf8_bom <> "DOUBLED"
-    assert File.read!(file(root, plain)) == @utf8_bom <> "PLAIN"
-    assert File.read!(file(root, leading)) == @utf8_bom <> "LEAD"
-    assert File.read!(file(root, normal)) == @utf8_bom <> "NORM"
-    assert File.read!(file(root, marker)) == @utf8_bom <> "MARK"
-    assert_saved_expands(File.read!(file(root, page)), page, doubled, root)
-  end
+    html = ~s(<a href="#{doubled}"></a>)
+    export = managed_export(root, page, html, targets, [plain, leading, normal, marker])
+    from = Managed.resource_for_url(export, page)
 
-  test "keeps the fragment on the offline link" do
-    href = Linker.offline_link("http://example.com/blog/post", "post.html?q=1#section")
+    [href] =
+      export
+      |> Managed.read_resource(from)
+      |> Floki.parse_document!()
+      |> Floki.attribute("a", "href")
 
-    assert String.ends_with?(href, "#section")
-    assert href =~ "__q_"
-    refute href =~ "post.html?q=1#section"
-  end
+    doubled_resource = Managed.edge_target(export, from, 0)
+    Managed.assert_opens(export, from, doubled_resource, href)
+    assert Managed.read_resource(export, from) == @utf8_bom <> ~s(<a href="#{href}"></a>)
 
-  test "offline URL references escape literal filesystem percent signs" do
-    page = "http://ex.com/page"
+    paths =
+      for {url, body, _} <- targets do
+        target =
+          if url == doubled, do: doubled_resource, else: Managed.resource_for_url(export, url)
 
-    assert Linker.offline_url(page, "http://ex.com/__u_docs") ==
-             "http://ex.com/__u%255fdocs/__index.html"
+        assert target["url"] == URL.normalize(url)
+        assert Managed.read_resource(export, target) == @utf8_bom <> body
+        target["path"]
+      end
 
-    assert Linker.offline_url(page, "http://ex.com/app.js?q=1&x=2") ==
-             "http://ex.com/app__q_q%3D1%2526x%3D2.js"
-
-    assert Snapshot.path("http://ex.com/__u_docs") == "ex.com/__u%5fdocs/__index.html"
+    assert length(Enum.uniq(paths)) == length(targets)
   end
 
   test "rewritten URLs open distinct saved files after one browser URL decode" do
@@ -152,199 +138,154 @@ defmodule Crawler.Linker.SnapshotTest do
       {"http://ex.com/cafe" <> <<0x0301::utf8>>, "COMBINING MARK", ""}
     ]
 
-    Enum.each(targets, fn {url, body, _fragment} -> snap(body, url, root) end)
-
     html =
       Enum.map_join(targets, "", fn {url, _body, fragment} ->
         ~s(<a href="#{url <> fragment}"></a>)
       end)
 
-    snap(html, page, root)
+    export =
+      managed_export(
+        root,
+        page,
+        html,
+        Enum.map(targets, fn {url, body, _} -> {url, body, "text/html"} end)
+      )
+
+    from = Managed.resource_for_url(export, page)
 
     hrefs =
-      root
-      |> file(page)
-      |> File.read!()
+      export
+      |> Managed.read_resource(from)
       |> Floki.parse_document!()
       |> Floki.attribute("a", "href")
 
     assert length(hrefs) == length(targets)
 
-    for {href, {url, body, fragment}} <- Enum.zip(hrefs, targets) do
-      assert href == Linker.offline_link(page, url <> fragment)
-      assert URI.parse(href).query == nil
+    paths =
+      for {{href, {url, body, fragment}}, index} <- Enum.with_index(Enum.zip(hrefs, targets)) do
+        to = Managed.edge_target(export, from, index)
+        assert to["url"] == Crawler.URL.normalize(url)
+        expected_suffix = if fragment == "#café", do: "#caf%c3%a9", else: fragment
+        Managed.assert_opens(export, from, to, href, expected_suffix)
+        assert URI.parse(href).query == nil
 
-      if fragment == "" do
-        assert URI.parse(href).fragment == nil
-      else
-        original_fragment = String.trim_leading(fragment, "#")
-        expected_fragment = if fragment == "#café", do: "caf%c3%a9", else: original_fragment
-        actual_fragment = URI.parse(href).fragment
-        assert actual_fragment == expected_fragment
-        assert URI.decode(actual_fragment) == URI.decode(original_fragment)
+        if fragment == "" do
+          assert URI.parse(href).fragment == nil
+        else
+          original_fragment = String.trim_leading(fragment, "#")
+          expected_fragment = if fragment == "#café", do: "caf%c3%a9", else: original_fragment
+          actual_fragment = URI.parse(href).fragment
+          assert actual_fragment == expected_fragment
+          assert URI.decode(actual_fragment) == URI.decode(original_fragment)
+        end
+
+        assert Managed.read_resource(export, to) == @utf8_bom <> body
+        to["path"]
       end
 
-      opened = Path.expand(link_path(href), Path.dirname(file(root, page)))
-      assert opened == Path.expand(file(root, url))
-      assert File.read!(opened) == @utf8_bom <> body
-    end
+    assert length(Enum.uniq(paths)) == length(targets)
   end
 
-  test "https, userinfo, and a bare question mark stay in the file path" do
-    assert Snapshot.path("http://ex.com/a") == "ex.com/a/__index.html"
-    assert Snapshot.path("https://ex.com/a") == "ex.com__scheme_https/a/__index.html"
-    assert Snapshot.path("https://ex.com:443/a") == "ex.com__scheme_https/a/__index.html"
+  test "schemes, credentials, empty queries, and literal markers retain URL identities" do
+    urls = [
+      "http://ex.com/a",
+      "https://ex.com/a",
+      "https://ex.com:8443/a",
+      "http://a:b@ex.com/secret",
+      "https://a:b@ex.com:8080/secret",
+      "http://ex.com/search?",
+      "http://ex.com?",
+      "http://ex.com/Docs",
+      "http://[::1]/a",
+      "http://ex.com__scheme_https/a",
+      "http://ex.com/__user_x",
+      "http://x@ex.com/__user_x",
+      "http://ex.com/search/__index__q_.html"
+    ]
 
-    assert Snapshot.path("https://ex.com:8443/a") ==
-             "ex.com__port_8443__scheme_https/a/__index.html"
-
-    assert Snapshot.path("http://a:b@ex.com/secret") ==
-             "ex.com__user_a%3ab/secret/__index.html"
-
-    assert Snapshot.path("https://a:b@ex.com:8080/secret") ==
-             "ex.com__user_a%3ab__port_8080__scheme_https/secret/__index.html"
-
-    assert Snapshot.path("http://ex.com/search?") == "ex.com/search/__index__q_.html"
-    assert Snapshot.path("http://ex.com?") == "ex.com/__index__q_.html"
-    assert Snapshot.path("http://ex.com/Docs") == "ex.com/__u_docs/__index.html"
-    assert Snapshot.path("http://[::1]/a") == "__c___c_1/a/__index.html"
-
-    literal_scheme = Snapshot.path("http://ex.com__scheme_https/a")
-    assert literal_scheme == "ex.com__scheme%5fhttps/a/__index.html"
-    refute Snapshot.path("https://ex.com/a") == literal_scheme
-
-    assert Snapshot.path("http://ex.com/__user_x") == "ex.com/__user%5fx/__index.html"
-    refute Snapshot.path("http://x@ex.com/__user_x") == Snapshot.path("http://ex.com/__user_x")
-
-    refute Snapshot.path("http://ex.com/search?") ==
-             Snapshot.path("http://ex.com/search/__index__q_.html")
+    identities = Enum.map(urls, &URL.canonical/1)
+    assert length(Enum.uniq(identities)) == length(urls)
+    assert URL.canonical("https://ex.com:443/a") == URL.canonical("https://ex.com/a")
   end
 
-  test "case and combining marks do not share a case-folded path" do
-    docs = Snapshot.path("http://ex.com/Docs")
-    lower = Snapshot.path("http://ex.com/docs")
-    assert docs != lower
-    refute String.downcase(docs) == String.downcase(lower)
+  test "case and combining marks retain distinct canonical URLs" do
+    pairs = [
+      {"http://ex.com/Docs", "http://ex.com/docs"},
+      {"http://A:B@ex.com/Docs", "http://a:b@ex.com/docs"},
+      {"http://ex.com/search?Q=1", "http://ex.com/search?q=1"},
+      {"http://ex.com/" <> <<0x00E9::utf8>>, "http://ex.com/e" <> <<0x0301::utf8>>},
+      {"http://ex.com/" <> <<0x0309::utf8>> <> "9", "http://ex.com/" <> <<0x3099::utf8>>}
+    ]
 
-    user = Snapshot.path("http://A:B@ex.com/Docs")
-    user_lower = Snapshot.path("http://a:b@ex.com/docs")
-    assert user != user_lower
-    refute String.downcase(user) == String.downcase(user_lower)
+    for {left, right} <- pairs, do: refute(URL.canonical(left) == URL.canonical(right))
 
-    query = Snapshot.path("http://ex.com/search?Q=1")
-    query_lower = Snapshot.path("http://ex.com/search?q=1")
-    assert query != query_lower
-    refute String.downcase(query) == String.downcase(query_lower)
-
-    nfc = "http://ex.com/" <> <<0x00E9::utf8>>
-    nfd = "http://ex.com/e" <> <<0x0301::utf8>>
-    nfd_path = Snapshot.path(nfd)
-    assert Snapshot.path(nfc) != nfd_path
-    refute String.downcase(Snapshot.path(nfc)) == String.downcase(nfd_path)
-    assert nfd_path =~ "__m_000301"
-    refute nfd_path =~ <<0x0301::utf8>>
-
-    marked = Snapshot.path("http://ex.com/a" <> <<0x036F::utf8>>)
-    assert marked =~ "__m_00036f"
-    refute marked =~ "__m_36F"
-
-    short = Snapshot.path("http://ex.com/" <> <<0x0309::utf8>> <> "9")
-    voiced = Snapshot.path("http://ex.com/" <> <<0x3099::utf8>>)
-    assert short =~ "__m_000309"
-    assert voiced =~ "__m_003099"
-    refute String.downcase(short) == String.downcase(voiced)
+    assert URL.normalize("http://ex.com/a" <> <<0x036F::utf8>>) ==
+             "http://ex.com/a" <> <<0x036F::utf8>>
   end
 
   test "a literal case or mark marker does not share a file" do
-    docs = Snapshot.path("http://ex.com/Docs")
-    literal_case = Snapshot.path("http://ex.com/__u_docs")
-    assert literal_case == "ex.com/__u%5fdocs/__index.html"
-    assert literal_case != docs
-    refute String.downcase(literal_case) == String.downcase(docs)
-
     nfd = "http://ex.com/e" <> <<0x0301::utf8>>
-    nfd_path = Snapshot.path(nfd)
-    literal_mark = Snapshot.path("http://ex.com/e__m_301")
-    assert literal_mark == "ex.com/e__m%5f301/__index.html"
-    assert literal_mark != nfd_path
-    refute String.downcase(literal_mark) == String.downcase(nfd_path)
 
     root = tmp("snapshot-literal-markers")
-    snap("DOCS", "http://ex.com/Docs", root)
-    snap("CASE", "http://ex.com/__u_docs", root)
-    snap("NFD", nfd, root)
-    snap("MARK", "http://ex.com/e__m_301", root)
+    docs_artifact = snap_artifact("DOCS", "http://ex.com/Docs", root, "identity0000000000000001")
 
-    assert File.read!(file(root, "http://ex.com/Docs")) == @utf8_bom <> "DOCS"
-    assert File.read!(file(root, "http://ex.com/__u_docs")) == @utf8_bom <> "CASE"
-    assert File.read!(file(root, nfd)) == @utf8_bom <> "NFD"
-    assert File.read!(file(root, "http://ex.com/e__m_301")) == @utf8_bom <> "MARK"
+    case_artifact =
+      snap_artifact("CASE", "http://ex.com/__u_docs", root, "identity0000000000000002")
+
+    nfd_artifact = snap_artifact("NFD", nfd, root, "identity0000000000000003")
+
+    mark_artifact =
+      snap_artifact("MARK", "http://ex.com/e__m_301", root, "identity0000000000000004")
+
+    assert File.read!(saved_artifact(root, docs_artifact)) == @utf8_bom <> "DOCS"
+    assert File.read!(saved_artifact(root, case_artifact)) == @utf8_bom <> "CASE"
+    assert File.read!(saved_artifact(root, nfd_artifact)) == @utf8_bom <> "NFD"
+    assert File.read!(saved_artifact(root, mark_artifact)) == @utf8_bom <> "MARK"
   end
 
   test "a decomposed hiragana letter does not share a file with the composed letter" do
     composed = "http://ex.com/" <> <<0x304C::utf8>>
     decomposed = "http://ex.com/" <> <<0x304B::utf8>> <> <<0x3099::utf8>>
-    composed_path = Snapshot.path(composed)
-    decomposed_path = Snapshot.path(decomposed)
-
-    assert decomposed_path =~ "__m_003099"
-    refute decomposed_path =~ <<0x3099::utf8>>
-    assert composed_path != decomposed_path
-    refute String.downcase(composed_path) == String.downcase(decomposed_path)
-
     root = tmp("snapshot-hiragana")
-    snap("COMPOSED", composed, root)
-    snap("DECOMPOSED", decomposed, root)
-    assert File.read!(file(root, composed)) == @utf8_bom <> "COMPOSED"
-    assert File.read!(file(root, decomposed)) == @utf8_bom <> "DECOMPOSED"
+    composed_artifact = snap_artifact("COMPOSED", composed, root, "identity0000000000000001")
+
+    decomposed_artifact =
+      snap_artifact("DECOMPOSED", decomposed, root, "identity0000000000000002")
+
+    assert File.read!(saved_artifact(root, composed_artifact)) == @utf8_bom <> "COMPOSED"
+    assert File.read!(saved_artifact(root, decomposed_artifact)) == @utf8_bom <> "DECOMPOSED"
   end
 
   test "İ does not share a file with I plus a combining dot" do
     dotted = "http://ex.com/" <> <<0x0130::utf8>>
     split = "http://ex.com/" <> <<0x0049::utf8>> <> <<0x0307::utf8>>
-    dotted_path = Snapshot.path(dotted)
-    split_path = Snapshot.path(split)
-
-    assert dotted_path == "ex.com/__u_000130/__index.html"
-    assert split_path =~ "__u_i"
-    assert split_path =~ "__m_000307"
-    refute String.downcase(dotted_path) == String.downcase(split_path)
-
     root = tmp("snapshot-dotted-i")
-    snap("DOTTED", dotted, root)
-    snap("SPLIT", split, root)
-    assert File.read!(file(root, dotted)) == @utf8_bom <> "DOTTED"
-    assert File.read!(file(root, split)) == @utf8_bom <> "SPLIT"
+    dotted_artifact = snap_artifact("DOTTED", dotted, root, "identity0000000000000001")
+    split_artifact = snap_artifact("SPLIT", split, root, "identity0000000000000002")
+    assert File.read!(saved_artifact(root, dotted_artifact)) == @utf8_bom <> "DOTTED"
+    assert File.read!(saved_artifact(root, split_artifact)) == @utf8_bom <> "SPLIT"
   end
 
   test "a decomposed hangul syllable does not share a file with the composed letter" do
     composed = "http://ex.com/" <> <<0xAC00::utf8>>
     decomposed = "http://ex.com/" <> <<0x1100::utf8>> <> <<0x1161::utf8>>
-    composed_path = Snapshot.path(composed)
-    decomposed_path = Snapshot.path(decomposed)
-    literal = Snapshot.path("http://ex.com/__j_001100")
-
-    assert composed_path == "ex.com/" <> <<0xAC00::utf8>> <> "/__index.html"
-    assert decomposed_path == "ex.com/__j_001100__j_001161/__index.html"
-    assert literal == "ex.com/__j%5f001100/__index.html"
-    refute String.downcase(composed_path) == String.downcase(decomposed_path)
-    refute String.downcase(literal) == String.downcase(decomposed_path)
-
     root = tmp("snapshot-hangul")
-    snap("COMPOSED", composed, root)
-    snap("JAMO", decomposed, root)
-    snap("LITERAL", "http://ex.com/__j_001100", root)
-    assert File.read!(file(root, composed)) == @utf8_bom <> "COMPOSED"
-    assert File.read!(file(root, decomposed)) == @utf8_bom <> "JAMO"
-    assert File.read!(file(root, "http://ex.com/__j_001100")) == @utf8_bom <> "LITERAL"
+    composed_artifact = snap_artifact("COMPOSED", composed, root, "identity0000000000000001")
+    jamo_artifact = snap_artifact("JAMO", decomposed, root, "identity0000000000000002")
+
+    literal_artifact =
+      snap_artifact("LITERAL", "http://ex.com/__j_001100", root, "identity0000000000000003")
+
+    assert File.read!(saved_artifact(root, composed_artifact)) == @utf8_bom <> "COMPOSED"
+    assert File.read!(saved_artifact(root, jamo_artifact)) == @utf8_bom <> "JAMO"
+    assert File.read!(saved_artifact(root, literal_artifact)) == @utf8_bom <> "LITERAL"
   end
 
   test "letters that share a lowercase form do not share a file" do
     kay = "http://ex.com/K"
     kelvin = "http://ex.com/" <> <<0x212A::utf8>>
 
-    assert Snapshot.path(kay) == "ex.com/__u_k/__index.html"
-    assert Snapshot.path(kelvin) == "ex.com/__u_00212a/__index.html"
+    refute URL.canonical(kay) == URL.canonical(kelvin)
 
     pairs = [
       {0x00C5, "0000c5", 0x212B, "00212b"},
@@ -356,19 +297,16 @@ defmodule Crawler.Linker.SnapshotTest do
       {0x03A9, "0003a9", 0x2126, "002126"}
     ]
 
-    for {left, left_hex, right, right_hex} <- pairs do
-      assert Snapshot.path("http://ex.com/" <> <<left::utf8>>) ==
-               "ex.com/__u_#{left_hex}/__index.html"
-
-      assert Snapshot.path("http://ex.com/" <> <<right::utf8>>) ==
-               "ex.com/__u_#{right_hex}/__index.html"
+    for {left, _left_hex, right, _right_hex} <- pairs do
+      refute URL.canonical("http://ex.com/" <> <<left::utf8>>) ==
+               URL.canonical("http://ex.com/" <> <<right::utf8>>)
     end
 
     root = tmp("snapshot-case-fold")
-    snap("K", kay, root)
-    snap("KELVIN", kelvin, root)
-    assert File.read!(file(root, kay)) == @utf8_bom <> "K"
-    assert File.read!(file(root, kelvin)) == @utf8_bom <> "KELVIN"
+    kay_artifact = snap_artifact("K", kay, root, "identity0000000000000001")
+    kelvin_artifact = snap_artifact("KELVIN", kelvin, root, "identity0000000000000002")
+    assert File.read!(saved_artifact(root, kay_artifact)) == @utf8_bom <> "K"
+    assert File.read!(saved_artifact(root, kelvin_artifact)) == @utf8_bom <> "KELVIN"
   end
 
   test "a casefold that downcase leaves unchanged does not share a file" do
@@ -382,64 +320,45 @@ defmodule Crawler.Linker.SnapshotTest do
 
     root = tmp("snapshot-casefold-stable")
 
-    for {letter, marker, other} <- pairs do
+    public_ids = [
+      {"identity0000000000000001", "identity0000000000000002"},
+      {"identity0000000000000003", "identity0000000000000004"},
+      {"identity0000000000000005", "identity0000000000000006"},
+      {"identity0000000000000007", "identity0000000000000008"},
+      {"identity0000000000000009", "identity0000000000000010"}
+    ]
+
+    for {{letter, _marker, other}, {public_id, other_id}} <- Enum.zip(pairs, public_ids) do
       url = "http://ex.com/" <> letter
       other_url = "http://ex.com/" <> other
 
-      assert Snapshot.path(url) == "ex.com/#{marker}/__index.html"
-      refute Snapshot.path(url) == Snapshot.path(other_url)
+      refute URL.canonical(url) == URL.canonical(other_url)
 
-      snap("LETTER", url, root)
-      snap("OTHER", other_url, root)
-      assert File.read!(file(root, url)) == @utf8_bom <> "LETTER"
-      assert File.read!(file(root, other_url)) == @utf8_bom <> "OTHER"
+      letter_artifact = snap_artifact("LETTER", url, root, public_id)
+      other_artifact = snap_artifact("OTHER", other_url, root, other_id)
+      assert File.read!(saved_artifact(root, letter_artifact)) == @utf8_bom <> "LETTER"
+      assert File.read!(saved_artifact(root, other_artifact)) == @utf8_bom <> "OTHER"
     end
   end
 
   test "a literal query marker does not share a file" do
     literal = "http://ex.com/app__q_v=1.js"
     query = "http://ex.com/app.js?v=1"
-    literal_path = Snapshot.path(literal)
-    query_path = Snapshot.path(query)
-
-    assert literal_path == "ex.com/app__q%5fv=1.js"
-    assert query_path == "ex.com/app__q_v=1.js"
-    refute literal_path =~ "__u_"
-    refute String.downcase(literal_path) == String.downcase(query_path)
-
     root = tmp("snapshot-query-marker")
-    snap("LITERAL", literal, root)
-    snap("QUERY", query, root)
-    assert File.read!(file(root, literal)) == @utf8_bom <> "LITERAL"
-    assert File.read!(file(root, query)) == @utf8_bom <> "QUERY"
+    literal_artifact = snap_artifact("LITERAL", literal, root, "identity0000000000000001")
+    query_artifact = snap_artifact("QUERY", query, root, "identity0000000000000002")
+    assert File.read!(saved_artifact(root, literal_artifact)) == @utf8_bom <> "LITERAL"
+    assert File.read!(saved_artifact(root, query_artifact)) == @utf8_bom <> "QUERY"
   end
 
   test "a byte that is not utf-8 does not share a file with the same character" do
     raw = "http://ex.com/caf" <> <<0xE9>>
     utf8 = "http://ex.com/caf" <> <<0x00E9::utf8>>
-    raw_path = Snapshot.path(raw)
-    utf8_path = Snapshot.path(utf8)
-
-    assert raw_path =~ "%25e9"
-    assert raw_path != utf8_path
-    refute String.downcase(raw_path) == String.downcase(utf8_path)
-
     root = tmp("snapshot-latin1")
-    snap("RAW", raw, root)
-    snap("UTF8", utf8, root)
-    assert File.read!(file(root, raw)) == @utf8_bom <> "RAW"
-    assert File.read!(file(root, utf8)) == @utf8_bom <> "UTF8"
-  end
-
-  test "scheme and userinfo do not add a directory to a relative link" do
-    assert Snapshot.relative("https://ex.com/dir/page", "https://ex.com/other") ==
-             "../../../ex.com__scheme_https/other/__index.html"
-
-    assert Snapshot.relative("http://a:b@ex.com/dir/page", "http://a:b@ex.com/other") ==
-             "../../../ex.com__user_a%253ab/other/__index.html"
-
-    assert Snapshot.relative("http://ex.com/dir/page", "https://ex.com/other") ==
-             "../../../ex.com__scheme_https/other/__index.html"
+    raw_artifact = snap_artifact("RAW", raw, root, "identity0000000000000001")
+    utf8_artifact = snap_artifact("UTF8", utf8, root, "identity0000000000000002")
+    assert File.read!(saved_artifact(root, raw_artifact)) == @utf8_bom <> "RAW"
+    assert File.read!(saved_artifact(root, utf8_artifact)) == @utf8_bom <> "UTF8"
   end
 
   test "distinct identities do not share a file on disk" do
@@ -467,59 +386,157 @@ defmodule Crawler.Linker.SnapshotTest do
       {"http://ex.com/" <> <<0x1F71::utf8>>, "oxia"}
     ]
 
-    Enum.each(pairs, fn {url, body} -> snap(body, url, root) end)
-
-    Enum.each(pairs, fn {url, body} ->
-      assert File.read!(file(root, url)) == @utf8_bom <> body
-    end)
-
-    paths = Enum.map(pairs, fn {url, _} -> String.downcase(Snapshot.path(url)) end)
-    assert paths == Enum.uniq(paths)
-
     page = "http://ex.com/page"
-
-    snap(
-      Enum.map_join(pairs, "", fn {url, _} -> ~s(<a href="#{url}"></a>) end),
-      page,
-      root
-    )
-
-    saved = File.read!(file(root, page))
-
-    Enum.each(pairs, fn {url, _body} ->
-      assert_saved_expands(saved, page, url, root)
-    end)
+    html = Enum.map_join(pairs, "", fn {url, _} -> ~s(<a href="#{url}"></a>) end)
+    targets = Enum.map(pairs, fn {url, body} -> {url, body, "text/html"} end)
+    export = managed_export(root, page, html, targets)
+    assert_saved_targets(export, page, targets)
+    manifest = Jason.encode!(export.manifest)
+    refute manifest =~ "a:b@"
+    refute manifest =~ "A:B@"
+    refute manifest =~ "__user_"
   end
 
   defp assert_expands(from_url, link, target_url) do
-    href = Linker.offline_link(from_url, link)
-
-    assert Path.expand(link_path(href), Path.dirname(Snapshot.path(from_url))) ==
-             Path.expand(Snapshot.path(target_url))
+    assert URL.canonical(Linker.url(from_url, link)) == URL.canonical(target_url)
   end
 
-  defp assert_saved_expands(body, from_url, target_url, root) do
-    href = Linker.offline_link(from_url, target_url)
-    assert body =~ href
-    saved = file(root, from_url)
+  defp assert_saved_targets(export, page, targets) do
+    from = Managed.resource_for_url(export, page)
 
-    opened = Path.expand(link_path(href), Path.dirname(saved))
-    assert opened == Path.expand(file(root, target_url))
-    assert File.read!(opened) == File.read!(file(root, target_url))
+    hrefs =
+      export
+      |> Managed.read_resource(from)
+      |> Floki.parse_document!()
+      |> Floki.attribute("a", "href")
+
+    assert length(hrefs) == length(targets)
+
+    paths =
+      for {{href, {url, body, _type}}, index} <- Enum.with_index(Enum.zip(hrefs, targets)) do
+        to = Managed.edge_target(export, from, index)
+        assert {:ok, online} = Crawler.Export.Paths.online(url)
+        assert to["url"] == online
+        Managed.assert_opens(export, from, to, href)
+        assert Managed.read_resource(export, to) == @utf8_bom <> body
+        to["path"]
+      end
+
+    folded = Enum.map(paths, &(&1 |> String.normalize(:nfd) |> :string.casefold()))
+    assert length(Enum.uniq(folded)) == length(targets)
   end
 
-  defp file(root, url), do: Path.join(root, Snapshot.path(url))
-
-  defp snap(body, url, root) do
-    assert {:ok, _opts} =
+  defp snap_artifact(body, url, root, public_id) do
+    assert {:ok, artifact} =
              Snapper.snap(body, %{
                url: url,
                referrer_url: url,
                save_to: root,
+               public_id: public_id,
                html_tag: "a",
                content_type: "text/html",
                depth: 1,
                max_depths: 2
              })
+
+    artifact
+  end
+
+  defp managed_export(root, page, source, targets, extra_urls \\ []) do
+    File.rmdir!(root)
+    root = root <> "-#{System.pid()}-#{System.unique_integer([:positive])}"
+    requests = Crawler.RequestLog.new()
+
+    routes =
+      Map.new([{page, source, "text/html"} | targets], fn {url, body, type} ->
+        {Crawler.URL.canonical(url), {body, type}}
+      end)
+
+    name = {__MODULE__, make_ref()}
+
+    Req.Test.stub(name, fn conn ->
+      key = fixture_route_key(conn, routes)
+
+      Crawler.RequestLog.record(requests, key)
+      {body, type} = Map.fetch!(routes, key)
+      conn |> Plug.Conn.put_resp_header("content-type", type) |> Plug.Conn.resp(200, body)
+    end)
+
+    scope = Crawler.TestHelpers.unique_scope("managed-snapshot")
+
+    queue =
+      if extra_urls != [] do
+        queue_opts = Crawler.Options.assign_defaults(%{scope: scope, workers: 1})
+        assert {:ok, owner} = Crawler.Queue.start_link(queue_opts)
+        on_exit(fn -> Crawler.Queue.stop(owner) end)
+        feeder = Crawler.Queue.feeder(owner)
+        OPQ.pause(feeder)
+        assert {:paused, _, _} = GenStage.call(feeder, :info)
+        feeder
+      end
+
+    assert {:ok, opts} =
+             Crawler.crawl(page,
+               scope: scope,
+               queue: queue,
+               save_to: root,
+               store: nil,
+               workers: 1,
+               max_body: 1_048_576,
+               max_analysis_bytes: 16_777_216,
+               max_manifest_bytes: 16 * 1024 * 1024,
+               max_depths: 3,
+               respect_robots: false,
+               url_filter: Crawler.AllowFilter,
+               req_options: [
+                 plug: {Req.Test, name},
+                 plugins: [&fixture_transport/1],
+                 retry: false
+               ]
+             )
+
+    on_exit(fn ->
+      Crawler.stop(opts)
+      File.rm_rf!(root)
+    end)
+
+    for url <- extra_urls, do: assert({:ok, _} = Crawler.crawl(url, opts))
+    if extra_urls != [], do: Crawler.resume(opts)
+    export = Managed.ready_export(opts)
+
+    assert Crawler.RequestLog.frequencies(requests) ==
+             Map.new(routes, fn {url, _} -> {url, 1} end)
+
+    refute Jason.encode!(export.manifest) =~ "x-crawler-fixture-url"
+    export
+  end
+
+  defp fixture_route_key(conn, routes) do
+    case Plug.Conn.get_req_header(conn, "x-crawler-fixture-url") do
+      [url] -> Crawler.URL.canonical(url)
+      [] -> fixture_connection_key(conn, routes)
+    end
+  end
+
+  defp fixture_connection_key(conn, routes) do
+    key = conn |> Plug.Conn.request_url() |> Crawler.URL.canonical()
+
+    matches =
+      Enum.filter(Map.keys(routes), fn url ->
+        uri = URI.parse(url)
+        uri = %{uri | userinfo: nil, query: if(uri.query == "", do: nil, else: uri.query)}
+        Crawler.URL.canonical(URI.to_string(uri)) == key
+      end)
+
+    assert [^key] = matches
+    key
+  end
+
+  defp fixture_transport(request) do
+    Req.Request.append_request_steps(request, fixture_url: &fixture_url/1)
+  end
+
+  defp fixture_url(request) do
+    Req.Request.put_header(request, "x-crawler-fixture-url", URI.to_string(request.url))
   end
 end

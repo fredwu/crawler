@@ -1,10 +1,8 @@
 defmodule Crawler.Parser.SourceMapTest do
   use ExUnit.Case, async: true
 
-  alias Crawler.Linker
-  alias Crawler.Parser.ScriptReferences
+  alias Crawler.Analysis
   alias Crawler.Parser.SourceMap
-  alias Crawler.Snapper.LinkReplacer
 
   @map_opts %{
     url: "http://host/maps/app.js.map",
@@ -172,61 +170,57 @@ defmodule Crawler.Parser.SourceMapTest do
 
     assert Enum.map(SourceMap.link_refs(body, opts, :javascript), & &1.url) == [source]
 
-    text =
-      body
-      |> SourceMap.javascript(opts)
-      |> SourceMap.rewrite_text(page, opts, :javascript, true)
+    text = render_data_map(body, opts)
 
     assert URI.parse(text).fragment == nil
 
     decoded = decoded_data(text)
-    assert String.contains?(decoded, Linker.offline_link(page, source))
+    assert String.contains?(decoded, "fixtures/app.ts")
     refute String.contains?(decoded, ~s("app.ts"))
     assert String.contains?(decoded, "a#b.js")
     assert String.contains?(decoded, "A#A")
+
+    assert decoded ==
+             ~s|{"version":3,"file":"a#b.js","sources":["fixtures/app.ts"],"sourcesContent":[null],"mappings":"A#A"}|
   end
 
-  test "a saved map drops sourceRoot after a source becomes an offline path" do
+  test "a bound local map drops sourceRoot and keeps unrelated map members" do
     map = "http://example.com/js/app.js.map"
-    source = "http://example.com/src/app.ts"
     lib = "https://cdn.test/lib.ts"
-    nested = "http://example.com/js/lib/inline.ts"
 
     body =
       ~s|{"version":3,"sourceRoot":"../src","sources":["app.ts","#{lib}"],"mappings":"AAAA","file":"app.js"}|
 
-    {:ok, saved} = LinkReplacer.replace_links(body, map_file_opts(map))
+    {:ok, saved} = replace_local_map(body, map_file_opts(map))
 
     assert String.contains?(saved, ~s("sourceRoot":""))
     refute String.contains?(saved, ~s("sourceRoot":"../src"))
-    assert String.contains?(saved, Linker.offline_link(map, source))
-    assert String.contains?(saved, Linker.offline_link(map, lib))
+    assert String.contains?(saved, "fixtures/app.ts")
+    assert String.contains?(saved, "fixtures/lib.ts")
     assert String.contains?(saved, ~s("mappings":"AAAA"))
     assert String.contains?(saved, ~s("file":"app.js"))
 
     sections =
       ~s|{"version":3,"sourceRoot":"../src","sections":[{"map":{"version":3,"sourceRoot":"lib","sources":["inline.ts"],"mappings":""}}]}|
 
-    {:ok, section_saved} = LinkReplacer.replace_links(sections, map_file_opts(map))
+    {:ok, section_saved} = replace_local_map(sections, map_file_opts(map))
     assert String.contains?(section_saved, ~s("sourceRoot":""))
     refute String.contains?(section_saved, ~s("sourceRoot":"../src"))
     refute String.contains?(section_saved, ~s("sourceRoot":"lib"))
-    assert String.contains?(section_saved, Linker.offline_link(map, nested))
+    assert String.contains?(section_saved, "fixtures/inline.ts")
 
     embedded =
       ~s|{"version":3,"sourceRoot":"../src","sources":["app.ts"],"sourcesContent":["export {}"],"mappings":""}|
 
-    assert LinkReplacer.replace_links(embedded, map_file_opts(map)) ==
+    assert replace_local_map(embedded, map_file_opts(map)) ==
              {:ok, embedded}
-
-    part = "http://example.com/js/part.js.map"
 
     index =
       ~s|{"version":3,"sections":[{"url":"part.js.map"},{"map":{"version":3,"sourceRoot":"../src","sources":["app.ts"],"sourcesContent":["export {}"],"mappings":"AAAA"}}]}|
 
-    {:ok, index_saved} = LinkReplacer.replace_links(index, map_file_opts(map))
+    {:ok, index_saved} = replace_local_map(index, map_file_opts(map))
     assert String.contains?(index_saved, ~s("sourceRoot":"../src"))
-    assert String.contains?(index_saved, Linker.offline_link(map, part))
+    assert String.contains?(index_saved, "fixtures/part.js.map")
     assert String.contains?(index_saved, "export {}")
   end
 
@@ -236,7 +230,6 @@ defmodule Crawler.Parser.SourceMapTest do
     body = "//# sourceMappingURL=#{data}"
     page = "http://example.com/page"
     script = "http://example.com/js/app.js"
-    source = "http://example.com/src/app.ts"
 
     opts = %{
       content_type: "application/javascript",
@@ -244,15 +237,16 @@ defmodule Crawler.Parser.SourceMapTest do
       referrer_url: script
     }
 
-    text =
-      body
-      |> SourceMap.javascript(opts)
-      |> SourceMap.rewrite_text(page, opts, :javascript, true)
+    assert Enum.map(SourceMap.link_refs(body, opts, :javascript), & &1.url) == [
+             "http://example.com/src/app.ts"
+           ]
+
+    text = render_data_map(body, opts)
 
     decoded = decoded_data(text)
     assert String.contains?(decoded, ~s("sourceRoot":""))
     refute String.contains?(decoded, ~s("sourceRoot":"../src"))
-    assert String.contains?(decoded, Linker.offline_link(page, source))
+    assert String.contains?(decoded, "fixtures/app.ts")
     assert String.contains?(decoded, ~s("mappings":"AAAA"))
 
     section =
@@ -261,10 +255,7 @@ defmodule Crawler.Parser.SourceMapTest do
     section_data = "data:application/json," <> URI.encode(section, &URI.char_unreserved?/1)
     section_body = "//# sourceMappingURL=#{section_data}"
 
-    section_text =
-      section_body
-      |> SourceMap.javascript(opts)
-      |> SourceMap.rewrite_text(page, opts, :javascript, true)
+    section_text = render_data_map(section_body, opts)
 
     section_decoded = decoded_data(section_text)
 
@@ -272,10 +263,13 @@ defmodule Crawler.Parser.SourceMapTest do
 
     assert String.contains?(
              section_decoded,
-             Linker.offline_link(page, "http://example.com/js/part.js.map")
+             "fixtures/part.js.map"
            )
 
     assert String.contains?(section_decoded, "export {}")
+
+    assert section_decoded ==
+             ~s|{"version":3,"sections":[{"url":"fixtures/part.js.map"},{"map":{"version":3,"sourceRoot":"../src","sources":["app.ts"],"sourcesContent":["export {}"],"mappings":"AAAA"}}]}|
   end
 
   test "a classic script reads a source map comment after a division" do
@@ -293,8 +287,27 @@ defmodule Crawler.Parser.SourceMapTest do
 
     assert SourceMap.javascript(body, opts).url == map
 
-    saved = ScriptReferences.rewrite(body, opts)
-    assert saved == "await /x//# sourceMappingURL=" <> Linker.offline_link(page, map)
+    assert {:ok, analysis} = Analysis.analyze(body, opts)
+    assert {:ok, collection} = Analysis.occurrences_result(analysis, opts)
+
+    assert [
+             %{
+               url: ^map,
+               source_role: {:javascript, :script},
+               context: %{fetch_kind: :source_map}
+             }
+           ] = collection.occurrences
+
+    assert {:ok, bound} =
+             Analysis.bind(collection, fn ref ->
+               assert ref.value == map
+               %{fixture: :classic_map, path: "fixtures/app.js.map"}
+             end)
+
+    assert {:ok, saved} =
+             Analysis.render(analysis, bound, fn ref -> {:local, ref.target.path} end)
+
+    assert saved == "await /x//# sourceMappingURL=fixtures/app.js.map"
 
     module = Map.put(opts, :javascript_goal, :module)
     assert SourceMap.javascript(body, module) == nil
@@ -315,6 +328,104 @@ defmodule Crawler.Parser.SourceMapTest do
       })
 
     assert note.url == "http://host/real.css.map"
+  end
+
+  test "bound data maps keep BOM, encoding, and unrelated bytes while escaping fixture paths" do
+    payload =
+      "\uFEFF" <>
+        ~S|{ "version":3, "sourceRoot":"../src", "sources":["app.ts"], "mappings":"A#A", "file":"a#b.js" }|
+
+    path = "fixtures/a\"b\\c#d.ts"
+
+    expected =
+      "\uFEFF" <>
+        ~S|{ "version":3, "sourceRoot":"", "sources":["fixtures/a\"b\\c#d.ts"], "mappings":"A#A", "file":"a#b.js" }|
+
+    opts = %{url: "https://example.test/js/app.js", content_type: "application/javascript"}
+
+    for encoding <- [:percent, :base64] do
+      meta =
+        if encoding == :base64, do: "data:application/json;base64", else: "data:application/json"
+
+      data = SourceMap.encode_data(payload, meta, encoding)
+      source = "/* café */\n//# sourceMappingURL=" <> data <> "\n"
+
+      assert Enum.map(SourceMap.link_refs(source, opts, :javascript), & &1.url) == [
+               "https://example.test/src/app.ts"
+             ]
+
+      assert {:ok, rendered} = replace_local_map(source, opts, path)
+
+      assert rendered ==
+               "/* café */\n//# sourceMappingURL=" <>
+                 SourceMap.encode_data(expected, meta, encoding) <> "\n"
+
+      [_, emitted] = String.split(rendered, "//# sourceMappingURL=", parts: 2)
+      emitted = String.trim_trailing(emitted, "\n")
+      assert URI.parse(emitted).fragment == nil
+      assert {:ok, ^expected, ^meta, ^encoding} = SourceMap.decode_data(emitted)
+    end
+  end
+
+  defp replace_local_map(source, opts, app_path \\ "fixtures/app.ts") do
+    assert {:ok, analysis} = Analysis.analyze(source, opts)
+    assert {:ok, collection} = Analysis.occurrences_result(analysis, opts)
+
+    assert {:ok, bound} =
+             Analysis.bind(collection, fn
+               %{source_role: :source_map, value: "app.ts", context: %{fetch_kind: nil}} ->
+                 %{fixture: :app, path: app_path}
+
+               %{
+                 source_role: :source_map,
+                 value: "https://cdn.test/lib.ts",
+                 context: %{fetch_kind: nil}
+               } ->
+                 %{fixture: :library, path: "fixtures/lib.ts"}
+
+               %{source_role: :source_map, value: "inline.ts", context: %{fetch_kind: nil}} ->
+                 %{fixture: :inline, path: "fixtures/inline.ts"}
+
+               %{
+                 source_role: :source_map,
+                 value: "part.js.map",
+                 context: %{fetch_kind: :source_map}
+               } ->
+                 %{fixture: :part, path: "fixtures/part.js.map"}
+
+               _ref ->
+                 nil
+             end)
+
+    Analysis.render(analysis, bound, fn
+      %{target: %{path: path}} -> {:local, path}
+      _ref -> :keep
+    end)
+  end
+
+  defp render_data_map(body, opts) do
+    {source, opts} =
+      if opts.content_type == "text/html" do
+        {"<script type=\"module\">" <> body <> "</script>", Map.put(opts, :assets, ["js"])}
+      else
+        {body, opts}
+      end
+
+    assert {:ok, rendered} = replace_local_map(source, opts)
+    [prefix, original_tail] = String.split(source, "//# sourceMappingURL=", parts: 2)
+    [_, tail] = String.split(rendered, "//# sourceMappingURL=", parts: 2)
+    data = tail |> String.split(["\n", "</script>"], parts: 2) |> hd()
+    original_data = original_tail |> String.split(["\n", "</script>"], parts: 2) |> hd()
+
+    suffix =
+      binary_part(
+        original_tail,
+        byte_size(original_data),
+        byte_size(original_tail) - byte_size(original_data)
+      )
+
+    assert rendered == prefix <> "//# sourceMappingURL=" <> data <> suffix
+    data
   end
 
   defp map_file_opts(map) do
@@ -340,27 +451,24 @@ defmodule Crawler.Parser.SourceMapTest do
            ]
   end
 
-  defp assert_data_sources(body, opts, source, page) do
+  defp assert_data_sources(body, opts, source, _page) do
     assert Enum.map(SourceMap.link_refs(body, opts, :javascript), & &1.url) == [source]
 
-    text =
-      body
-      |> SourceMap.javascript(opts)
-      |> SourceMap.rewrite_text(page, opts, :javascript, true)
+    text = render_data_map(body, opts)
 
     decoded = decoded_data(text)
-    assert String.contains?(decoded, Linker.offline_link(page, source))
+    assert String.contains?(decoded, "fixtures/app.ts")
 
     refute String.contains?(
              decoded,
-             Linker.offline_link(page, "http://example.com/assets/app.ts")
+             "http://example.com/assets/app.ts"
            )
 
     refute String.contains?(decoded, "generated/app.js")
   end
 
   defp decoded_data(url) do
-    [_, payload] = String.split(url, ",", parts: 2)
-    URI.decode(payload)
+    assert {:ok, payload, _meta, _encoding} = SourceMap.decode_data(url)
+    payload
   end
 end

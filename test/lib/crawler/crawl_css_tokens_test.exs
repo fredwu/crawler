@@ -1,7 +1,7 @@
 defmodule Crawler.CrawlCssTokensTest do
   use Crawler.TestCase, async: false
 
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
   alias Crawler.Store
 
@@ -11,7 +11,7 @@ defmodule Crawler.CrawlCssTokensTest do
     req_options: req_options
   } do
     scope = unique_scope("css-hash-context")
-    root = tmp(scope)
+    root = tmp(scope, "archive")
     page = "#{url}/css-hash-page"
     css = "#{url}/assets/hash.css"
     image = "#{url}/assets/real.png"
@@ -52,22 +52,30 @@ defmodule Crawler.CrawlCssTokensTest do
 
     on_exit(fn -> Crawler.stop(opts) end)
 
+    export = ready_export(opts)
+
     wait(fn ->
       refute Crawler.running?(opts)
       assert Store.find_processed({css, scope})
       assert Store.find_processed({image, scope})
     end)
 
-    assert File.read!(saved(root, css)) ==
-             opaque <> ~s|.live{background:u\\72l(#{Crawler.Linker.offline_link(css, image)})}|
+    page_resource = resource_for_url(export, page)
+    css_resource = reference_target(export, page_resource, css)
 
-    assert_link_opens(root, page, css)
-    assert_link_opens(root, css, image)
-    assert File.read!(saved(root, image)) == "IMAGE /assets/real.png"
+    assert read_resource(export, css_resource) ==
+             opaque <>
+               ~s|.live{background:u\\72l(#{relative_reference(css_resource, reference_target(export, css_resource, image))})}|
+
+    assert_link_opens(export, page_resource, css_resource)
+    assert_link_opens(export, css_resource, reference_target(export, css_resource, image))
+
+    assert read_resource(export, reference_target(export, css_resource, image)) ==
+             "IMAGE /assets/real.png"
 
     for name <- ["hidden.png", "escaped.png", "hidden-set.png"] do
       refute Store.find({"#{url}/assets/#{name}", scope})
-      refute File.exists?(saved(root, "#{url}/assets/#{name}"))
+      refute Enum.any?(export.manifest["resources"], &(&1["url"] == "#{url}/assets/#{name}"))
     end
   end
 
@@ -78,7 +86,7 @@ defmodule Crawler.CrawlCssTokensTest do
          req_options: req_options
        } do
     scope = unique_scope("css-url-comments")
-    root = tmp(scope)
+    root = tmp(scope, "archive")
     page = "#{url}/css-comment-page"
     css = "#{url}/assets/comments.css"
     comment_image = "#{url}/*draft*/image.png"
@@ -123,6 +131,8 @@ defmodule Crawler.CrawlCssTokensTest do
 
     on_exit(fn -> Crawler.stop(opts) end)
 
+    export = ready_export(opts)
+
     wait(fn ->
       refute Crawler.running?(opts)
       assert Store.find_processed({css, scope})
@@ -130,17 +140,22 @@ defmodule Crawler.CrawlCssTokensTest do
       assert Store.find_processed({comment_image, scope})
     end)
 
-    assert File.read!(saved(root, css)) ==
-             ~s|.x{background:url( #{Crawler.Linker.offline_link(css, comment_image)} ),url("#{Crawler.Linker.offline_link(css, image)}"/* after */),#{invalid}}|
+    page_resource = resource_for_url(export, page)
+    css_resource = reference_target(export, page_resource, css)
 
-    assert_link_opens(root, page, css)
-    assert_link_opens(root, css, image)
-    assert_link_opens(root, css, comment_image)
-    assert File.read!(saved(root, comment_image)) == "IMAGE /*draft*/image.png"
+    assert read_resource(export, css_resource) ==
+             ~s|.x{background:url( #{relative_reference(css_resource, reference_target(export, css_resource, comment_image))} ),url("#{relative_reference(css_resource, reference_target(export, css_resource, image))}"/* after */),#{invalid}}|
+
+    assert_link_opens(export, page_resource, css_resource)
+    assert_link_opens(export, css_resource, reference_target(export, css_resource, image))
+    assert_link_opens(export, css_resource, reference_target(export, css_resource, comment_image))
+
+    assert read_resource(export, reference_target(export, css_resource, comment_image)) ==
+             "IMAGE /*draft*/image.png"
 
     for name <- ["image.png", "quoted.png", "spaced.png", "single.png"] do
       refute Store.find({"#{url}/assets/#{name}", scope})
-      refute File.exists?(saved(root, "#{url}/assets/#{name}"))
+      refute Enum.any?(export.manifest["resources"], &(&1["url"] == "#{url}/assets/#{name}"))
     end
   end
 
@@ -150,7 +165,7 @@ defmodule Crawler.CrawlCssTokensTest do
     req_options: req_options
   } do
     scope = unique_scope("css-token-context")
-    root = tmp(scope)
+    root = tmp(scope, "archive")
     page = "#{url}/css-token-page"
     css = "#{url}/assets/app.css"
     escaped_image = "#{url}/assets/foo)bar.png"
@@ -194,6 +209,8 @@ defmodule Crawler.CrawlCssTokensTest do
 
     on_exit(fn -> Crawler.stop(opts) end)
 
+    export = ready_export(opts)
+
     wait(fn ->
       refute Crawler.running?(opts)
       assert Store.find_processed({css, scope})
@@ -201,15 +218,23 @@ defmodule Crawler.CrawlCssTokensTest do
       assert Store.find_processed({escaped_image, scope})
     end)
 
-    assert File.read!(saved(root, css)) =~ literal
-    assert_link_opens(root, page, css)
-    assert_link_opens(root, css, image)
-    assert_link_opens(root, css, escaped_image)
-    assert File.read!(saved(root, escaped_image)) == "IMAGE /assets/foo)bar.png"
+    page_resource = resource_for_url(export, page)
+    css_resource = reference_target(export, page_resource, css)
+
+    assert read_resource(export, css_resource) ==
+             literal <>
+               ~s|.live{background:url(#{relative_reference(css_resource, reference_target(export, css_resource, image))}),url(#{relative_reference(css_resource, reference_target(export, css_resource, escaped_image))})}|
+
+    assert_link_opens(export, page_resource, css_resource)
+    assert_link_opens(export, css_resource, reference_target(export, css_resource, image))
+    assert_link_opens(export, css_resource, reference_target(export, css_resource, escaped_image))
+
+    assert read_resource(export, reference_target(export, css_resource, escaped_image)) ==
+             "IMAGE /assets/foo)bar.png"
 
     for name <- ["hidden.png", "hidden.css", "hidden-set.png"] do
       refute Store.find({"#{url}/assets/#{name}", scope})
-      refute File.exists?(saved(root, "#{url}/assets/#{name}"))
+      refute Enum.any?(export.manifest["resources"], &(&1["url"] == "#{url}/assets/#{name}"))
     end
   end
 end

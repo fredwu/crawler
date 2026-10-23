@@ -1,6 +1,10 @@
 defmodule Crawler.Charset.Encoding do
   @moduledoc false
 
+  alias Crawler.Analysis.Budget
+
+  @chunk_bytes 256
+
   @utf8_bom <<0xEF, 0xBB, 0xBF>>
   @utf16be_bom <<0xFE, 0xFF>>
   @utf16le_bom <<0xFF, 0xFE>>
@@ -42,13 +46,20 @@ defmodule Crawler.Charset.Encoding do
   def bom(_body), do: :none
 
   def decode_label(body, label) do
-    case encoding(label) do
-      :utf8 -> to_utf8(body)
-      :windows_1252 -> windows_1252(body)
-      {:utf16, endian} -> to_utf16(body, endian)
-      :unknown -> to_utf8(body)
+    {:ok, decoded, _budget, _owned} = decode_result(body, encoding(label), Budget.unlimited())
+    decoded
+  end
+
+  def decode_result(body, encoding, budget) do
+    cond do
+      encoding in [:utf8, :unknown] and String.valid?(body) -> unchanged(body, budget)
+      encoding == :windows_1252 and ascii?(body) -> unchanged(body, budget)
+      body == "" -> unchanged(body, budget)
+      true -> convert(body, 0, encoding, [], 0, 0, 0, budget)
     end
   end
+
+  defp unchanged(body, budget), do: {:ok, body, budget, 0}
 
   def encoding("utf-8"), do: :utf8
   def encoding("utf8"), do: :utf8
@@ -63,21 +74,86 @@ defmodule Crawler.Charset.Encoding do
   def encoding("utf-16le"), do: {:utf16, :little}
   def encoding(_label), do: :unknown
 
-  def to_utf8(body), do: replace_invalid(body, :utf8, [])
-  def to_utf16(body, endian), do: replace_invalid(body, {:utf16, endian}, [])
+  def to_utf8(body), do: decode_label(body, "utf-8")
 
-  defp replace_invalid(<<>>, _encoding, acc), do: IO.iodata_to_binary(acc)
+  def to_utf16(body, endian) do
+    {:ok, decoded, _budget, _owned} = decode_result(body, {:utf16, endian}, Budget.unlimited())
+    decoded
+  end
 
-  defp replace_invalid(body, encoding, acc) do
+  defp convert(body, offset, _encoding, parts, size, count, owned, budget)
+       when offset == byte_size(body) do
+    scratch = Budget.cost(:binary) + max(size, owned) + Budget.cost(:list_cell, count)
+
+    with {:ok, budget} <- Budget.reserve(budget, scratch) do
+      decoded = parts |> Enum.reverse() |> IO.iodata_to_binary()
+      retained = Budget.cost(:binary) + :binary.referenced_byte_size(decoded)
+
+      with {:ok, budget} <- Budget.settle(budget, scratch, retained),
+           {:ok, budget} <- Budget.refund(budget, owned),
+           do: {:ok, decoded, budget, retained}
+    end
+  end
+
+  defp convert(body, offset, encoding, parts, size, count, owned, budget) do
+    length = min(@chunk_bytes, byte_size(body) - offset)
+    bound = if match?({:utf16, _}, encoding), do: div(length + 1, 2) * 3 + 3, else: length * 3
+
+    scratch =
+      Budget.cost(:frame) + Budget.cost(:binary, 3) + bound * 2 +
+        length * (Budget.cost(:binary, 2) + Budget.cost(:list_cell, 2))
+
+    with {:ok, budget} <- Budget.reserve(budget, scratch) do
+      chunk = binary_part(body, offset, length)
+      {piece, consumed} = convert_chunk(chunk, encoding, offset + length == byte_size(body))
+      piece_size = byte_size(piece)
+
+      retained =
+        Budget.cost(:binary) + :binary.referenced_byte_size(piece) + Budget.cost(:list_cell)
+
+      with {:ok, budget} <- Budget.settle(budget, scratch, retained) do
+        convert(
+          body,
+          offset + consumed,
+          encoding,
+          [piece | parts],
+          size + piece_size,
+          count + 1,
+          owned + retained,
+          budget
+        )
+      end
+    end
+  end
+
+  defp convert_chunk(chunk, :windows_1252, _final?) do
+    converted = for <<byte <- chunk>>, into: "", do: <<win_codepoint(byte)::utf8>>
+    {converted, byte_size(chunk)}
+  end
+
+  defp convert_chunk(chunk, encoding, final?) do
+    source = if encoding in [:utf8, :unknown], do: :utf8, else: encoding
+    replace_invalid(chunk, source, [], 0, final?)
+  end
+
+  defp replace_invalid(body, encoding, parts, consumed, final?) do
     case :unicode.characters_to_binary(body, encoding, :utf8) do
       utf8 when is_binary(utf8) ->
-        IO.iodata_to_binary([acc, utf8])
+        {IO.iodata_to_binary(Enum.reverse([utf8 | parts])), consumed + byte_size(body)}
 
       {:error, good, rest} ->
-        replace_invalid(drop_bad(rest, encoding), encoding, [acc, good, @replacement])
+        tail = drop_bad(rest, encoding)
+        next = consumed + byte_size(body) - byte_size(tail)
+        replace_invalid(tail, encoding, [@replacement, good | parts], next, final?)
 
-      {:incomplete, good, _rest} ->
-        IO.iodata_to_binary([acc, good, @replacement])
+      {:incomplete, good, rest} ->
+        if final? do
+          {IO.iodata_to_binary(Enum.reverse([@replacement, good | parts])),
+           consumed + byte_size(body)}
+        else
+          {IO.iodata_to_binary(Enum.reverse([good | parts])),
+           consumed + byte_size(body) - byte_size(rest)}
+        end
     end
   end
 
@@ -85,11 +161,9 @@ defmodule Crawler.Charset.Encoding do
   defp drop_bad(<<_, _, rest::binary>>, {:utf16, _endian}), do: rest
   defp drop_bad(_rest, _encoding), do: <<>>
 
-  defp windows_1252(body) do
-    for <<byte <- body>>, into: "" do
-      <<win_codepoint(byte)::utf8>>
-    end
-  end
+  defp ascii?(<<byte, rest::binary>>) when byte < 128, do: ascii?(rest)
+  defp ascii?(<<>>), do: true
+  defp ascii?(_body), do: false
 
   defp win_codepoint(byte) when byte <= 0x7F or byte >= 0xA0, do: byte
   defp win_codepoint(byte), do: Map.get(@windows_1252, byte, 0xFFFD)

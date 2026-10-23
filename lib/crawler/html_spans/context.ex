@@ -1,8 +1,6 @@
 defmodule Crawler.HTMLSpans.Context do
   @moduledoc false
 
-  alias Crawler.HTMLSpans
-
   @html_void ~w(area base br col embed hr img input link meta param source track wbr)
   @svg_integration ~w(foreignobject desc title)
   @math_text ~w(mi mo mn ms mtext)
@@ -49,8 +47,8 @@ defmodule Crawler.HTMLSpans.Context do
   defp svg_entry?(_inherited, _stack), do: false
 
   defp foreign_breakout?(%{name: "font"} = tag) do
-    tag.source
-    |> HTMLSpans.attributes(0, decode: false)
+    tag
+    |> context_attributes()
     |> Enum.any?(&(&1.name in ~w(color face size)))
   end
 
@@ -96,7 +94,7 @@ defmodule Crawler.HTMLSpans.Context do
       _attr -> nil
     end)
     |> case do
-      value when is_binary(value) -> String.downcase(value, :ascii) in ["open", "closed"]
+      value when is_binary(value) -> ascii_equal?(value, "open") or ascii_equal?(value, "closed")
       _value -> false
     end
   end
@@ -151,15 +149,28 @@ defmodule Crawler.HTMLSpans.Context do
   defp html_children?(%{name: name}, :math) when name in @math_text, do: true
 
   defp html_children?(%{name: "annotation-xml"} = tag, :math) do
-    tag.source
-    |> HTMLSpans.attributes(0, decode: false)
-    |> Enum.find_value("", fn attr -> if attr.name == "encoding", do: attr.value end)
-    |> then(fn value -> if String.valid?(value), do: HTMLSpans.decode(value), else: value end)
-    |> String.downcase(:ascii)
-    |> then(&(&1 in ["text/html", "application/xhtml+xml"]))
+    tag
+    |> context_attributes()
+    |> Enum.find_value("", fn attr -> if attr.name == "encoding", do: attr.decoded end)
+    |> then(&(ascii_equal?(&1, "text/html") or ascii_equal?(&1, "application/xhtml+xml")))
   end
 
   defp html_children?(_tag, _namespace), do: false
+
+  defp context_attributes(tag),
+    do: Map.get(tag, :context_attributes, Map.get(tag, :attributes, []))
+
+  defp ascii_equal?(value, expected) when byte_size(value) == byte_size(expected),
+    do: ascii_bytes_equal?(value, expected)
+
+  defp ascii_equal?(_value, _expected), do: false
+
+  defp ascii_bytes_equal?(<<>>, <<>>), do: true
+
+  defp ascii_bytes_equal?(<<byte, rest::binary>>, <<expected, tail::binary>>) do
+    lower = if byte in ?A..?Z, do: byte + 32, else: byte
+    lower == expected and ascii_bytes_equal?(rest, tail)
+  end
 
   defp leave_foreign([%{namespace: namespace, html_children?: false} | rest])
        when namespace != :html,

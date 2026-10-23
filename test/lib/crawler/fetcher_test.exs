@@ -1,5 +1,7 @@
 defmodule Crawler.FetcherTest do
-  use Crawler.TestCase, async: true
+  use Crawler.TestCase, async: false
+
+  import Crawler.ManagedSnapshotHelpers
 
   alias Crawler.Fetcher
   alias Crawler.Fetcher.Modifier
@@ -22,6 +24,7 @@ defmodule Crawler.FetcherTest do
     modifier: Modifier,
     retrier: DummyRetrier,
     store: Store,
+    save_to: nil,
     html_tag: "a"
   }
 
@@ -34,14 +37,15 @@ defmodule Crawler.FetcherTest do
       |> Plug.Conn.resp(200, "<html>200</html>")
     end)
 
-    @defaults
-    |> Map.merge(%{url: url, req_options: req_options})
-    |> Fetcher.fetch()
+    page =
+      @defaults
+      |> Map.merge(%{url: url, req_options: req_options})
+      |> Fetcher.fetch()
 
-    page = Store.find({url, nil})
-
+    assert %Crawler.Store.Page{} = page
     assert page.url == url
     assert page.body == "<html>200</html>"
+    assert Store.find({url, nil}).body == page.body
   end
 
   test "success: 301", %{site: site, url: url, req_options: req_options} do
@@ -59,14 +63,15 @@ defmodule Crawler.FetcherTest do
 
     url = "#{url}/fetcher/301"
 
-    @defaults
-    |> Map.merge(%{url: url, req_options: req_options})
-    |> Fetcher.fetch()
+    page =
+      @defaults
+      |> Map.merge(%{url: url, req_options: req_options})
+      |> Fetcher.fetch()
 
-    page = Store.find({url, nil})
-
+    assert %Crawler.Store.Page{} = page
     assert page.url == url
     assert page.body == "<html>301_200</html>"
+    assert Store.find({url, nil}).body == page.body
   end
 
   test "failure: 500", %{site: site, url: url, req_options: req_options} do
@@ -82,7 +87,7 @@ defmodule Crawler.FetcherTest do
       |> Fetcher.fetch()
 
     assert fetcher == {:error, "Failed to fetch #{url}, status code: 500"}
-    refute Store.find({url, nil}).body
+    refute Store.find({url, nil})
   end
 
   test "failure: timeout", %{site: site, url: url, req_options: req_options} do
@@ -98,7 +103,7 @@ defmodule Crawler.FetcherTest do
       |> Fetcher.fetch()
 
     assert fetcher == {:error, "Failed to fetch #{url}, reason: :timeout"}
-    refute Store.find({url, nil}).body
+    refute Store.find({url, nil})
   end
 
   test "failure: too many redirects", %{site: site, url: url, req_options: req_options} do
@@ -114,51 +119,116 @@ defmodule Crawler.FetcherTest do
       |> Fetcher.fetch()
 
     assert fetcher == {:error, "Failed to fetch #{url}, reason: too many redirects (0)"}
-    refute Store.find({url, nil}).body
+    refute Store.find({url, nil})
   end
 
   test "failure: retries", %{site: site, url: url, req_options: req_options} do
     url = "#{url}/fetcher/retries"
+    requests = :counters.new(1, [:atomics])
 
     ReqTestSite.expect(site, "GET", "/fetcher/retries", fn conn ->
+      :counters.add(requests, 1, 1)
       Plug.Conn.resp(conn, 500, "<html>500</html>")
-    end)
-
-    wait(fn ->
-      fetcher =
-        @defaults
-        |> Map.merge(%{url: url, timeout: 100, retrier: Retrier, req_options: req_options})
-        |> Fetcher.fetch()
-
-      assert fetcher == {:error, "Failed to fetch #{url}, status code: 500"}
-      refute Store.find({url, nil}).body
-    end)
-  end
-
-  test "failure: unable to write", %{site: site, url: url, req_options: req_options} do
-    url = "#{url}/fetcher/fail.html"
-
-    ReqTestSite.expect_once(site, "GET", "/fetcher/fail.html", fn conn ->
-      conn
-      |> Plug.Conn.put_resp_header("content-type", "text/html")
-      |> Plug.Conn.resp(200, "<html>200</html>")
     end)
 
     fetcher =
       @defaults
-      |> Map.merge(%{url: url, save_to: "nope", req_options: req_options})
+      |> Map.merge(%{url: url, timeout: 100, retrier: Retrier, req_options: req_options})
       |> Fetcher.fetch()
 
-    assert {:error, {:snapshot, :write, :enoent}} == fetcher
+    assert fetcher == {:error, "Failed to fetch #{url}, status code: 500"}
+    assert :counters.get(requests, 1) == @defaults.retries + 1
+    refute Store.find({url, nil})
+  end
+
+  test "publication refuses a destination occupied after preparation and preserves its archive",
+       %{site: site, url: url, req_options: req_options} do
+    url = "#{url}/fetcher/fail.bin"
+    scope = unique_scope("fetcher-publication-collision")
+    parent = tmp(scope)
+    root = Path.join(parent, "archive")
+    previous_root = Path.join(parent, "previous")
+    requests = :counters.new(1, [:atomics])
+    observer = self()
+    on_exit(fn -> File.rm_rf(parent) end)
+
+    ReqTestSite.expect(site, "GET", "/fetcher/fail.bin", fn conn ->
+      :counters.add(requests, 1, 1)
+      body = if :counters.get(requests, 1) == 1, do: "PREVIOUS COMPLETE BODY", else: "NEW BODY"
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "application/octet-stream")
+      |> Plug.Conn.resp(200, body)
+    end)
+
+    assert {:ok, previous} =
+             stage_copy(
+               Map.merge(@defaults, %{
+                 url: url,
+                 scope: unique_scope("fetcher-previous-archive"),
+                 save_to: previous_root,
+                 req_options: req_options
+               })
+             )
+
+    on_exit(fn -> Crawler.stop(previous) end)
+    assert {:ok, :committed} = finalize_copy(previous)
+    previous_export = ready_export(previous)
+    resource = resource_for_url(previous_export, url)
+    previous_body = read_resource(previous_export, resource)
+    previous_manifest = File.read!(Path.join(previous_root, "manifest.json"))
+    assert previous_body == "PREVIOUS COMPLETE BODY"
+
+    assert {:ok, failed} =
+             stage_copy(
+               Map.merge(@defaults, %{
+                 url: url,
+                 scope: scope,
+                 save_to: root,
+                 req_options: req_options
+               })
+             )
+
+    on_exit(fn -> Crawler.stop(failed) end)
+
+    assert {:error, :destination_exists} =
+             finalize_copy(failed, fn %{filesystem: filesystem} ->
+               assert File.regular?(Path.join(filesystem.receipt.stage, "archive/manifest.json"))
+               refute File.exists?(root)
+               File.rename!(previous_root, root)
+               send(observer, {:prepared_collision, filesystem})
+             end)
+
+    assert_receive {:prepared_collision, filesystem}
+
+    wait(fn ->
+      assert {:ok, %{state: :failed, ready?: false, reason: {:snapshot, :destination_exists}}} =
+               Crawler.export_status(failed)
+
+      refute Process.alive?(filesystem.filesystem)
+      refute File.exists?(filesystem.receipt.stage)
+      refute File.exists?(filesystem.receipt.claim)
+    end)
+
+    assert File.read!(Path.join(root, "manifest.json")) == previous_manifest
+    assert read_resource(%{previous_export | root: root}, resource) == previous_body
+    assert :counters.get(requests, 1) == 2
+    assert Store.find_processed({url, scope}).body == "NEW BODY"
+    assert Store.ops_count(scope) == 1
+    assert Store.pending_count(scope) == 0
+    assert Store.inflight_count(scope) == 0
   end
 
   test "snap /fetcher/page.html", %{
     site: site,
     url: url,
-    path: path,
     req_options: req_options
   } do
     url = "#{url}/fetcher/page.html"
+    scope = unique_scope("fetcher-snapshot")
+    parent = tmp(scope)
+    root = Path.join(parent, "archive")
+    on_exit(fn -> File.rm_rf(parent) end)
 
     ReqTestSite.expect_once(site, "GET", "/fetcher/page.html", fn conn ->
       conn
@@ -166,13 +236,20 @@ defmodule Crawler.FetcherTest do
       |> Plug.Conn.resp(200, "<html>200</html>")
     end)
 
-    @defaults
-    |> Map.merge(%{url: url, save_to: tmp("fetcher"), req_options: req_options})
-    |> Fetcher.fetch()
+    assert {:ok, crawl} =
+             start_crawl(url,
+               scope: scope,
+               workers: 1,
+               max_pages: 1,
+               store: Store,
+               save_to: root,
+               req_options: req_options
+             )
 
-    wait(fn ->
-      assert {:ok, <<0xEF, 0xBB, 0xBF, "<html>200</html>">>} ==
-               File.read(tmp("fetcher/#{path}/fetcher", "page.html"))
-    end)
+    export = ready_export(crawl)
+    resource = resource_for_url(export, url)
+    assert resource["content_type"] == "text/html"
+    assert read_resource(export, resource) == <<0xEF, 0xBB, 0xBF, "<html>200</html>">>
+    assert Store.find_processed({url, scope}).body == "<html>200</html>"
   end
 end

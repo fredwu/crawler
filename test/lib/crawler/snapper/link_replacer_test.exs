@@ -1,12 +1,11 @@
 defmodule Crawler.Snapper.LinkReplacerTest do
   use ExUnit.Case, async: true
 
-  alias Crawler.Linker
   alias Crawler.Snapper.LinkReplacer
 
   doctest LinkReplacer
 
-  test "rewrites links that contain regex characters" do
+  test "preserves absolute links that contain regex characters" do
     assert {:ok, body} =
              LinkReplacer.replace_links(
                "<a href='http://example.com/search?q=1'></a>",
@@ -20,10 +19,7 @@ defmodule Crawler.Snapper.LinkReplacerTest do
                }
              )
 
-    assert body =~
-             Linker.offline_link("http://example.com/dir/page", "http://example.com/search?q=1")
-
-    refute body =~ "href='http://example.com/search?q=1'"
+    assert body == "<a href='http://example.com/search?q=1'></a>"
   end
 
   test "rewrites links against the resolved url" do
@@ -43,12 +39,11 @@ defmodule Crawler.Snapper.LinkReplacerTest do
                opts
              )
 
-    assert body =~ "href='../../host/dir/next/__index.html'"
-    assert body =~ "href='../../cdn.example/lib.js'"
-    assert body =~ "href='../../host/dir/page/__index.html#a'"
+    assert body =~ "href='http://host/dir/next'"
+    assert body =~ "href='http://cdn.example/lib.js'"
+    assert body =~ "href='http://host/dir/page#a'"
     refute body =~ "href='next'"
-    refute body =~ "//cdn.example/lib.js"
-    refute body =~ "href='http://host/dir/page#a'"
+    refute body =~ "href='//cdn.example/lib.js'"
   end
 
   test "rewrites srcset, style urls, and html-escaped queries" do
@@ -75,7 +70,7 @@ defmodule Crawler.Snapper.LinkReplacerTest do
     refute body =~ ~s|href="/search?q=1&amp;x=2"|
     assert body =~ "b.jpg"
     assert body =~ "bg2.png"
-    assert body =~ Linker.offline_link(opts.url, "http://host/search?q=1&x=2")
+    assert body =~ "http://host/search?q&#61;1&amp;x&#61;2"
   end
 
   test "rewrites style attributes without changing CSS examples in text or other attributes" do
@@ -98,7 +93,7 @@ defmodule Crawler.Snapper.LinkReplacerTest do
     """
 
     assert {:ok, body} = LinkReplacer.replace_links(html, opts)
-    image = Linker.offline_link(opts.url, "http://host/dir/a.png")
+    image = "http://host/dir/a.png"
 
     assert body =~ ~s|<p>url("a.png"), image-set("a.png" 1x), @import "theme.css";</p>|
     assert body =~ ~s|title="style=url('a.png')"|
@@ -135,8 +130,8 @@ defmodule Crawler.Snapper.LinkReplacerTest do
     """
 
     assert {:ok, body} = LinkReplacer.replace_links(html, opts)
-    shown = Linker.offline_link(opts.url, "http://host/dir/shown.png")
-    also = Linker.offline_link(opts.url, "http://host/dir/also.png")
+    shown = "http://host/dir/shown.png"
+    also = "http://host/dir/also.png"
 
     refute body =~ ~s|url("shown.png")|
     refute body =~ ~s|url("also.png")|
@@ -169,7 +164,7 @@ defmodule Crawler.Snapper.LinkReplacerTest do
     """
 
     assert {:ok, body} = LinkReplacer.replace_links(html, opts)
-    shown = Linker.offline_link(opts.url, "http://host/dir/shown.png")
+    shown = "http://host/dir/shown.png"
 
     refute body =~ ~s|url("shown.png")|
     assert body =~ ~s|url("idle.png")|
@@ -197,7 +192,7 @@ defmodule Crawler.Snapper.LinkReplacerTest do
       ~s|<iframe srcdoc="<style>:root { --bg: url(&quot;shown.png&quot;); --idle: url(&quot;idle.png&quot;); }</style><style>body { background: var(--bg); color: var(--idle); }</style>"></iframe>|
 
     assert {:ok, body} = LinkReplacer.replace_links(html, opts)
-    shown = Linker.offline_link(opts.url, "http://host/dir/shown.png")
+    shown = "http://host/dir/shown.png"
 
     refute body =~ "url(&quot;shown.png&quot;)"
     assert body =~ "url(&quot;idle.png&quot;)"
@@ -234,5 +229,118 @@ defmodule Crawler.Snapper.LinkReplacerTest do
     assert body =~ "a.jpg"
     assert body =~ "b.jpg"
     assert body =~ "q.png"
+  end
+
+  test "standalone online script and stylesheet references keep integrity and strip userinfo" do
+    source =
+      ~s|<script src="app.js" integrity="script"></script>| <>
+        ~s|<link rel="stylesheet" href="https://cdn.test/app.css" integrity="style">|
+
+    assert {:ok, body} =
+             LinkReplacer.replace_links(source, %{
+               url: "https://user:secret@example.test/dir/page",
+               content_type: "text/html",
+               html_tag: "a",
+               assets: ["js", "css"]
+             })
+
+    assert body ==
+             ~s|<script src="https://example.test/dir/app.js" integrity="script"></script>| <>
+               ~s|<link rel="stylesheet" href="https://cdn.test/app.css" integrity="style">|
+
+    refute body =~ "user"
+    refute body =~ "secret"
+  end
+
+  test "bound successful targets become local while failed and absent targets stay online" do
+    source =
+      ~s|<script src="ok.js" integrity="ok"></script>| <>
+        ~s|<script src="failed.js" integrity="failed"></script>| <>
+        ~s|<a href="missing#section">Missing</a>|
+
+    opts = %{
+      url: "https://user:secret@example.test/dir/page",
+      content_type: "text/html",
+      html_tag: "a",
+      assets: ["js"]
+    }
+
+    assert {:ok, body} =
+             Crawler.StandaloneRewriteHelpers.replace_bound(
+               source,
+               opts,
+               fn
+                 %{value: "ok.js"} -> :successful_script
+                 %{value: "failed.js"} -> :failed_script
+                 %{value: "missing#section"} -> nil
+               end,
+               %{successful_script: {:ok, "fixtures/app.js"}, failed_script: {:error, :not_found}}
+             )
+
+    assert body ==
+             ~s|<script src="fixtures/app.js"></script>| <>
+               ~s|<script src="https://example.test/dir/failed.js" integrity="failed"></script>| <>
+               ~s|<a href="https://example.test/dir/missing#section">Missing</a>|
+
+    refute body =~ "user"
+    refute body =~ "secret"
+  end
+
+  test "one URL can bind a successful script and a failed image independently" do
+    source = ~s|<script src="same" integrity="script"></script><img src="same">|
+
+    opts = %{
+      url: "https://example.test/page",
+      content_type: "text/html",
+      html_tag: "a",
+      assets: ["js", "images"]
+    }
+
+    assert {:ok, body} =
+             Crawler.StandaloneRewriteHelpers.replace_bound(
+               source,
+               opts,
+               fn
+                 %{context: %{html_tag: "script"}} -> :script
+                 %{context: %{html_tag: "img"}} -> :image
+               end,
+               %{script: {:ok, "fixtures/script.js"}, image: {:error, :failed}}
+             )
+
+    assert body ==
+             ~s|<script src="fixtures/script.js"></script><img src="https://example.test/same">|
+  end
+
+  test "a successful local resolution that keeps the source value also keeps integrity" do
+    source = ~s|<script src="app.js" integrity="original"></script>|
+
+    opts = %{
+      url: "https://example.test/page",
+      content_type: "text/html",
+      html_tag: "a",
+      assets: ["js"]
+    }
+
+    assert {:ok, ^source} =
+             Crawler.StandaloneRewriteHelpers.replace_bound(
+               source,
+               opts,
+               fn %{value: "app.js"} -> :script end,
+               %{script: {:ok, "app.js"}}
+             )
+  end
+
+  test "a local resolver cannot rewrite an occurrence without a bound target" do
+    source = ~s|<a href="next#section">Next</a>|
+    opts = %{url: "https://example.test/page", content_type: "text/html", html_tag: "a"}
+    assert {:ok, prepared} = Crawler.Parser.prepare_for_parse(source, opts)
+
+    assert {:error, :unbound_local_target} =
+             LinkReplacer.replace_prepared(prepared, fn _occurrence ->
+               {:local, "fixtures/next.html"}
+             end)
+
+    assert {:ok, ~s|<a href="https://example.test/next#section">Next</a>|} =
+             LinkReplacer.replace_prepared(prepared, &Crawler.Analysis.online_fallback/1)
   end
 end

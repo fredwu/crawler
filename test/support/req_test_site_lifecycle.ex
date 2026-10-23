@@ -22,7 +22,8 @@ defmodule Crawler.ReqTestSite.Lifecycle do
         :ok
 
       :closed ->
-        if owner, do: Crawler.Queue.stop(owner)
+        accepted = dispose_runs([work])
+        if owner, do: stop_owned_queues([owner], accepted)
         {:error, :fixture_closed}
     end
   end
@@ -56,19 +57,42 @@ defmodule Crawler.ReqTestSite.Lifecycle do
   end
 
   def cleanup(agent) do
-    {queues, watchers} =
+    {crawls, queues, watchers} =
       Agent.get_and_update(agent, fn state ->
-        {{state.owned_queues, Map.values(state.requests)}, %{state | closing?: true}}
+        {{state.crawls, state.owned_queues, Map.values(state.requests)},
+         %{state | closing?: true}}
       end)
 
-    Enum.each(queues, &Crawler.Queue.stop/1)
+    accepted = dispose_runs(crawls)
+    stop_owned_queues(queues, accepted)
     Enum.each(watchers, &finish_request/1)
   end
 
-  defp owned_queue(%{queue: queue, queue_owner: owner, scope: scope}) do
+  defp dispose_runs(crawls) do
+    crawls
+    |> Enum.map(fn {scope, generation, _queue} -> {scope, generation} end)
+    |> Enum.uniq()
+    |> Enum.reduce(MapSet.new(), fn {scope, generation} = run, accepted ->
+      if not is_nil(generation) and Crawler.Store.dispose_scope(scope, generation) == :ok,
+        do: MapSet.put(accepted, run),
+        else: accepted
+    end)
+  end
+
+  defp stop_owned_queues(queues, accepted) do
+    queues
+    |> Enum.filter(fn {_owner, scope, generation} ->
+      MapSet.member?(accepted, {scope, generation})
+    end)
+    |> Enum.map(fn {owner, _scope, _generation} -> owner end)
+    |> Enum.uniq()
+    |> Enum.each(&Crawler.Queue.stop/1)
+  end
+
+  defp owned_queue(%{queue: queue, queue_owner: owner, scope: scope} = opts) do
     case Crawler.Store.queue_record(queue) do
       %{owner: ^owner, scope: ^scope} when is_pid(owner) ->
-        owner
+        {owner, scope, opts[:generation]}
 
       _ ->
         nil

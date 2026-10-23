@@ -3,8 +3,7 @@ defmodule Crawler.CrawlHTTPTest do
 
   import Plug.Conn
 
-  alias Crawler.Linker
-  alias Crawler.Linker.Snapshot
+  import Crawler.ManagedSnapshotHelpers
   alias Crawler.Store
 
   defmodule SecretModifier do
@@ -361,7 +360,12 @@ defmodule Crawler.CrawlHTTPTest do
 
   test "a gzip page is stored and followed as html", context do
     body = ~s|<a href="/gzip-next">Next</a>|
-    root = tmp(unique_scope("gzip-page"))
+
+    root =
+      Path.join(
+        tmp(),
+        unique_scope("gzip-page") <> "-#{Base.encode16(:crypto.strong_rand_bytes(6))}"
+      )
 
     ReqTestSite.expect_once(context.site, "GET", "/gzip", fn conn ->
       conn
@@ -373,17 +377,29 @@ defmodule Crawler.CrawlHTTPTest do
     ReqTestSite.expect_once(context.site, "GET", "/gzip-next", &html(&1, "next"))
 
     opts = crawl("#{context.url}/gzip", context, save_to: root)
-    saved = File.read!(Path.join(root, Snapshot.path("#{context.url}/gzip")))
+    export = ready_export(opts)
+    source = resource_for_url(export, "#{context.url}/gzip")
+    saved = read_resource(export, source)
 
     assert Store.find_processed({"#{context.url}/gzip", opts.scope}).body == body
     assert saved =~ "Next"
     refute String.starts_with?(saved, <<31, 139>>)
     assert Store.find_processed({"#{context.url}/gzip-next", opts.scope})
+    target = reference_target(export, source, "#{context.url}/gzip-next")
+    {:ok, document} = Floki.parse_document(saved)
+    [href] = Floki.attribute(document, "a", "href")
+    assert_opens(export, source, target, href)
+    assert read_resource(export, target) == <<0xEF, 0xBB, 0xBF>> <> "next"
   end
 
   test "a double gzip page is stored and followed as html", context do
     body = ~s|<a href="/nested-next">Next</a>|
-    root = tmp(unique_scope("nested-gzip"))
+
+    root =
+      Path.join(
+        tmp(),
+        unique_scope("nested-gzip") <> "-#{Base.encode16(:crypto.strong_rand_bytes(6))}"
+      )
 
     ReqTestSite.expect_once(context.site, "GET", "/nested", fn conn ->
       conn
@@ -395,12 +411,19 @@ defmodule Crawler.CrawlHTTPTest do
     ReqTestSite.expect_once(context.site, "GET", "/nested-next", &html(&1, "next"))
 
     opts = crawl("#{context.url}/nested", context, save_to: root)
-    saved = File.read!(Path.join(root, Snapshot.path("#{context.url}/nested")))
+    export = ready_export(opts)
+    source = resource_for_url(export, "#{context.url}/nested")
+    saved = read_resource(export, source)
 
     assert Store.find_processed({"#{context.url}/nested", opts.scope}).body == body
     assert saved =~ "Next"
     refute String.starts_with?(saved, <<31, 139>>)
     assert Store.find_processed({"#{context.url}/nested-next", opts.scope})
+    target = reference_target(export, source, "#{context.url}/nested-next")
+    {:ok, document} = Floki.parse_document(saved)
+    [href] = Floki.attribute(document, "a", "href")
+    assert_opens(export, source, target, href)
+    assert read_resource(export, target) == <<0xEF, 0xBB, 0xBF>> <> "next"
   end
 
   test "refresh and link headers are followed like the same tags", context do
@@ -532,7 +555,12 @@ defmodule Crawler.CrawlHTTPTest do
   end
 
   test "responses above the decoded cap are not stored", context do
-    root = tmp(unique_scope("body-cap"))
+    root =
+      Path.join(
+        tmp(),
+        unique_scope("body-cap") <> "-#{Base.encode16(:crypto.strong_rand_bytes(6))}"
+      )
+
     small = String.duplicate("a", 100)
     large = String.duplicate("b", 2_000)
     gzip = :zlib.gzip(String.duplicate(<<0>>, 10_000))
@@ -555,23 +583,40 @@ defmodule Crawler.CrawlHTTPTest do
     opts = crawl("#{context.url}/small", context, max_body: 1_000, save_to: root)
     assert Store.find_processed({"#{context.url}/small", opts.scope}).body == small
 
-    crawl("#{context.url}/large", context, max_body: 1_000, save_to: root, scope: opts.scope)
-    refute Store.find({"#{context.url}/large", opts.scope})
-    refute File.exists?(Path.join(root, Snapshot.path("#{context.url}/large")))
+    export = ready_export(opts)
+    assert read_resource(export, resource_for_url(export, "#{context.url}/small")) == small
 
-    crawl("#{context.url}/expanded", context, max_body: 1_000, save_to: root, scope: opts.scope)
-    refute Store.find({"#{context.url}/expanded", opts.scope})
-    refute File.exists?(Path.join(root, Snapshot.path("#{context.url}/expanded")))
+    for path <- ["large", "expanded"] do
+      destination =
+        Path.join(
+          tmp(),
+          unique_scope("body-cap-#{path}") <> "-#{Base.encode16(:crypto.strong_rand_bytes(6))}"
+        )
+
+      rejected = crawl("#{context.url}/#{path}", context, max_body: 1_000, save_to: destination)
+      refute Store.find({"#{context.url}/#{path}", rejected.scope})
+      rejected_export = ready_export(rejected)
+      assert {:ok, %{reported_limit: {:limit, :max_body}}} = Crawler.export_status(rejected)
+      assert rejected_export.manifest["resources"] == []
+      assert Path.wildcard(Path.join(destination, "resources/**/*")) == []
+    end
   end
 
   test "a missing content type is stored unchanged and is not parsed", context do
     body = <<137, 80, 78, 71>> <> ~s|<a href="/missing-next">Next</a>|
-    root = tmp(unique_scope("missing-type"))
+
+    root =
+      Path.join(
+        tmp(),
+        unique_scope("missing-type") <> "-#{Base.encode16(:crypto.strong_rand_bytes(6))}"
+      )
 
     ReqTestSite.expect_once(context.site, "GET", "/missing", &resp(&1, 200, body))
 
     opts = crawl("#{context.url}/missing", context, save_to: root)
-    saved = File.read!(Path.join(root, Snapshot.path("#{context.url}/missing")))
+    export = ready_export(opts)
+    source = resource_for_url(export, "#{context.url}/missing")
+    saved = read_resource(export, source)
 
     assert Store.find_processed({"#{context.url}/missing", opts.scope}).body == body
     assert saved == body
@@ -698,7 +743,12 @@ defmodule Crawler.CrawlHTTPTest do
 
   test "javascript types with a charset parameter are fetched and rewritten", context do
     page = "#{context.url}/scripts/page"
-    root = tmp(unique_scope("script-mime"))
+
+    root =
+      Path.join(
+        tmp(),
+        unique_scope("script-mime") <> "-#{Base.encode16(:crypto.strong_rand_bytes(6))}"
+      )
 
     ReqTestSite.expect_once(context.site, "GET", "/scripts/page", fn conn ->
       html(conn, """
@@ -719,12 +769,24 @@ defmodule Crawler.CrawlHTTPTest do
     end
 
     opts = crawl(page, context, assets: ["js"], save_to: root)
-    saved = File.read!(Path.join(root, Snapshot.path(page)))
+    export = ready_export(opts)
+    source = resource_for_url(export, page)
+    saved = read_resource(export, source)
 
     assert Store.find_processed({"#{context.url}/scripts/app.js", opts.scope})
     assert Store.find_processed({"#{context.url}/scripts/chunk.js", opts.scope})
-    assert saved =~ Linker.offline_link(page, "#{context.url}/scripts/app.js")
-    assert saved =~ Linker.offline_link(page, "#{context.url}/scripts/chunk.js")
+    {:ok, document} = Floki.parse_document(saved)
+
+    [href] =
+      Floki.attribute(document, "script[type='text/javascript; charset=utf-8'][src]", "src")
+
+    app = reference_target(export, source, "#{context.url}/scripts/app.js")
+    assert_opens(export, source, app, href)
+    assert read_resource(export, app) == "app.js"
+    [_, chunk_href] = Regex.run(~r/import\('([^']+)'\)/, saved)
+    chunk = reference_target(export, source, "#{context.url}/scripts/chunk.js")
+    assert_opens(export, source, chunk, chunk_href)
+    assert read_resource(export, chunk) == "chunk.js"
     assert saved =~ ~s|src="nope.js"|
     assert saved =~ ~s|src="data.json"|
     assert saved =~ ~s|src="nbsp.js"|
@@ -1103,7 +1165,6 @@ defmodule Crawler.CrawlHTTPTest do
   defp partition_document do
     """
     <script src="https://cdn.test/app.js"></script>
-    <script src="https://cdn.test/next.js"></script>
     <a href="https://other.test/page">o</a>
     <a href="https://www.example.com/side">w</a>
     <a href="https://example.com:8443/port">p</a>
@@ -1112,9 +1173,10 @@ defmodule Crawler.CrawlHTTPTest do
 
   defp partition_script do
     Req.Response.new(
-      status: 200,
+      status: 302,
       headers: [
         {"content-type", "text/javascript"},
+        {"location", "https://cdn.test/next.js"},
         {"set-cookie", "part=1; Path=/; Secure; SameSite=None; Partitioned"},
         {"set-cookie", "plain=1; Path=/; Secure; SameSite=None"}
       ],
@@ -1174,6 +1236,10 @@ defmodule Crawler.CrawlHTTPTest do
         [
           store: Store,
           workers: 1,
+          max_body: 1_048_576,
+          max_analysis_bytes: 16_000_000,
+          max_css_work: 5_000,
+          max_css_pictures: 1_000,
           scope: scope,
           retries: 0,
           max_depths: 3,
@@ -1183,6 +1249,7 @@ defmodule Crawler.CrawlHTTPTest do
         extra
       )
 
+    if opts[:save_to], do: on_exit(fn -> File.rm_rf(opts[:save_to]) end)
     {:ok, opts} = start_crawl(url, opts)
     await_idle(opts)
     opts

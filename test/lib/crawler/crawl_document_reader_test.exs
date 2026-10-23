@@ -2,12 +2,11 @@ defmodule Crawler.CrawlDocumentReaderTest do
   use Crawler.TestCase, async: false
 
   import Plug.Conn
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
   alias Crawler.Store
 
   @plain "See <a href=\"/secret\">secret</a> and @import \"x.css\""
-  @utf8_bom <<0xEF, 0xBB, 0xBF>>
 
   test "plain text is stored and contributes no addresses", context do
     page = context.url <> "/start"
@@ -32,8 +31,13 @@ defmodule Crawler.CrawlDocumentReaderTest do
     {opts, root} = run(page, context, assets: ["css", "js", "images"])
 
     for path <- ["/notes.txt", "/landed.txt", "/frame.txt", "/notes.md", "/sheet.csv"] do
-      assert File.read!(saved(root, context.url <> path)) == @plain
-      assert Store.find_processed({context.url <> path, opts.scope}).body == @plain
+      assert read_resource(
+               root,
+               reference_target(root, resource_for_url(root, page), context.url <> path)
+             ) == @plain
+
+      assert %Store.Page{processed: true, body: @plain} =
+               Store.find_processed({context.url <> path, opts.scope})
     end
 
     refute Store.find({context.url <> "/secret", opts.scope})
@@ -62,7 +66,9 @@ defmodule Crawler.CrawlDocumentReaderTest do
 
     {opts, root} = run(page, context, assets: ["css"])
 
-    assert File.read!(saved(root, css)) == @utf8_bom <> html_body
+    assert read_resource(root, reference_target(root, resource_for_url(root, page), css)) ==
+             html_body
+
     assert Store.find_processed({context.url <> "/alt.css", opts.scope})
     refute Store.find({context.url <> "/secret", opts.scope})
     refute Store.find({context.url <> "/other.css", opts.scope})
@@ -88,14 +94,24 @@ defmodule Crawler.CrawlDocumentReaderTest do
     expect_bytes(context, "/bg.png", "image/png", "png")
 
     {opts, root} = run(page, context, assets: ["css"])
-    saved_css = File.read!(saved(root, css))
+    saved_css = read_resource(root, reference_target(root, resource_for_url(root, page), css))
 
     assert Store.find_processed({other, opts.scope})
     assert Store.find_processed({image, opts.scope})
     refute Store.find({context.url <> "/secret", opts.scope})
     assert saved_css =~ ~s|<a href="/secret">|
-    assert_link_opens(root, css, other)
-    assert_link_opens(root, css, image)
+
+    assert_link_opens(
+      root,
+      reference_target(root, resource_for_url(root, page), css),
+      reference_target(root, reference_target(root, resource_for_url(root, page), css), other)
+    )
+
+    assert_link_opens(
+      root,
+      reference_target(root, resource_for_url(root, page), css),
+      reference_target(root, reference_target(root, resource_for_url(root, page), css), image)
+    )
   end
 
   test "a script is read only when the response is javascript", context do
@@ -119,14 +135,22 @@ defmodule Crawler.CrawlDocumentReaderTest do
     expect_bytes(context, "/dep.js", "text/javascript", "dep")
 
     {opts, root} = run(page, context, assets: ["js"])
-    saved_js = File.read!(saved(root, script))
+    script_resource = reference_target(root, resource_for_url(root, page), script)
+    dependency = reference_target(root, script_resource, dep)
+    saved_js = read_resource(root, script_resource)
 
-    assert Store.find_processed({dep, opts.scope}).body == "dep"
+    assert %Store.Page{processed: true, body: "dep"} = Store.find_processed({dep, opts.scope})
+    assert read_resource(root, dependency) == "dep"
     refute Store.find({context.url <> "/secret", opts.scope})
     assert saved_js =~ "<a href='/secret'>"
-    assert_link_opens(root, script, dep)
-    assert File.read!(saved(root, html_script)) == @utf8_bom <> html_body
-    assert File.read!(saved(root, plain_script)) == html_body
+
+    assert_link_opens(root, script_resource, dependency)
+
+    assert read_resource(root, reference_target(root, resource_for_url(root, page), html_script)) ==
+             html_body
+
+    assert read_resource(root, reference_target(root, resource_for_url(root, page), plain_script)) ==
+             html_body
   end
 
   test "the response type wins over the file name and the referring tag", context do
@@ -157,16 +181,24 @@ defmodule Crawler.CrawlDocumentReaderTest do
 
     {opts, root} = run(page, context, assets: ["css", "js"])
 
-    assert File.read!(saved(root, readme)) == @plain
+    assert read_resource(root, reference_target(root, resource_for_url(root, page), readme)) ==
+             @plain
+
     refute Store.find({context.url <> "/secret", opts.scope})
     assert Store.find_processed({context.url <> "/other.css", opts.scope})
     assert Store.find_processed({context.url <> "/dep.js", opts.scope})
-    assert Store.find_processed({context.url <> "/next", opts.scope}).body == "next"
+
+    assert %Store.Page{processed: true, body: "next"} =
+             Store.find_processed({context.url <> "/next", opts.scope})
+
+    xhtml = reference_target(root, resource_for_url(root, page), context.url <> "/page.xhtml")
+    next = reference_target(root, xhtml, context.url <> "/next")
+    assert read_resource(root, next) == <<0xEF, 0xBB, 0xBF>> <> "next"
   end
 
   defp run(page, context, extra) do
     scope = unique_scope("document-reader")
-    root = tmp(scope)
+    root = Path.join(tmp(), scope <> "-#{Base.encode16(:crypto.strong_rand_bytes(6))}")
     on_exit(fn -> File.rm_rf(root) end)
 
     {:ok, opts} =
@@ -176,6 +208,11 @@ defmodule Crawler.CrawlDocumentReaderTest do
           [
             scope: scope,
             workers: 1,
+            max_body: 1_048_576,
+            max_analysis_bytes: 16_000_000,
+            max_css_work: 5_000,
+            max_css_pictures: 1_000,
+            max_manifest_bytes: 16_777_216,
             retries: 0,
             max_depths: 3,
             store: Store,
@@ -187,8 +224,7 @@ defmodule Crawler.CrawlDocumentReaderTest do
       )
 
     on_exit(fn -> Crawler.stop(opts) end)
-    wait(5_000, fn -> refute Crawler.running?(opts) end)
-    {opts, root}
+    {opts, ready_export(opts)}
   end
 
   defp expect_html(context, path, body) do

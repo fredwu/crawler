@@ -1,6 +1,8 @@
 defmodule Crawler.CrawlRefreshTest do
   use Crawler.TestCase, async: false
 
+  import Crawler.ManagedSnapshotHelpers
+
   alias Crawler.Store
 
   @utf8_bom <<0xEF, 0xBB, 0xBF>>
@@ -69,12 +71,13 @@ defmodule Crawler.CrawlRefreshTest do
         scope: "refresh-race",
         workers: 1,
         store: Store,
-        save_to: tmp("behavior-refresh-race"),
+        save_to: Path.join(tmp(unique_scope("behavior-refresh-race")), "archive"),
         retries: 1,
         req_options: req_options
       )
 
     assert_receive {:started, old}, 1_000
+    old_ref = Process.monitor(old)
 
     {:ok, second} =
       start_crawl(page,
@@ -82,7 +85,7 @@ defmodule Crawler.CrawlRefreshTest do
         force: true,
         workers: 1,
         store: Store,
-        save_to: tmp("behavior-refresh-race"),
+        save_to: Path.join(tmp(unique_scope("behavior-refresh-race")), "archive"),
         retries: 1,
         req_options: req_options
       )
@@ -96,15 +99,15 @@ defmodule Crawler.CrawlRefreshTest do
     end)
 
     send(old, {:release, "OLD"})
-    assert_receive {:finished, "OLD"}, 1_000
+    assert_receive {:DOWN, ^old_ref, :process, ^old, _}, 1_000
 
     wait(fn ->
       assert {:normal, %{data: {[], []}}, 1} = OPQ.info(first[:queue])
       assert %Store.Page{body: "NEW"} = Store.find_processed({page, "refresh-race"})
 
-      assert File.read!(
-               tmp("behavior-refresh-race/#{site.path}/behavior/refresh-race", "__index.html")
-             ) == @utf8_bom <> "NEW"
+      export = ready_export(second)
+      assert read_resource(export, resource_for_url(export, page)) == @utf8_bom <> "NEW"
+      refute File.exists?(first.save_to)
     end)
   end
 end

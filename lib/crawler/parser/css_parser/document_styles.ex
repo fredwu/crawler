@@ -1,6 +1,7 @@
 defmodule Crawler.Parser.CssParser.DocumentStyles do
   @moduledoc false
 
+  alias Crawler.Analysis.Budget
   alias Crawler.HTMLReferences
   alias Crawler.Parser.CssParser.Scanner
   alias Crawler.Parser.CssParser.Variables
@@ -19,13 +20,24 @@ defmodule Crawler.Parser.CssParser.DocumentStyles do
   end
 
   def from_sheets(sheets, limits \\ []) do
-    sheets = Enum.sort_by(sheets, & &1.order)
+    {:ok, context, _budget} = from_sheets_result(sheets, limits, Budget.unlimited())
+    context
+  end
 
-    %{
-      sheets: Map.new(sheets, &{&1.id, &1}),
-      outcome: Variables.analyze(sheets, true, limits),
-      limits: limits
-    }
+  def from_sheets_result(sheets, limits, budget) do
+    count = length(sheets)
+    scratch = 512 + Budget.cost(:list_cell, 8 * count)
+
+    with {:ok, budget} <- Budget.reserve(budget, scratch),
+         {:ok, budget} <-
+           Budget.charge(budget, Budget.cost(:context) + Budget.cost(:map_entry, count)) do
+      sheets = Enum.sort_by(sheets, & &1.order)
+
+      with {:ok, outcome, budget} <- Variables.analyze_result(sheets, true, limits, budget) do
+        context = %{sheets: Map.new(sheets, &{&1.id, &1}), outcome: outcome, limits: limits}
+        with {:ok, budget} <- Budget.release(budget, scratch), do: {:ok, context, budget}
+      end
+    end
   end
 
   def snapshot(context), do: context.outcome

@@ -1,10 +1,9 @@
 defmodule Crawler.RefreshLinkTest do
   use Crawler.TestCase, async: false
 
-  alias Crawler.Linker
   alias Crawler.Store
 
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
   for {name, target, quote, expected_target} <- [
         {"unquoted path", "/refresh/next;v=2", "", "/refresh/next;v=2"},
@@ -21,7 +20,14 @@ defmodule Crawler.RefreshLinkTest do
       quote = unquote(quote)
       page = "#{context.url}/refresh/page"
       landing = context.url <> unquote(expected_target)
-      root = tmp(unique_scope("refresh-link"))
+
+      root =
+        Path.join(
+          tmp(),
+          unique_scope("refresh-link") <> "-#{Base.encode16(:crypto.strong_rand_bytes(6))}"
+        )
+
+      on_exit(fn -> File.rm_rf(root) end)
       scope = unique_scope("refresh-link")
       destination = URI.parse(landing)
       assert URI.decode(destination.query || "") == (URI.parse(target).query || "")
@@ -46,6 +52,10 @@ defmodule Crawler.RefreshLinkTest do
       {:ok, opts} =
         start_crawl(page,
           workers: 1,
+          max_body: 1_048_576,
+          max_analysis_bytes: 16_000_000,
+          max_css_work: 5_000,
+          max_css_pictures: 1_000,
           retries: 0,
           store: Store,
           scope: scope,
@@ -53,14 +63,16 @@ defmodule Crawler.RefreshLinkTest do
           req_options: context.req_options
         )
 
-      await_idle(opts)
+      export = ready_export(opts)
+      source = resource_for_url(export, page)
+      target_resource = reference_target(export, source, landing)
       assert Store.find_processed({landing, scope})
       assert Store.ops_count(scope) == 2
 
-      saved_html = File.read!(saved(root, page))
+      saved_html = read_resource(export, source)
       {:ok, document} = Floki.parse_document(saved_html)
       [saved_content] = Floki.attribute(document, "meta", "content")
-      offline = Linker.offline_link(page, landing)
+      offline = relative_reference(source, target_resource)
       assert saved_content == "0; url=#{quote}#{offline}#{quote}"
 
       <<"0; url=", saved_target::binary>> = saved_content
@@ -70,8 +82,8 @@ defmodule Crawler.RefreshLinkTest do
           do: saved_target,
           else: binary_part(saved_target, 1, byte_size(saved_target) - 2)
 
-      opened = Path.expand(link_path(href), Path.dirname(saved(root, page)))
-      assert File.read!(opened) == body
+      assert_opens(export, source, target_resource, href)
+      assert read_resource(export, target_resource) == body
     end
   end
 

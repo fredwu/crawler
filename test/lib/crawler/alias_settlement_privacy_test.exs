@@ -1,10 +1,8 @@
 defmodule Crawler.AliasSettlementPrivacyTest do
   use Crawler.TestCase, async: false
 
-  alias Crawler.Fetcher.AliasSettlement
-  alias Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
   alias Crawler.Store
-  alias Crawler.Worker
 
   @secret "private-settlement-callback-secret"
   @userinfo "private-settlement-user:private-settlement-password"
@@ -17,15 +15,14 @@ defmodule Crawler.AliasSettlementPrivacyTest do
 
   for failure <- [:storage, :publication] do
     test "a #{failure} settlement failure returns safely and releases all work", context do
-      root = tmp(unique_scope("settlement-privacy"))
+      root = Path.join(tmp(unique_scope("settlement-privacy")), "archive")
       scope = unique_scope("settlement-privacy")
       source = credentialed(context.url <> "/settlement/old.bin")
       landing = credentialed(context.url <> "/settlement/landing/page.bin")
-      file = SnapshotHelpers.saved(root, landing)
       requests = :counters.new(1, [:atomics])
       observer = self()
       failure = unquote(failure)
-      on_exit(fn -> File.rm_rf(root) end)
+      on_exit(fn -> File.rm_rf(Path.dirname(root)) end)
 
       ReqTestSite.expect_once(context.site, "GET", "/settlement/old.bin", fn conn ->
         conn |> Plug.Conn.put_resp_header("location", landing) |> Plug.Conn.resp(302, "")
@@ -51,19 +48,17 @@ defmodule Crawler.AliasSettlementPrivacyTest do
         end
       end)
 
-      before_publish = fn ->
-        if Path.wildcard(Path.join(Path.dirname(file), ".crawler-*.tmp"), match_dot: true) != [],
-          do: raise(@secret)
-      end
-
       assert {:ok, opts} =
                start_crawl(landing,
                  scope: scope,
                  workers: 2,
+                 max_body: 1_048_576,
+                 max_analysis_bytes: 16_000_000,
+                 max_css_work: 5_000,
+                 max_css_pictures: 1_000,
                  retries: 0,
                  store: if(failure == :storage, do: RaisingStore, else: Store),
                  save_to: if(failure == :publication, do: root),
-                 before_publish: before_publish,
                  private_message: @secret,
                  landing_url: landing,
                  req_options: context.req_options
@@ -74,47 +69,75 @@ defmodule Crawler.AliasSettlementPrivacyTest do
       on_exit(fn -> send(holder, :release) end)
       assert {:ok, _} = start_crawl(source, opts)
       wait(fn -> assert Store.find_processed({source, scope}) end)
-      Crawler.pause(opts)
-      assert {:paused, _, _} = OPQ.info(opts.queue)
+
+      if failure == :storage do
+        Crawler.pause(opts)
+        assert {:paused, _, _} = OPQ.info(opts.queue)
+      else
+        File.mkdir_p!(root)
+        File.write!(Path.join(root, "complete.bin"), "PREVIOUS COMPLETE")
+      end
+
       send(holder, :release)
-
-      wait(fn ->
-        assert Store.inflight_count(scope) == 0
-
-        assert [{_, %{status: :queued}}] =
-                 Map.to_list(:sys.get_state(Store).settlements.candidates)
-      end)
-
-      [{ref, _}] = Map.to_list(:sys.get_state(Store).settlements.candidates)
-      job = %AliasSettlement{ref: ref, queue: opts.queue}
 
       log =
         ExUnit.CaptureLog.capture_log([level: :debug], fn ->
-          task = Task.async(fn -> Worker.run(job) end)
-          assert {:error, {:error, %RuntimeError{message: @secret}}} = Task.await(task)
+          if failure == :storage, do: Crawler.resume(opts)
+          wait(fn -> assert_settled(scope) end)
+
+          if failure == :publication do
+            wait(fn ->
+              assert {:ok, %{state: :failed, ready?: false}} = Crawler.export_status(opts)
+            end)
+          end
         end)
 
-      assert log =~ "Alias settlement failed for #{context.url}/settlement/landing/page.bin"
-      assert log =~ "RuntimeError"
-      assert log =~ "Crawler.Fetcher.AliasSettlement.run/1"
-      if failure == :publication, do: assert(log =~ "Crawler.Snapper.publish/3")
+      if failure == :storage do
+        assert log =~ "Alias settlement failed for #{context.url}/settlement/landing/page.bin"
+        assert log =~ "RuntimeError"
+        assert log =~ "Crawler.Fetcher.AliasSettlement.store/2"
+        refute Store.find({landing, scope})
+      else
+        assert File.read!(Path.join(root, "complete.bin")) == "PREVIOUS COMPLETE"
+        assert File.ls!(root) == ["complete.bin"]
+        assert {:ok, status} = Crawler.export_status(opts)
+        refute inspect(status) =~ @secret
+        refute inspect(status) =~ @userinfo
+      end
+
       refute log =~ @secret
       refute log =~ "private-settlement-user"
       refute log =~ "private-settlement-password"
       refute log =~ "Task "
       assert_settled(scope)
-      refute Store.find({landing, scope})
-      refute File.exists?(file)
-      assert Path.wildcard(Path.join(root, "**/.crawler-*.tmp"), match_dot: true) == []
       assert Process.alive?(opts.queue)
 
-      Crawler.resume(opts)
-      retry_opts = opts |> Map.put(:store, Store) |> Map.delete(:before_publish)
+      retry_scope = if failure == :publication, do: unique_scope("publication-retry"), else: scope
+      retry_opts = opts |> Map.put(:store, Store) |> Map.put(:scope, retry_scope)
+
+      retry_opts =
+        if failure == :publication,
+          do: Map.put(retry_opts, :save_to, root <> "-retry"),
+          else: retry_opts
+
       assert {:ok, retry} = start_crawl(landing, retry_opts)
-      await_idle(retry)
-      assert Store.find_processed({landing, scope}).body == "RETRY"
+
+      if failure == :publication do
+        export = ready_export(retry)
+        target = resource_for_url(export, landing)
+        assert read_resource(export, target) == "RETRY"
+        assert target["content_type"] == "application/octet-stream"
+        assert is_nil(URI.parse(target["url"]).userinfo)
+        refute target["path"] =~ "private-settlement"
+        assert File.read!(Path.join(root, "complete.bin")) == "PREVIOUS COMPLETE"
+      else
+        await_idle(retry)
+      end
+
+      assert Store.find_processed({landing, retry_scope}).body == "RETRY"
       assert :counters.get(requests, 1) == 3
       assert_settled(scope)
+      assert_settled(retry_scope)
     end
   end
 

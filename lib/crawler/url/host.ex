@@ -1,6 +1,7 @@
 defmodule Crawler.URL.Host do
   @moduledoc false
 
+  alias Crawler.Analysis.Budget
   alias Crawler.URL.IPv4
 
   @idna_options [check_hyphens: false, use_std3_ascii_rules: false, verify_dns_length: false]
@@ -20,15 +21,36 @@ defmodule Crawler.URL.Host do
   end
 
   def domain(host) when is_binary(host) do
-    decoded = URI.decode(host)
+    case domain_result(host, Budget.unlimited()) do
+      {:ok, host, _budget} -> {:ok, host}
+      {:invalid, _budget} -> :error
+    end
+  end
 
-    with true <- String.valid?(decoded),
-         {:ok, ascii} <- to_ascii(decoded),
-         false <- ascii == "" or Regex.match?(@forbidden, ascii),
-         {:ok, host} <- IPv4.normalize(ascii) do
-      {:ok, host}
-    else
-      _ -> :error
+  @doc false
+  def domain_result(host, budget) when is_binary(host) do
+    decoded = URI.decode(host)
+    scratch = if ascii?(decoded), do: 0, else: 32_768 * (byte_size(decoded) + 1)
+
+    # UTS46 maps at most 18 codepoints per input codepoint. This hold covers
+    # mapped/NFC lists, label records, bidi/context lists and Punycode buffers.
+    with {:ok, reserved} <- Budget.reserve(budget, scratch) do
+      result =
+        with true <- String.valid?(decoded),
+             {:ok, ascii} <- to_ascii(decoded),
+             false <- ascii == "" or Regex.match?(@forbidden, ascii),
+             {:ok, host} <- IPv4.normalize(ascii) do
+          {:ok, host}
+        else
+          _ -> :invalid
+        end
+
+      with {:ok, budget} <- Budget.release(reserved, scratch) do
+        case result do
+          {:ok, host} -> {:ok, host, budget}
+          :invalid -> {:invalid, budget}
+        end
+      end
     end
   end
 
@@ -50,7 +72,9 @@ defmodule Crawler.URL.Host do
       else: Unicode.IDNA.to_ascii(host, @idna_options)
   end
 
-  defp ascii?(host), do: Enum.all?(:binary.bin_to_list(host), &(&1 < 128))
+  defp ascii?(<<>>), do: true
+  defp ascii?(<<byte, rest::binary>>) when byte < 128, do: ascii?(rest)
+  defp ascii?(_host), do: false
 
   # :inet.ntoa/1 rewrites fe80 and ff02 with a non-zero second hextet into a
   # zone id (`fe80::1%01`). That is a different address, so format RFC 5952 here.

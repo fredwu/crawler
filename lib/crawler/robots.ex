@@ -1,8 +1,10 @@
 defmodule Crawler.Robots do
   @moduledoc false
 
+  alias Crawler.Analysis.Budget
   alias Crawler.Fetcher.Requester
   alias Crawler.HTMLSpans
+  alias Crawler.Robots.Directives
   alias Crawler.Site
   alias Crawler.Sitemap
   alias Crawler.Store
@@ -42,36 +44,122 @@ defmodule Crawler.Robots do
     decide(Enum.flat_map(groups, & &1.rules), url)
   end
 
-  def permitted?(opts) do
+  def permitted?(opts), do: permitted_result(opts) == {:ok, true}
+
+  def permitted_result(opts) do
+    opts = opts |> Map.new() |> Crawler.Options.assign_defaults()
+
     cond do
-      opts[:respect_robots] == false -> true
-      opts[:robots_fetch] == true -> true
-      true -> allowed?(load(opts), opts[:url], opts[:user_agent])
+      opts[:respect_robots] == false ->
+        {:ok, true}
+
+      opts[:robots_fetch] == true ->
+        {:ok, true}
+
+      is_reference(opts[:execution_lease]) ->
+        permitted_owned(opts)
+
+      true ->
+        opts = if opts[:deadline], do: Map.put(opts, :crawler_deadline, opts.deadline), else: opts
+        Crawler.Store.Execution.run(opts, &permitted_owned/1)
     end
   end
 
-  def header_nofollow?(headers, user_agent) when is_list(headers) do
-    tokens = token_set(user_agent)
+  defp permitted_owned(opts) do
+    case load(opts) do
+      {:error, _} = error -> error
+      rules -> {:ok, allowed?(rules, opts[:url], opts[:user_agent])}
+    end
+  end
 
-    Enum.any?(headers, fn {name, value} ->
-      String.downcase(to_string(name)) == "x-robots-tag" and directives_block?(value, tokens)
-    end)
+  def parse_result(body, opts) when is_binary(body) do
+    with :ok <- Crawler.Deadline.check(opts.crawler_deadline),
+         true <- String.valid?(body) || {:error, :invalid_robots_encoding},
+         {:ok, lines} <- count_rule_lines(body, 0, 1, opts),
+         cost = 4096 + 32 * byte_size(body) + 8192 * lines,
+         true <- cost <= opts.max_analysis_bytes || {:error, {:limit, :max_analysis_bytes}},
+         {:ok, receipt} <- Store.reserve_resource(opts, :analysis, cost, Process.whereis(Store)),
+         rules = body |> parse() |> detach_rules(),
+         {:ok, bytes} <- Crawler.Store.Retained.bytes(rules, cost),
+         :ok <- Store.commit_resource(receipt, bytes) do
+      {:ok, rules, receipt}
+    end
+  end
+
+  defp count_rule_lines(body, offset, count, opts) do
+    remaining = byte_size(body) - offset
+
+    cond do
+      count > opts.max_control_entries ->
+        {:error, {:limit, :max_control_entries}}
+
+      true ->
+        find_rule_line(body, offset, count, opts, remaining)
+    end
+  end
+
+  defp find_rule_line(body, offset, count, opts, remaining) do
+    case :binary.match(body, ["\r", "\n"], scope: {offset, remaining}) do
+      :nomatch ->
+        if remaining <= opts.max_control_token_bytes,
+          do: {:ok, count},
+          else: {:error, {:limit, :max_control_token_bytes}}
+
+      {at, _} ->
+        count_next_rule_line(body, offset, count, opts, at)
+    end
+  end
+
+  defp count_next_rule_line(body, offset, count, opts, at) do
+    if at - offset > opts.max_control_token_bytes do
+      {:error, {:limit, :max_control_token_bytes}}
+    else
+      skip =
+        if :binary.at(body, at) == 13 and at + 1 < byte_size(body) and
+             :binary.at(body, at + 1) == 10,
+           do: 2,
+           else: 1
+
+      with :ok <- Crawler.Deadline.check(opts.crawler_deadline),
+           do: count_rule_lines(body, at + skip, count + 1, opts)
+    end
+  end
+
+  defp detach_rules(binary) when is_binary(binary), do: :binary.copy(binary)
+  defp detach_rules(list) when is_list(list), do: Enum.map(list, &detach_rules/1)
+
+  defp detach_rules(map) when is_map(map),
+    do: Map.new(map, fn {key, value} -> {key, detach_rules(value)} end)
+
+  defp detach_rules(tuple) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.map(&detach_rules/1) |> List.to_tuple()
+
+  defp detach_rules(term), do: term
+
+  def nofollow_result(tags, opts, %Budget{} = budget),
+    do: Directives.nofollow_result(tags, opts, budget)
+
+  def header_nofollow?(headers, user_agent) when is_list(headers) do
+    case nofollow_result([], %{headers: headers, user_agent: user_agent}, Budget.unlimited()) do
+      {:ok, blocked, _budget} -> blocked
+      {:error, _reason} -> false
+    end
   end
 
   def header_nofollow?(_headers, _user_agent), do: false
 
   def meta_nofollow?(body, user_agent) when is_binary(body) do
-    tokens = token_set(user_agent)
-
-    body
-    |> HTMLSpans.tags()
-    |> Enum.any?(fn tag ->
-      tag.name == "meta" and not tag.closing? and not tag.in_template? and
-        not tag.in_shadow_root? and meta_blocks?(tag, tokens)
-    end)
+    body |> HTMLSpans.tags() |> meta_nofollow_tags?(user_agent)
   end
 
   def meta_nofollow?(_body, _user_agent), do: false
+
+  def meta_nofollow_tags?(tags, user_agent) do
+    case nofollow_result(tags, %{headers: [], user_agent: user_agent}, Budget.unlimited()) do
+      {:ok, blocked, _budget} -> blocked
+      {:error, _reason} -> false
+    end
+  end
 
   defp load(opts) do
     case Site.origin(opts[:url]) do
@@ -85,21 +173,35 @@ defmodule Crawler.Robots do
       {:ready, rules} -> rules
       :owner -> store_fetch(opts, origin)
       :retry -> load_origin(opts, origin)
-      {:error, :stale} -> disallow_all()
+      {:error, _} = error -> error
     end
   end
 
   defp store_fetch(opts, origin) do
     case fetch(opts, origin) do
-      {:cache, rules} ->
-        case Store.finish_robots(opts[:scope], origin, rules, opts[:generation], opts[:queue]) do
-          :ok ->
-            follow_site_sitemaps(opts, origin, rules)
-            rules
-
-          {:error, :stale} ->
-            disallow_all()
+      {:cache, rules, receipt} ->
+        with :ok <-
+               Store.finish_robots(
+                 opts[:scope],
+                 origin,
+                 rules,
+                 opts[:generation],
+                 opts[:queue],
+                 %{robots_receipt: receipt}
+               ),
+             :ok <- follow_site_sitemaps(opts, origin, rules) do
+          rules
         end
+
+      {:error, reason} = error ->
+        result =
+          case reason do
+            {kind, _} when kind in [:limit, :deadline] -> error
+            _ -> disallow_all()
+          end
+
+        Store.forget_robots(opts[:scope], origin, result, opts[:generation], opts[:queue])
+        error
 
       {:temporary, rules} ->
         Store.forget_robots(opts[:scope], origin, rules, opts[:generation], opts[:queue])
@@ -107,12 +209,10 @@ defmodule Crawler.Robots do
     end
   end
 
-  # Sitemap directives belong to the crawl site. Loading robots.txt in order to
-  # vet one URL on another host must not walk the sitemaps that host lists.
   defp follow_site_sitemaps(opts, origin, rules) do
-    if origin == Site.origin(opts[:site] || opts[:url]) do
-      Sitemap.follow(opts, origin, rules)
-    end
+    if origin == Site.origin(opts[:site] || opts[:url]),
+      do: Sitemap.follow(opts, origin, rules),
+      else: :ok
   end
 
   defp fetch(opts, origin) do
@@ -125,16 +225,39 @@ defmodule Crawler.Robots do
       |> Map.delete(:credentials)
       |> Map.delete(:page_open)
 
-    case Requester.make(robots_opts) do
-      {:ok, %{status: status, body: body}} when status in 200..299 and is_binary(body) ->
-        if String.valid?(body), do: {:cache, parse(body)}, else: {:temporary, disallow_all()}
+    with {:ok, response_receipt} <-
+           Store.reserve_resource(robots_opts, :response, opts.max_body + 16_384),
+         :ok <- Store.account_control_document(robots_opts),
+         {:ok, prepared} <- Requester.prepare(robots_opts) do
+      case Requester.send(prepared, Map.put(robots_opts, :control_accounting, true)) do
+        {:ok, %{status: status, body: body} = response} ->
+          with {:ok, bytes} <-
+                 Crawler.Store.Retained.bytes({body, response.headers}, opts.max_body + 16_384),
+               :ok <- Store.commit_resource(response_receipt, bytes) do
+            cond do
+              status in 200..299 and is_binary(body) -> cache_rules(body, robots_opts)
+              status in 400..499 -> cache_rules("", robots_opts)
+              true -> {:temporary, disallow_all()}
+            end
+          end
 
-      {:ok, %{status: status}} when status in 400..499 ->
-        {:cache, allow_all()}
+        {:error, %Crawler.HTTP.BodyTooLarge{}} ->
+          {:error, {:limit, :max_body}}
 
-      _ ->
-        {:temporary, disallow_all()}
+        {:error, {:deadline, _}} = error ->
+          error
+
+        {:error, {:limit, _}} = error ->
+          error
+
+        _ ->
+          {:temporary, disallow_all()}
+      end
     end
+  end
+
+  defp cache_rules(body, opts) do
+    with {:ok, rules, receipt} <- parse_result(body, opts), do: {:cache, rules, receipt}
   end
 
   defp matching_groups(groups, user_agent) do
@@ -166,8 +289,8 @@ defmodule Crawler.Robots do
     target = request_target(url)
 
     matches =
-      for {kind, %{regex: regex, length: length}} <- rules,
-          Regex.match?(regex, target) do
+      for {kind, %{pieces: pieces, anchored?: anchored?, length: length}} <- rules,
+          matches_rule?(pieces, anchored?, target) do
         {length, kind}
       end
 
@@ -206,15 +329,36 @@ defmodule Crawler.Robots do
       end
 
     pieces = body |> String.split("*") |> Enum.map(&canonical_piece/1)
-    source = "\\A" <> Enum.map_join(pieces, ".*", &Regex.escape/1)
-    source = if anchored?, do: source <> "\\z", else: source
     stars = max(length(pieces) - 1, 0)
 
     length =
       Enum.reduce(pieces, stars, fn piece, total -> total + byte_size(piece) end) +
         if(anchored?, do: 1, else: 0)
 
-    %{regex: Regex.compile!(source), length: length}
+    %{pieces: pieces, anchored?: anchored?, length: length}
+  end
+
+  defp matches_rule?([first | rest], anchored?, target) do
+    if String.starts_with?(target, first),
+      do: match_pieces(rest, target, byte_size(first), anchored?),
+      else: false
+  end
+
+  defp match_pieces([], target, offset, anchored?),
+    do: not anchored? or offset == byte_size(target)
+
+  defp match_pieces([last], target, offset, true) do
+    byte_size(last) <= byte_size(target) - offset and String.ends_with?(target, last)
+  end
+
+  defp match_pieces(["" | rest], target, offset, anchored?),
+    do: match_pieces(rest, target, offset, anchored?)
+
+  defp match_pieces([piece | rest], target, offset, anchored?) do
+    case :binary.match(target, piece, scope: {offset, byte_size(target) - offset}) do
+      {at, size} -> match_pieces(rest, target, at + size, anchored?)
+      :nomatch -> false
+    end
   end
 
   defp canonical_piece(piece) do
@@ -231,28 +375,7 @@ defmodule Crawler.Robots do
     |> String.replace("%24", "$")
   end
 
-  defp product_tokens(nil), do: ["crawler"]
-
-  defp product_tokens(user_agent) when is_binary(user_agent) do
-    # A homepage URL in the comment is not a product. github and https must
-    # not select a group for the default agent. Real product names stay, and
-    # the later name still wins when two lengths are equal.
-    user_agent |> strip_urls() |> token_list()
-  end
-
-  defp product_tokens(_user_agent), do: ["crawler"]
-
-  defp token_list(text) do
-    ~r/[A-Za-z0-9_-]+/
-    |> Regex.scan(text)
-    |> Enum.map(fn [token] -> String.downcase(token) end)
-  end
-
-  defp strip_urls(text) do
-    Regex.replace(~r/[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>)]+/, text, " ")
-  end
-
-  defp token_set(user_agent), do: MapSet.new(product_tokens(user_agent))
+  defp product_tokens(user_agent), do: Directives.product_tokens(user_agent)
 
   defp agent_name("*"), do: "*"
 
@@ -264,9 +387,12 @@ defmodule Crawler.Robots do
         "*"
 
       true ->
-        case product_tokens(body) do
-          [token | _] -> token
-          [] -> "*"
+        case Regex.run(
+               ~r/[A-Za-z0-9_-]+/,
+               Regex.replace(~r/[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>)]+/, body, " ")
+             ) do
+          [token] -> String.downcase(token)
+          nil -> "*"
         end
     end
   end
@@ -344,30 +470,4 @@ defmodule Crawler.Robots do
         :skip
     end
   end
-
-  defp meta_blocks?(tag, tokens) do
-    name = tag |> HTMLSpans.value("name") |> to_string() |> String.trim() |> String.downcase()
-    content = HTMLSpans.value(tag, "content") || ""
-    (name == "robots" or MapSet.member?(tokens, name)) and directives_block?(content, tokens)
-  end
-
-  defp directives_block?(value, tokens) when is_binary(value) do
-    value
-    |> String.downcase()
-    |> String.split(",")
-    |> Enum.any?(fn piece ->
-      piece = String.trim(piece)
-
-      case String.split(piece, ":", parts: 2) do
-        [directive] ->
-          directive in ["nofollow", "none"]
-
-        [agent, directive] ->
-          MapSet.member?(tokens, String.trim(agent)) and
-            String.trim(directive) in ["nofollow", "none"]
-      end
-    end)
-  end
-
-  defp directives_block?(_value, _tokens), do: false
 end

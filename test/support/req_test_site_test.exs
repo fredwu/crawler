@@ -54,9 +54,9 @@ defmodule Crawler.ReqTestSiteTest do
       assert start_crawl(site.url, missing) == expected
 
       denied = Keyword.put(opts, :max_pages, 0)
-      assert {:ok, expected} = Crawler.crawl(site.url, denied)
-      assert expected[:queue] == nil
-      assert start_crawl(site.url, denied) == {:ok, expected}
+      expected = {:error, {:limit, :max_pages}}
+      assert Crawler.crawl(site.url, denied) == expected
+      assert start_crawl(site.url, denied) == expected
       assert Agent.get(site.site.agent, & &1.crawls) == MapSet.new()
       assert :ok = ReqTestSite.track_crawl(nil)
       assert :ok = ReqTestSite.verify!(site)

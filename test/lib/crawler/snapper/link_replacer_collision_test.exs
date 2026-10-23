@@ -1,8 +1,8 @@
 defmodule Crawler.Snapper.LinkReplacerCollisionTest do
   use ExUnit.Case, async: true
 
-  alias Crawler.Linker
   alias Crawler.Snapper.LinkReplacer
+  alias Crawler.StandaloneRewriteHelpers
 
   @page "http://ex.com/index.html"
   @relative "../ex.com/foo.html"
@@ -29,13 +29,19 @@ defmodule Crawler.Snapper.LinkReplacerCollisionTest do
     test "rewrites original #{name} once when an output matches another input" do
       template = unquote(template)
       source = render(template, @relative, @absolute)
-      relative_output = Linker.offline_link(@page, "http://ex.com/ex.com/foo.html")
-      absolute_output = Linker.offline_link(@page, @absolute)
-
-      assert absolute_output == @relative
+      relative_output = "fixtures/first.html"
+      absolute_output = @relative
 
       assert {:ok, body} =
-               LinkReplacer.replace_links(source, opts(unquote(content_type)))
+               StandaloneRewriteHelpers.replace_bound(
+                 source,
+                 opts(unquote(content_type)),
+                 fn
+                   %{value: @relative} -> :first
+                   %{value: @absolute} -> :second
+                 end,
+                 %{first: {:ok, relative_output}, second: {:ok, absolute_output}}
+               )
 
       assert body == render(template, relative_output, absolute_output)
     end
@@ -51,7 +57,7 @@ defmodule Crawler.Snapper.LinkReplacerCollisionTest do
              "<!-- " <>
                literal <>
                " -->" <>
-               ~s|<a href="#{Linker.offline_link(@page, @absolute)}">one</a>|
+               ~s|<a href="#{@absolute}">one</a>|
   end
 
   test "preserves raw text protection tokens in markup and raw text" do
@@ -72,7 +78,7 @@ defmodule Crawler.Snapper.LinkReplacerCollisionTest do
              String.replace(
                source,
                ~s|url("a.png")|,
-               ~s|url("#{Linker.offline_link(@page, "a.png")}")|
+               ~s|url("http://ex.com/a.png")|
              )
   end
 
@@ -87,7 +93,7 @@ defmodule Crawler.Snapper.LinkReplacerCollisionTest do
              String.replace(
                source,
                ~s|url("a.png")|,
-               ~s|url("#{Linker.offline_link(@page, "a.png")}")|
+               ~s|url("http://ex.com/a.png")|
              )
   end
 

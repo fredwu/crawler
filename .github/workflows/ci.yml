@@ -1,29 +1,91 @@
 name: CI
-on: push
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 3 * * 1'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  MIX_ENV: dev
+
 jobs:
   build:
+    name: Quality gates
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Set up Elixir
+        id: beam
         uses: erlef/setup-beam@v1
         with:
           version-type: strict
           version-file: .tool-versions
       - name: Restore dependencies cache
-        id: mix-cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
-          restore-keys: ${{ runner.os }}-mix-
-      - name: Install dependencies
-        if: steps.mix-cache.outputs.cache-hit != 'true'
+          path: deps
+          key: ${{ runner.os }}-${{ runner.arch }}-otp-${{ steps.beam.outputs.otp-version }}-elixir-${{ steps.beam.outputs.elixir-version }}-deps-dev-test-${{ hashFiles('.tool-versions', 'mix.exs', 'mix.lock') }}
+      - name: Install development and test dependencies
         run: |
-          mix local.rebar --force
-          mix local.hex --force
-          mix deps.get
-      - name: Run tests
-        run: mix test
+          mix deps.get --only dev --check-locked
+          MIX_ENV="test" mix deps.get --only test --check-locked
+      - name: Check formatting
+        run: mix format --check-formatted
+      - name: Check Recode
+        run: mix recode --dry --force --no-color
+      - name: Compile development code with warnings as errors
+        run: mix compile --force --warnings-as-errors
+      - name: Compile test code with warnings as errors
+        env:
+          MIX_ENV: test
+        run: mix compile --force --warnings-as-errors
+      - name: Run coverage suite
+        env:
+          MIX_ENV: test
+        run: mix test --cover
+      - name: Build documentation with warnings as errors
+        run: mix docs --warnings-as-errors
+
+  long:
+    name: Dialyzer and ten seeded suites
+    needs: build
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Elixir
+        id: beam
+        uses: erlef/setup-beam@v1
+        with:
+          version-type: strict
+          version-file: .tool-versions
+      - name: Restore dependencies cache
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-${{ runner.arch }}-otp-${{ steps.beam.outputs.otp-version }}-elixir-${{ steps.beam.outputs.elixir-version }}-deps-dev-test-${{ hashFiles('.tool-versions', 'mix.exs', 'mix.lock') }}
+      - name: Install development and test dependencies
+        run: |
+          mix deps.get --only dev --check-locked
+          MIX_ENV="test" mix deps.get --only test --check-locked
+      - name: Run Dialyzer
+        run: mix dialyzer
+      - name: Run ten fresh seeded suites
+        env:
+          MIX_ENV: test
+        run: |
+          for seed in {1..10}; do
+            printf 'Running fresh suite with seed %s\n' "$seed"
+            mix test --warnings-as-errors --seed "$seed" || exit 1
+            printf 'Passed seed %s\n' "$seed"
+          done

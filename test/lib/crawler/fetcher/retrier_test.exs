@@ -52,6 +52,31 @@ defmodule Crawler.Fetcher.RetrierTest do
     assert :counters.get(attempts, 1) == 3
   end
 
+  test "limits, deadlines and revoked authority preserve the first result without retry" do
+    for reason <- [
+          {:limit, :max_retained_bytes},
+          {:deadline, :attempt},
+          {:deadline, :run},
+          :stale,
+          :cancelled,
+          :closed_export,
+          :representation_deferred,
+          :control_prepared
+        ] do
+      attempts = :counters.new(1, [:atomics])
+
+      assert Retrier.perform(
+               fn ->
+                 :counters.add(attempts, 1, 1)
+                 if :counters.get(attempts, 1) == 1, do: {:error, reason}, else: :ok
+               end,
+               %{retries: 2}
+             ) == {:error, reason}
+
+      assert :counters.get(attempts, 1) == 1
+    end
+  end
+
   test "a callback exception propagates immediately without consuming retry attempts" do
     attempts = :counters.new(1, [:atomics])
 

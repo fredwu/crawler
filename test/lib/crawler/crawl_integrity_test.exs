@@ -1,7 +1,7 @@
 defmodule Crawler.CrawlIntegrityTest do
   use Crawler.TestCase, async: false
 
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
   alias Crawler.Store
 
@@ -11,7 +11,8 @@ defmodule Crawler.CrawlIntegrityTest do
     req_options: req_options
   } do
     scope = unique_scope("offline-integrity")
-    root = tmp(scope)
+    root = Path.join(tmp(), scope <> "-#{Base.encode16(:crypto.strong_rand_bytes(6))}")
+    on_exit(fn -> File.rm_rf(root) end)
     page = "#{url}/index.html"
     script = "#{url}/app.js"
     dependency = "#{url}/chunk.js"
@@ -49,6 +50,10 @@ defmodule Crawler.CrawlIntegrityTest do
       start_crawl(page,
         scope: scope,
         workers: 2,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
         retries: 0,
         store: Store,
         save_to: root,
@@ -64,18 +69,41 @@ defmodule Crawler.CrawlIntegrityTest do
       assert Store.find_processed({image, scope})
     end)
 
-    saved_js = File.read!(saved(root, script))
-    saved_css = File.read!(saved(root, stylesheet))
+    export = ready_export(opts)
+    source = resource_for_url(export, page)
+    script_resource = edge_target(export, source, 0)
+    preload_resource = edge_target(export, source, 1)
+    stylesheet_resource = edge_target(export, source, 2)
+    assert script_resource["url"] == script
+    assert preload_resource["url"] == script
+    assert stylesheet_resource["url"] == stylesheet
+    saved_js = read_resource(export, script_resource)
+    saved_css = read_resource(export, stylesheet_resource)
     refute saved_js == script_source
     refute saved_css == css_source
     refute integrity(:sha256, saved_js) == script_integrity
     refute integrity(:sha384, saved_css) == css_integrity
-    refute File.read!(saved(root, page)) =~ "integrity="
+    saved_page = read_resource(export, source)
+    refute saved_page =~ "integrity="
+    {:ok, document} = Floki.parse_document(saved_page)
+    [script_href] = Floki.attribute(document, "script", "src")
+    [preload_href] = Floki.attribute(document, "link[rel=modulepreload]", "href")
+    [stylesheet_href] = Floki.attribute(document, "link[rel=stylesheet]", "href")
+    assert_opens(export, source, script_resource, script_href)
+    assert_opens(export, source, preload_resource, preload_href)
+    assert_opens(export, source, stylesheet_resource, stylesheet_href)
 
-    assert_link_opens(root, page, script)
-    assert_link_opens(root, page, stylesheet)
-    assert_link_opens(root, script, dependency)
-    assert_link_opens(root, stylesheet, image)
+    for resource <- Enum.uniq([script_resource, preload_resource]) do
+      target = reference_target(export, resource, dependency)
+      [_, href] = Regex.run(~r/import "([^"]+)";/, read_resource(export, resource))
+      assert_opens(export, resource, target, href)
+      assert read_resource(export, target) == "export const value = 1;"
+    end
+
+    target = reference_target(export, stylesheet_resource, image)
+    [_, href] = Regex.run(~r/url\("([^"]+)"\)/, saved_css)
+    assert_opens(export, stylesheet_resource, target, href)
+    assert read_resource(export, target) == "image bytes"
   end
 
   defp integrity(algorithm, body) do

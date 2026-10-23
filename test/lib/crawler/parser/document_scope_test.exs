@@ -199,9 +199,9 @@ defmodule Crawler.Parser.DocumentScopeTest do
            ]
 
     saved = rewrite(@srcdoc, opts)
-    next_href = Linker.offline_link(@page, "http://example.com/assets/next.html")
-    image_href = Linker.offline_link(@page, "http://example.com/assets/a.png")
-    there_href = Linker.offline_link(@page, "http://example.com/other/there.html")
+    next_href = "http://example.com/assets/next.html"
+    image_href = "http://example.com/assets/a.png"
+    there_href = "http://example.com/other/there.html"
     assert saved =~ next_href
     assert saved =~ image_href
     assert saved =~ there_href
@@ -214,7 +214,7 @@ defmodule Crawler.Parser.DocumentScopeTest do
 
   test "an svg document follows srcdoc in html foreign content" do
     source =
-      ~s|<svg><foreignObject><iframe src="/frame.html" srcdoc="&lt;a href=&quot;next.html&quot;&gt;N&lt;/a&gt;"></iframe></foreignObject></svg>|
+      ~s|<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><iframe xmlns="http://www.w3.org/1999/xhtml" src="/frame.html" srcdoc="&lt;a href=&quot;next.html&quot;&gt;N&lt;/a&gt;"></iframe></foreignObject></svg>|
 
     opts = %{url: @diagram, content_type: "image/svg+xml", html_tag: "a"}
 
@@ -223,10 +223,20 @@ defmodule Crawler.Parser.DocumentScopeTest do
            ]
 
     saved = rewrite(source, opts)
-    assert saved =~ Linker.offline_link(@diagram, "http://example.com/next.html")
+    assert saved =~ "http://example.com/next.html"
     assert saved =~ ~s|src="/frame.html"|
 
     assert rewrite(source, %{opts | html_tag: "img"}) == source
+  end
+
+  test "an SVG-namespace iframe does not become an HTML srcdoc frame in XML" do
+    source =
+      ~s|<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><iframe src="/frame.html" srcdoc="&lt;a href=&quot;next.html&quot;&gt;N&lt;/a&gt;"></iframe></foreignObject></svg>|
+
+    opts = %{url: @diagram, content_type: "image/svg+xml", html_tag: "a"}
+
+    assert found(source, opts) == []
+    assert rewrite(source, opts) == source
   end
 
   test "srcdoc uses its own robots meta instead of the parent nofollow" do
@@ -249,8 +259,8 @@ defmodule Crawler.Parser.DocumentScopeTest do
              {"next.html", asset("next.html"), "a", nil, "a"}
            ]
 
-    offline = Linker.offline_link(@page, asset("next.html"))
-    assert rewrite(source, %{}) =~ ~s|srcdoc="&lt;a href=&quot;#{offline}&quot;&gt;"|
+    offline = asset("next.html")
+    assert rewrite(source, %{}) =~ ~s|srcdoc=&lt;a&#32;href&#61;&quot;#{offline}&quot;&gt;|
   end
 
   test "a robots meta inside a live shadow root does not nofollow the page" do
@@ -372,8 +382,8 @@ defmodule Crawler.Parser.DocumentScopeTest do
            ]
 
     saved = rewrite(@svg_document, document)
-    theme = Linker.offline_link(@diagram, "http://example.com/theme.css")
-    param = Linker.offline_link(@diagram, "http://example.com/param.css")
+    theme = "http://example.com/theme.css"
+    param = "http://example.com/param.css"
     assert saved =~ ~s|href="#{theme}"|
     assert saved =~ ~s|href="#{param}"|
     assert saved =~ ~s|href="no.xsl"|
@@ -385,13 +395,13 @@ defmodule Crawler.Parser.DocumentScopeTest do
 
   test "an xml stylesheet href survives a greater-than inside a quoted value" do
     opts = svg_document_opts()
-    offline = Linker.offline_link(@diagram, "http://example.com/theme.css")
+    offline = "http://example.com/theme.css"
 
     sources = [
       ~s|<?xml-stylesheet type="text/css" title="a>b" href="theme.css"?><svg></svg>|,
       ~s|<?xml-stylesheet href="theme.css" type="text/css" title="a>b"?><svg></svg>|,
       ~s|<?xml-stylesheet type="text/css; charset=utf-8" title="a>b" href="theme.css"?><svg></svg>|,
-      ~s|<?xml-stylesheet type="text/css" title="a?>b" href="theme.css"?><svg></svg>|,
+      ~s|<?xml-stylesheet type="text/css" title="a?&gt;b" href="theme.css"?><svg></svg>|,
       ~s|<?xml-stylesheet type='text/css' title='a>b' href='theme.css'?><svg></svg>|
     ]
 
@@ -404,7 +414,7 @@ defmodule Crawler.Parser.DocumentScopeTest do
       assert saved =~ offline
       refute saved =~ ~s|href="theme.css"|
       refute saved =~ ~s|href='theme.css'|
-      assert saved =~ "a>b" or saved =~ "a?>b"
+      assert saved =~ "a>b" or saved =~ "a?&gt;b"
     end
 
     greater_href = ~s|<?xml-stylesheet type="text/css" href="a>b.css"?><svg></svg>|
@@ -412,44 +422,69 @@ defmodule Crawler.Parser.DocumentScopeTest do
     assert resolved == Linker.url(@diagram, "a>b.css")
 
     saved = rewrite(greater_href, opts)
-    assert saved =~ Linker.offline_link(@diagram, resolved)
+    assert saved =~ resolved
     refute saved =~ ~s|href="a>b.css"|
+  end
 
-    broken = """
+  test "a stylesheet PI ending at greater-than does not recover into a later XML PI" do
+    source = """
     <?xml-stylesheet type="text/css" href="early.css">
     <?xml-stylesheet type="text/css" href="late.css"?>
     <svg></svg>
     """
 
-    assert found(broken, opts) == [
+    assert_invalid_xml(source)
+  end
+
+  test "a valid ineligible XML stylesheet PI does not hide the following CSS instruction" do
+    opts = svg_document_opts()
+
+    source =
+      ~s|<?xml-stylesheet type="text/plain" title="a>&lt;?xml-stylesheet type='text/css' href='nested.css'?&gt;&lt;a href='escaped.html'>&lt;/a>" href="early.css"?><?xml-stylesheet type="text/css" href="late.css"?><svg></svg>|
+
+    assert found(source, opts) == [
              {"late.css", "http://example.com/late.css", "link", nil, "link"}
            ]
 
-    saved = rewrite(broken, opts)
-    assert saved =~ ~s|href="early.css"|
+    saved = rewrite(source, opts)
+    assert saved =~ "http://example.com/late.css"
     refute saved =~ ~s|href="late.css"|
+    assert saved =~ ~s|href="early.css"|
+    assert saved =~ ~s|href='nested.css'|
+    assert saved =~ ~s|href='escaped.html'|
+
+    assert saved =~
+             ~s|title="a>&lt;?xml-stylesheet type='text/css' href='nested.css'?&gt;&lt;a href='escaped.html'>&lt;/a>"|
+  end
+
+  test "a literal PI terminator in a stylesheet title returns an XML error" do
+    source = ~s|<?xml-stylesheet type="text/css" title="a?>b" href="theme.css"?><svg></svg>|
+    assert_invalid_xml(source)
   end
 
   test "a quoted xml stylesheet value is not markup" do
     opts = svg_document_opts()
 
     source =
-      ~s|<?xml-stylesheet type="text/css" title="a><?xml-stylesheet type='text/css' href='nested.css'?><a href='escaped.html'></a>" href="theme.css"?><svg></svg>|
+      ~s|<?xml-stylesheet type="text/css" title="a>&lt;?xml-stylesheet type='text/css' href='nested.css'?&gt;&lt;a href='escaped.html'>&lt;/a>" href="theme.css"?><svg></svg>|
 
     assert found(source, opts) == [
              {"theme.css", "http://example.com/theme.css", "link", nil, "link"}
            ]
 
     saved = rewrite(source, opts)
-    offline = Linker.offline_link(@diagram, "http://example.com/theme.css")
-    assert saved =~ ~s|href="#{offline}"|
+    target = "http://example.com/theme.css"
+    assert saved =~ ~s|href="#{target}"|
     refute saved =~ ~s|href="theme.css"|
     assert saved =~ ~s|href='nested.css'|
     assert saved =~ ~s|href='escaped.html'|
 
+    assert saved =~
+             ~s|title="a>&lt;?xml-stylesheet type='text/css' href='nested.css'?&gt;&lt;a href='escaped.html'>&lt;/a>"|
+
     hidden = """
-    <svg><foreignObject><template>
-      <?xml-stylesheet type="text/css" title="a></template><a href='escaped.html'></a>" href="hidden.css"?>
+    <svg xmlns="http://www.w3.org/2000/svg"><foreignObject><template xmlns="http://www.w3.org/1999/xhtml">
+      <?xml-stylesheet type="text/css" title="a>&lt;/template>&lt;a href='escaped.html'>&lt;/a>" href="hidden.css"?>
       <a href="inert.html">Inert</a>
     </template></foreignObject></svg>
     """
@@ -460,49 +495,47 @@ defmodule Crawler.Parser.DocumentScopeTest do
     assert saved =~ ~s|href="hidden.css"|
     assert saved =~ ~s|href='escaped.html'|
     assert saved =~ ~s|href="inert.html"|
+    assert saved == hidden
   end
 
-  test "a quoted greater-than does not open an xml stylesheet that ends at >" do
-    opts = svg_document_opts()
-
+  test "malformed nested stylesheet pseudo-attributes return an XML error" do
     source =
       ~s|<?xml-stylesheet type="text/css" title="a><?xml-stylesheet type='text/css' href='nested.css'?><a href='escaped.html'></a>" href="early.css"><?xml-stylesheet type="text/css" href="late.css"?><svg></svg>|
 
-    assert found(source, opts) == [
-             {"late.css", "http://example.com/late.css", "link", nil, "link"}
-           ]
-
-    saved = rewrite(source, opts)
-    offline = Linker.offline_link(@diagram, "http://example.com/late.css")
-    assert saved =~ offline
-    refute saved =~ ~s|href="late.css"|
-    assert saved =~ ~s|href='nested.css'|
-    assert saved =~ ~s|href='escaped.html'|
-    assert saved =~ ~s|href="early.css"|
+    assert_invalid_xml(source)
 
     quoted_pi =
       ~s|<?xml-stylesheet type="text/css" title="a?>b" href="early.css"><?xml-stylesheet type="text/css" href="late.css"?><svg></svg>|
 
-    assert found(quoted_pi, opts) == [
-             {"late.css", "http://example.com/late.css", "link", nil, "link"}
-           ]
+    assert_invalid_xml(quoted_pi)
+  end
 
+  test "an HTML stylesheet declaration keeps quoted markup inert and finds the following anchor" do
     html =
       ~s|<?xml-stylesheet type="text/css" title="a><a href='escaped.html'></a>" href="early.css"><a href="real.html">R</a>|
 
     assert found(html, %{}) == [
              {"real.html", asset("real.html"), "a", nil, "a"}
            ]
+
+    saved = rewrite(html, %{})
+    assert saved =~ ~s|title="a><a href='escaped.html'></a>" href="early.css">|
+    assert saved =~ ~s|<a href="#{asset("real.html")}">R</a>|
   end
 
-  test "an unclosed xml stylesheet quote is not markup" do
-    opts = svg_document_opts()
-
+  test "an unclosed stylesheet pseudo-attribute returns an XML error" do
     source =
       ~s|<?xml-stylesheet type="text/css" title="a><?xml-stylesheet type='text/css' href='nested.css'?><a href='escaped.html'></a><svg></svg>|
 
-    assert found(source, opts) == []
-    assert rewrite(source, opts) == source
+    assert_invalid_xml(source)
+  end
+
+  test "an unclosed HTML stylesheet declaration keeps the remaining markup inert" do
+    source =
+      ~s|<?xml-stylesheet type="text/css" title="a><?xml-stylesheet type='text/css' href='nested.css'?><a href='escaped.html'></a><svg></svg>|
+
+    assert found(source, %{}) == []
+    assert rewrite(source, %{}) == source
   end
 
   test "an xml stylesheet inside an inert template is ignored" do
@@ -510,29 +543,31 @@ defmodule Crawler.Parser.DocumentScopeTest do
 
     source = """
     <?xml-stylesheet type="text/css" href="theme.css"?>
-    <svg>
+    <svg xmlns="http://www.w3.org/2000/svg">
       <foreignObject>
-        <template>
-          <?xml-stylesheet type="text/css" href="hidden.css"?>
-          <a href="inert.html">Inert</a>
-        </template>
-        <template shadowrootmode="open">
-          <?xml-stylesheet type="text/css" href="live.css"?>
-          <a href="live.html">Live</a>
-          <template shadowrootmode="closed">
-            <?xml-stylesheet type="text/css" href="deeper.css"?>
-          </template>
+        <div xmlns="http://www.w3.org/1999/xhtml">
           <template>
-            <?xml-stylesheet type="text/css" href="inner.css"?>
+            <?xml-stylesheet type="text/css" href="hidden.css"?>
+            <a href="inert.html">Inert</a>
           </template>
-        </template>
+          <div>
+            <?xml-stylesheet type="text/css" href="live.css"?>
+            <a href="live.html">Live</a>
+            <div>
+              <?xml-stylesheet type="text/css" href="deeper.css"?>
+            </div>
+            <template shadowrootmode="closed">
+              <?xml-stylesheet type="text/css" href="inner.css"?>
+            </template>
+          </div>
+          <template>
+            <template shadowrootmode="open">
+              <?xml-stylesheet type="text/css" href="nested.css"?>
+            </template>
+          </template>
+        </div>
       </foreignObject>
     </svg>
-    <template>
-      <template shadowrootmode="open">
-        <?xml-stylesheet type="text/css" href="nested.css"?>
-      </template>
-    </template>
     """
 
     assert found(source, opts) == [
@@ -545,14 +580,23 @@ defmodule Crawler.Parser.DocumentScopeTest do
     saved = rewrite(source, opts)
 
     for name <- ~w(theme.css live.css deeper.css live.html) do
-      offline = Linker.offline_link(@diagram, "http://example.com/" <> name)
-      assert saved =~ offline
+      target = "http://example.com/" <> name
+      assert saved =~ target
       refute saved =~ ~s|href="#{name}"|
     end
 
     for name <- ~w(hidden.css inner.css nested.css inert.html) do
       assert saved =~ ~s|href="#{name}"|
     end
+  end
+
+  defp assert_invalid_xml(source) do
+    opts = page_opts(svg_document_opts())
+
+    assert Parser.parse_links(source, opts, fn _, _ -> flunk("invalid XML reached discovery") end) ==
+             {:error, :invalid_xml}
+
+    assert LinkReplacer.replace_links(source, opts) == {:error, :invalid_xml}
   end
 
   defp svg_document_opts do

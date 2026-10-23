@@ -14,7 +14,7 @@ defmodule Crawler.Snapper.OfflineLink.HtmlTest do
     assert_points(body, @page, @page, "#top")
     assert_points(body, @page, "http://example.com/blog/icons.svg", "#a")
     assert_points(body, @page, "http://example.com/blog/sprite.svg", "#b")
-    refute body =~ "post.html?q=1#section"
+    assert body =~ "http://example.com/blog/post.html?q&#61;1#section"
     refute body =~ ~s(href="#top")
     refute body =~ ~s(href="icons.svg#a")
     refute body =~ ~s(xlink:href="sprite.svg#b")
@@ -104,7 +104,7 @@ defmodule Crawler.Snapper.OfflineLink.HtmlTest do
   test "rewrites an unquoted srcset URL with an internal comma" do
     html = ~s|<img srcset=a.jpg,b.jpg><link rel="preload" as="image" imagesrcset=a.jpg,b.jpg>|
     body = rewrite(html, @page)
-    candidate = Linker.offline_link(@page, "http://example.com/blog/a.jpg,b.jpg")
+    candidate = "http://example.com/blog/a.jpg,b.jpg"
 
     refute body =~ "srcset=a.jpg,b.jpg"
     refute body =~ "imagesrcset=a.jpg,b.jpg"
@@ -122,9 +122,9 @@ defmodule Crawler.Snapper.OfflineLink.HtmlTest do
     """
 
     body = rewrite(html, @page)
-    transformed = Linker.offline_link(@page, "https://cdn.example/c_fill,w_400/photo.jpg")
-    next = Linker.offline_link(@page, "http://example.com/blog/next.jpg")
-    bare = Linker.offline_link(@page, "http://example.com/blog/bare.jpg")
+    transformed = "https://cdn.example/c_fill,w_400/photo.jpg"
+    next = "http://example.com/blog/next.jpg"
+    bare = "http://example.com/blog/bare.jpg"
     expected = "#{transformed} 1x,#{next} 2x, #{bare},"
 
     assert body =~ ~s|srcset="#{expected}"|
@@ -142,7 +142,7 @@ defmodule Crawler.Snapper.OfflineLink.HtmlTest do
     """
 
     body = rewrite(html, @page)
-    image = Linker.offline_link(@page, "http://example.com/blog/a.png")
+    image = "http://example.com/blog/a.png"
     expected = "data:image/svg+xml,a.png 1x, #{image} 2x"
 
     assert body =~ ~s|srcset="#{expected}"|
@@ -161,7 +161,7 @@ defmodule Crawler.Snapper.OfflineLink.HtmlTest do
     quoted = ~s|<meta http-equiv="refresh" content="0; url='a>b.html'">|
     quoted_body = rewrite(quoted, @page)
     refute quoted_body =~ "url='a>b.html'"
-    assert_points(quoted_body, @page, "http://example.com/blog/a>b.html")
+    assert_points(quoted_body, @page, "http://example.com/blog/a%3eb.html")
   end
 
   test "removes a base href while preserving an attribute with a closing bracket" do
@@ -171,11 +171,11 @@ defmodule Crawler.Snapper.OfflineLink.HtmlTest do
     body = rewrite(html, @page)
 
     assert body =~ ~s|<base data-name="a>b">|
-    refute body =~ "https://example.com/dir"
+    refute body =~ "href=\"https://example.com/dir/\""
     assert_points(body, @page, "https://example.com/dir/next.html")
 
     closed = ~s|<base href="https://example.com/dir/" />|
-    refute rewrite(closed, @page) =~ "<base"
+    assert rewrite(closed, @page) == closed
   end
 
   test "does not rewrite a parent prefix inside a longer unquoted link" do
@@ -233,7 +233,7 @@ defmodule Crawler.Snapper.OfflineLink.HtmlTest do
           "#{opening}#{data}#{closing} 1x,#{opening}a.png#{closing} 2x)#{attribute_quote}></div>"
 
       body = rewrite(html, @page)
-      target = Linker.offline_link(@page, "http://example.com/blog/a.png")
+      target = "http://example.com/blog/a.png"
 
       assert body ==
                "<div style=#{attribute_quote}background:image-set(" <>
@@ -286,7 +286,7 @@ defmodule Crawler.Snapper.OfflineLink.HtmlTest do
         {"&#X0022;", "&#x22;", "&#x22;"},
         {"&#X0027;", "&#x27;", "&#x27;"}
       ] do
-    test "preserves offline paths across quote syntax #{opening}" do
+    test "preserves online targets across quote syntax #{opening}" do
       opening = unquote(opening)
       closing = unquote(closing)
       normalized = unquote(normalized)
@@ -298,12 +298,12 @@ defmodule Crawler.Snapper.OfflineLink.HtmlTest do
       """
 
       body = rewrite(html, @page)
-      quoted = fn target -> normalized <> Linker.offline_link(@page, target) <> normalized end
+      quoted = fn target -> normalized <> target <> normalized end
 
       assert body =~ "@IMPORT #{opening}Theme.css#{closing};"
       assert body =~ "URL( #{quoted.("http://example.com/blog/Picture.png")} )"
       assert body =~ "image-set(#{quoted.("http://example.com/blog/Picture.png")} 1x)"
-      refresh_target = Linker.offline_link(@page, "http://example.com/blog/Next.html")
+      refresh_target = "http://example.com/blog/Next.html"
       assert body =~ "URL=#{opening}#{refresh_target}#{closing}"
     end
   end

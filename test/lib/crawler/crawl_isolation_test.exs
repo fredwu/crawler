@@ -45,6 +45,8 @@ defmodule Crawler.CrawlIsolationTest do
     {:ok, held} =
       start_crawl("#{url}/behavior/iso/b",
         max_pages: 2,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
         workers: 1,
         store: Store,
         req_options: req_options
@@ -55,6 +57,8 @@ defmodule Crawler.CrawlIsolationTest do
     {:ok, other} =
       start_crawl("#{url}/behavior/iso/a",
         max_pages: 2,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
         workers: 1,
         store: Store,
         req_options: req_options
@@ -88,18 +92,22 @@ defmodule Crawler.CrawlIsolationTest do
       assert Store.ops_count(held[:scope]) == 1
     end)
 
-    {:ok, capped} =
-      start_crawl("#{url}/behavior/iso/a2",
-        scope: other[:scope],
-        queue: other[:queue],
-        max_pages: 2,
-        req_options: req_options
-      )
+    assert {:error, {:limit, :max_pages}} =
+             start_crawl("#{url}/behavior/iso/a2",
+               scope: other[:scope],
+               queue: other[:queue],
+               max_pages: 2,
+               req_options: req_options
+             )
 
-    assert capped[:queue] == other[:queue]
+    assert elem(OPQ.info(other[:queue]), 0) == :normal
+    assert Process.alive?(held[:queue])
 
     wait(fn ->
-      refute Crawler.running?(capped)
+      refute Crawler.running?(other)
+      refute Crawler.running?(held)
+      assert Store.ops_count(other[:scope]) == 2
+      assert Store.ops_count(held[:scope]) == 1
       refute Store.find({"#{url}/behavior/iso/a2", other[:scope]})
     end)
   end

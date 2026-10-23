@@ -1,9 +1,10 @@
 defmodule Crawler.Snapper.HtmlSourceTest do
-  use Crawler.OfflineLinkCase, async: true
+  use Crawler.OfflineLinkCase, async: false
 
   import Crawler.TestHelpers, only: [tmp: 1]
-  import Crawler.SnapshotHelpers, only: [link_path: 1, saved: 2]
+  import Crawler.SnapshotHelpers, only: [saved_artifact: 2]
 
+  alias Crawler.ManagedSnapshotHelpers, as: Managed
   alias Crawler.Parser.CssParser
   alias Crawler.Snapper
 
@@ -21,8 +22,8 @@ defmodule Crawler.Snapper.HtmlSourceTest do
 
     comment = ~s|<!-- <img src="a.png"><base href="fake/"><a href="next.html"> -->|
     source = ~s|<img src="a.png"><a href='next.html'>go</a>| <> literal <> comment
-    image = Linker.offline_link(@page, "http://example.com/blog/a.png")
-    page = Linker.offline_link(@page, "http://example.com/blog/next.html")
+    image = "http://example.com/blog/a.png"
+    page = "http://example.com/blog/next.html"
 
     body = rewrite(source, @page)
 
@@ -37,7 +38,7 @@ defmodule Crawler.Snapper.HtmlSourceTest do
 
   test "an unfinished quoted attribute keeps embedded markup literal" do
     source = ~s|<img src="a.png"><div data-template="<img src='a.png'><base href='fake/'>|
-    image = Linker.offline_link(@page, "http://example.com/blog/a.png")
+    image = "http://example.com/blog/a.png"
 
     assert rewrite(source, @page) ==
              ~s|<img src="#{image}"><div data-template="<img src='a.png'><base href='fake/'>|
@@ -48,7 +49,7 @@ defmodule Crawler.Snapper.HtmlSourceTest do
       quote = unquote(quote)
       title = "literal href=next"
       source = "<a title=#{quote}#{title}#{quote}href=#{quote}next#{quote}>go</a>"
-      target = Linker.offline_link(@page, "http://example.com/blog/next")
+      target = "http://example.com/blog/next"
       before = Floki.parse_document!(source)
       assert Floki.attribute(before, "a", "href") == ["next"]
 
@@ -62,7 +63,7 @@ defmodule Crawler.Snapper.HtmlSourceTest do
 
   test "quoted template attributes stay opaque beside adjacent recovered attributes" do
     source = ~s|<img title="<img src='a.png' style='background:url(a.png)'>"src="a.png">|
-    target = Linker.offline_link(@page, "http://example.com/blog/a.png")
+    target = "http://example.com/blog/a.png"
 
     assert rewrite(source, @page) ==
              ~s|<img title="<img src='a.png' style='background:url(a.png)'>"src="#{target}">|
@@ -75,7 +76,7 @@ defmodule Crawler.Snapper.HtmlSourceTest do
       literal <>
         ~s|<base href="https://example.com/actual/" data-name="a>b"><a href="next.html">go</a>|
 
-    target = Linker.offline_link(@page, "https://example.com/actual/next.html")
+    target = "https://example.com/actual/next.html"
 
     assert rewrite(source, @page) ==
              literal <> ~s|<base data-name="a>b"><a href="#{target}">go</a>|
@@ -85,7 +86,7 @@ defmodule Crawler.Snapper.HtmlSourceTest do
     test "rewrites decoded URL attribute #{value} and retains unrelated source" do
       value = unquote(value)
       source = "<a\tHREF = '#{value}' title=\"café &eacute; <a href='#{value}'>\">go</a>"
-      target = Linker.offline_link(@page, "http://example.com/blog/café")
+      target = "http://example.com/blog/café"
       body = rewrite(source, @page)
 
       assert body == "<a\tHREF = '#{target}' title=\"café &eacute; <a href='#{value}'>\">go</a>"
@@ -102,9 +103,9 @@ defmodule Crawler.Snapper.HtmlSourceTest do
     <meta name="description" content="0; URL=&quot;caf&eacute;&quot;">
     """
 
-    image = Linker.offline_link(@page, "http://example.com/blog/café.png")
-    retina = Linker.offline_link(@page, "http://example.com/blog/café@2.png")
-    page = Linker.offline_link(@page, "http://example.com/blog/café")
+    image = "http://example.com/blog/café.png"
+    retina = "http://example.com/blog/café@2.png"
+    page = "http://example.com/blog/café"
     body = rewrite(source, @page)
 
     assert body == """
@@ -124,7 +125,7 @@ defmodule Crawler.Snapper.HtmlSourceTest do
     """
 
     source = literal <> ~s|<img src="a.png"><style>p { background:url("a.png") }</style>|
-    image = Linker.offline_link(@page, "http://example.com/blog/a.png")
+    image = "http://example.com/blog/a.png"
 
     assert rewrite(source, @page) ==
              literal <> ~s|<img src="#{image}"><style>p { background:url("#{image}") }</style>|
@@ -134,7 +135,7 @@ defmodule Crawler.Snapper.HtmlSourceTest do
     source =
       ~S|<div style="background:url(caf&#233;\)photo.png); --label:&quot;url(caf&#233;\)photo.png)&quot;"></div>|
 
-    image = Linker.offline_link(@page, "http://example.com/blog/café)photo.png")
+    image = "http://example.com/blog/café\\29&#32;photo.png"
 
     assert rewrite(source, @page) ==
              ~s|<div style="background:url(#{image}); --label:&quot;url(caf&#233;\\)photo.png)&quot;"></div>|
@@ -146,62 +147,36 @@ defmodule Crawler.Snapper.HtmlSourceTest do
     target = "http://example.com/next?x=1&y=2"
     source = ~s|<a href=next?x=1&y=2 title="keep">go</a>|
 
-    for {url, body} <- [{target, "QUERY TARGET"}, {page, source}] do
-      assert {:ok, _opts} =
-               Snapper.snap(body, %{
-                 url: url,
-                 save_to: root,
-                 content_type: "text/html",
-                 html_tag: "a",
-                 assets: [],
-                 depth: 1,
-                 max_depths: 3
-               })
-    end
+    export =
+      managed_export(root, page, source, [{target, "QUERY TARGET", "text/html"}], assets: [])
 
-    body = File.read!(saved(root, page))
+    from = Managed.resource_for_url(export, page)
+    to = Managed.reference_target(export, from, target)
+    body = Managed.read_resource(export, from)
     [{"a", attrs, ["go"]}] = Floki.find(Floki.parse_document!(body), "a")
     assert Enum.map(attrs, &elem(&1, 0)) == ["href", "title"]
     {"href", href} = List.keyfind(attrs, "href", 0)
-    assert href == Linker.offline_link(page, target)
-    opened = Path.expand(link_path(href), Path.dirname(saved(root, page)))
-    assert opened == Path.expand(saved(root, target))
-    assert File.read!(opened) == <<0xEF, 0xBB, 0xBF, "QUERY TARGET">>
+    Managed.assert_opens(export, from, to, href)
+    assert body == <<0xEF, 0xBB, 0xBF>> <> ~s|<a href=#{href} title="keep">go</a>|
+    assert Managed.read_resource(export, to) == <<0xEF, 0xBB, 0xBF, "QUERY TARGET">>
   end
 
-  test "rewrites an unquoted URL ending at slash-close to a quoted saved-file reference" do
+  test "rewrites an unquoted URL ending at slash-close without changing adjacent source" do
     root = tmp("snapshot-html-unquoted-slash")
     page = "http://example.com/index.html"
     target = "http://example.com/icon.png/"
     source = ~s|<img src=icon.png/><div title="src=icon.png/>"></div>|
 
-    assert {:ok, _opts} =
-             Snapper.snap("IMAGE", %{
-               url: target,
-               save_to: root,
-               content_type: "image/png",
-               html_tag: "img"
-             })
+    export =
+      managed_export(root, page, source, [{target, "IMAGE", "image/png"}], assets: ["images"])
 
-    assert {:ok, _opts} =
-             Snapper.snap(source, %{
-               url: page,
-               save_to: root,
-               content_type: "text/html",
-               html_tag: "a",
-               assets: ["images"],
-               depth: 1,
-               max_depths: 3
-             })
-
-    body = File.read!(saved(root, page))
+    from = Managed.resource_for_url(export, page)
+    to = Managed.reference_target(export, from, target)
+    body = Managed.read_resource(export, from)
     [src] = body |> Floki.parse_document!() |> Floki.attribute("img", "src")
-    assert src == Linker.offline_link(page, target)
-    assert body =~ ~s|<img src="#{src}">|
-    assert body =~ ~s|<div title="src=icon.png/>"></div>|
-    opened = Path.expand(link_path(src), Path.dirname(saved(root, page)))
-    assert opened == Path.expand(saved(root, target))
-    assert File.read!(opened) == "IMAGE"
+    assert body == <<0xEF, 0xBB, 0xBF>> <> ~s|<img src=#{src}><div title="src=icon.png/>"></div>|
+    Managed.assert_opens(export, from, to, src)
+    assert Managed.read_resource(export, to) == "IMAGE"
   end
 
   test "entity-encoded saved links and asset URLs open their intended files" do
@@ -216,36 +191,254 @@ defmodule Crawler.Snapper.HtmlSourceTest do
     <div style="background:url(&apos;caf&#233;.png&apos;)"></div>
     """
 
-    for {url, body, type} <- [
-          {link, "TARGET", "text/html"},
-          {image, "IMAGE", "image/png"},
-          {page, source, "text/html"}
-        ] do
-      assert {:ok, _opts} =
-               Snapper.snap(body, %{
-                 url: url,
-                 save_to: root,
-                 content_type: type,
-                 html_tag: "a",
-                 assets: ["images", "css"],
-                 depth: 1,
-                 max_depths: 3
-               })
-    end
+    export =
+      managed_export(
+        root,
+        page,
+        source,
+        [{link, "TARGET", "text/html"}, {image, "IMAGE", "image/png"}],
+        assets: ["images", "css"]
+      )
 
-    document = root |> saved(page) |> File.read!() |> Floki.parse_document!()
+    from = Managed.resource_for_url(export, page)
+    document = export |> Managed.read_resource(from) |> Floki.parse_document!()
     [href] = Floki.attribute(document, "a", "href")
     [src] = Floki.attribute(document, "img", "src")
     [srcset] = Floki.attribute(document, "img", "srcset")
     [style] = Floki.attribute(document, "div", "style")
     [{"link", [{"href", style_src}], []}] = CssParser.parse(style)
     assert srcset == src <> " 1x"
-    assert style_src == src
 
-    for {reference, target} <- [{href, link}, {src, image}, {style_src, image}] do
-      opened = Path.expand(link_path(reference), Path.dirname(saved(root, page)))
-      assert opened == Path.expand(saved(root, target))
-      assert File.read!(opened) == File.read!(saved(root, target))
+    for {reference, target, index} <- [
+          {href, link, 0},
+          {src, image, 1},
+          {src, image, 2},
+          {style_src, image, 3}
+        ] do
+      to = Managed.edge_target(export, from, index)
+      assert to["url"] == Crawler.URL.normalize(target)
+      Managed.assert_opens(export, from, to, reference)
+      expected = if target == link, do: <<0xEF, 0xBB, 0xBF, "TARGET">>, else: "IMAGE"
+      assert Managed.read_resource(export, to) == expected
     end
+
+    assert Managed.read_resource(export, from) ==
+             <<0xEF, 0xBB, 0xBF>> <>
+               """
+               <a href="#{href}">café</a>
+               <img src="#{src}" srcset="#{srcset}">
+               <div style="background:url(&apos;#{style_src}&apos;)"></div>
+               """
+  end
+
+  test "standalone public ID acknowledgements preserve unquoted query URLs and source attributes" do
+    root = tmp("standalone-html-query-ack-source")
+    page_url = "http://example.com/index.html"
+    target_url = "http://example.com/next?x=1&y=2"
+    source = ~s|<a href=next?x=1&y=2 title="keep">go</a>|
+    target_id = "standalone000000000007001"
+    page_id = "standalone000000000007002"
+
+    opts = %{
+      save_to: root,
+      content_type: "text/html",
+      html_tag: "a",
+      assets: [],
+      depth: 1,
+      max_depths: 3
+    }
+
+    assert {:ok, %{public_id: ^target_id} = target} =
+             Snapper.snap(
+               "QUERY TARGET",
+               Map.merge(opts, %{public_id: target_id, url: target_url})
+             )
+
+    assert {:ok, %{public_id: ^page_id} = page} =
+             Snapper.snap(source, Map.merge(opts, %{public_id: page_id, url: page_url}))
+
+    body = File.read!(saved_artifact(root, page))
+
+    assert body ==
+             <<0xEF, 0xBB, 0xBF>> <>
+               ~s|<a href=http://example.com/next?x&#61;1&amp;y&#61;2 title="keep">go</a>|
+
+    [{"a", attrs, ["go"]}] = Floki.find(Floki.parse_document!(body), "a")
+    assert Enum.map(attrs, &elem(&1, 0)) == ["href", "title"]
+    assert {"title", "keep"} in attrs
+    assert {"href", target_url} in attrs
+    assert File.read!(saved_artifact(root, target)) == <<0xEF, 0xBB, 0xBF, "QUERY TARGET">>
+  end
+
+  test "standalone public ID acknowledgements preserve slash-close URL boundaries and unrelated source" do
+    root = tmp("standalone-html-slash-ack-source")
+    page_url = "http://example.com/index.html"
+    target_url = "http://example.com/icon.png/"
+    source = ~s|<img src=icon.png/><div title="src=icon.png/>"></div>|
+    target_id = "standalone000000000008001"
+    page_id = "standalone000000000008002"
+
+    assert {:ok, %{public_id: ^target_id} = target} =
+             Snapper.snap("IMAGE", %{
+               public_id: target_id,
+               url: target_url,
+               save_to: root,
+               content_type: "image/png",
+               html_tag: "img"
+             })
+
+    assert {:ok, %{public_id: ^page_id} = page} =
+             Snapper.snap(source, %{
+               public_id: page_id,
+               url: page_url,
+               save_to: root,
+               content_type: "text/html",
+               html_tag: "a",
+               assets: ["images"],
+               depth: 1,
+               max_depths: 3
+             })
+
+    body = File.read!(saved_artifact(root, page))
+
+    assert body ==
+             <<0xEF, 0xBB, 0xBF>> <>
+               ~s|<img src=#{target_url}><div title="src=icon.png/>"></div>|
+
+    urls =
+      body
+      |> Crawler.Parser.parse_links(
+        %{url: page_url, content_type: "text/html", html_tag: "a", assets: ["images"]},
+        fn
+          {_, _, _, url}, _opts -> url
+          {_, url}, _opts -> url
+        end
+      )
+      |> List.flatten()
+      |> Enum.reject(&is_nil/1)
+
+    assert urls == [target_url]
+    [{"img", attrs, []}] = Floki.find(Floki.parse_document!(body), "img")
+    assert Enum.map(attrs, &elem(&1, 0)) == ["src"]
+
+    assert Floki.find(Floki.parse_document!(body), "div") == [
+             {"div", [{"title", "src=icon.png/>"}], []}
+           ]
+
+    assert File.read!(saved_artifact(root, target)) == "IMAGE"
+  end
+
+  test "standalone public ID acknowledgements preserve entity URL agreement across HTML and CSS" do
+    root = tmp("standalone-html-entity-ack-source")
+    page_url = "http://example.com/index.html"
+    link_url = "http://example.com/café"
+    image_url = "http://example.com/café.png"
+
+    source = """
+    <a href="caf&#233;">café</a>
+    <img src="caf&eacute;.png" srcset="caf&#xE9;.png 1x">
+    <div style="background:url(&apos;caf&#233;.png&apos;)"></div>
+    """
+
+    opts = %{save_to: root, html_tag: "a", assets: ["images", "css"], depth: 1, max_depths: 3}
+    link_id = "standalone000000000009001"
+    image_id = "standalone000000000009002"
+    page_id = "standalone000000000009003"
+
+    assert {:ok, %{public_id: ^link_id} = link} =
+             Snapper.snap(
+               "TARGET",
+               Map.merge(opts, %{public_id: link_id, url: link_url, content_type: "text/html"})
+             )
+
+    assert {:ok, %{public_id: ^image_id} = image} =
+             Snapper.snap(
+               "IMAGE",
+               Map.merge(opts, %{public_id: image_id, url: image_url, content_type: "image/png"})
+             )
+
+    assert {:ok, %{public_id: ^page_id} = page} =
+             Snapper.snap(
+               source,
+               Map.merge(opts, %{public_id: page_id, url: page_url, content_type: "text/html"})
+             )
+
+    body = File.read!(saved_artifact(root, page))
+
+    assert body ==
+             <<0xEF, 0xBB, 0xBF>> <>
+               """
+               <a href="#{link_url}">café</a>
+               <img src="#{image_url}" srcset="#{image_url} 1x">
+               <div style="background:url(&apos;#{image_url}&apos;)"></div>
+               """
+
+    document = Floki.parse_document!(body)
+    assert Floki.attribute(document, "a", "href") == [link_url]
+    [src] = Floki.attribute(document, "img", "src")
+    [srcset] = Floki.attribute(document, "img", "srcset")
+    [style] = Floki.attribute(document, "div", "style")
+    [{"link", [{"href", style_src}], []}] = CssParser.parse(style)
+    assert src == image_url
+    assert srcset == src <> " 1x"
+    assert style_src == src
+    assert File.read!(saved_artifact(root, link)) == <<0xEF, 0xBB, 0xBF, "TARGET">>
+    assert File.read!(saved_artifact(root, image)) == "IMAGE"
+  end
+
+  defp managed_export(root, page, source, targets, options) do
+    File.rmdir!(root)
+    root = root <> "-#{System.pid()}-#{System.unique_integer([:positive])}"
+    requests = Crawler.RequestLog.new()
+
+    route_key = fn url ->
+      uri = url |> Crawler.URL.canonical() |> URI.parse()
+      URI.to_string(%{uri | query: uri.query || ""})
+    end
+
+    routes =
+      Map.new([{page, source, "text/html"} | targets], fn {url, body, type} ->
+        {route_key.(url), {body, type}}
+      end)
+
+    plug = fn conn ->
+      key = conn |> Plug.Conn.request_url() |> route_key.()
+      Crawler.RequestLog.record(requests, key)
+      {body, type} = Map.fetch!(routes, key)
+      conn |> Plug.Conn.put_resp_header("content-type", type) |> Plug.Conn.resp(200, body)
+    end
+
+    assert {:ok, opts} =
+             Crawler.crawl(
+               page,
+               Keyword.merge(
+                 [
+                   scope: Crawler.TestHelpers.unique_scope("managed-snapshot"),
+                   save_to: root,
+                   store: nil,
+                   workers: 1,
+                   max_body: 1_048_576,
+                   max_analysis_bytes: 16_777_216,
+                   max_css_work: 5_000,
+                   max_css_pictures: 1_000,
+                   max_depths: 3,
+                   respect_robots: false,
+                   req_options: [plug: plug, retry: false]
+                 ],
+                 options
+               )
+             )
+
+    on_exit(fn ->
+      Crawler.stop(opts)
+      File.rm_rf!(root)
+    end)
+
+    export = Managed.ready_export(opts)
+
+    assert Crawler.RequestLog.frequencies(requests) ==
+             Map.new(routes, fn {url, _} -> {url, 1} end)
+
+    export
   end
 end

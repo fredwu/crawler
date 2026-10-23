@@ -57,7 +57,8 @@ defmodule Crawler.CrawlLifecycleTest do
     assert is_pid(owner)
     assert Process.alive?(owner)
     assert Process.alive?(queue)
-    assert is_pid(Process.whereis(:"opq-#{inspect(queue)}"))
+    assert [{options, _}] = Registry.lookup(OPQ.Registry, queue)
+    assert is_pid(options)
     {:links, owner_links} = Process.info(owner, :links)
     flags = Process.info(self(), :trap_exit)
 
@@ -66,7 +67,7 @@ defmodule Crawler.CrawlLifecycleTest do
     assert Process.info(self(), :trap_exit) == flags
     refute Process.alive?(queue)
     refute Process.alive?(owner)
-    refute Process.whereis(:"opq-#{inspect(queue)}")
+    wait(fn -> assert Registry.lookup(OPQ.Registry, queue) == [] end)
 
     supervisor = Process.whereis(Crawler.QueueSupervisor)
 
@@ -139,7 +140,7 @@ defmodule Crawler.CrawlLifecycleTest do
     assert :ok = Task.await(task, 2_000)
     refute Process.alive?(owner)
     refute Process.alive?(queue)
-    refute Process.whereis(:"opq-#{inspect(queue)}")
+    wait(fn -> assert Registry.lookup(OPQ.Registry, queue) == [] end)
 
     supervisor = Process.whereis(Crawler.QueueSupervisor)
 
@@ -294,7 +295,7 @@ defmodule Crawler.CrawlLifecycleTest do
       Plug.Conn.resp(conn, 404, "missing")
     end)
 
-    assert {:ok, rejected} =
+    assert {:error, {:queue_unavailable, ^dead}} =
              start_crawl(page,
                scope: scope,
                queue: dead,
@@ -302,7 +303,7 @@ defmodule Crawler.CrawlLifecycleTest do
                req_options: req_options
              )
 
-    refute Crawler.running?(rejected)
+    refute Map.has_key?(:sys.get_state(Store).scopes, scope)
     assert Store.pending_count(scope) == 0
     assert Store.inflight_count(scope) == 0
     assert Agent.get(hits, & &1) == 0
@@ -325,6 +326,7 @@ defmodule Crawler.CrawlLifecycleTest do
       start_crawl(page,
         scope: scope,
         queue: opts[:queue],
+        force: true,
         retries: 0,
         req_options: req_options
       )

@@ -1,7 +1,7 @@
 defmodule Crawler.CrawlLinkCollisionTest do
   use Crawler.TestCase, async: false
 
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
   alias Crawler.Store
 
@@ -13,13 +13,11 @@ defmodule Crawler.CrawlLinkCollisionTest do
     req_options: req_options
   } do
     scope = unique_scope("link-collision")
-    root = tmp(scope)
+    root = Path.join(tmp(scope), "archive")
     page = "#{url}/index.html"
     relative = "../#{site.path}/foo.html"
     relative_target = "#{url}/#{site.path}/foo.html"
     absolute_target = "#{url}/foo.html"
-
-    assert Crawler.Linker.offline_link(page, absolute_target) == relative
 
     ReqTestSite.expect_once(site, "GET", "/index.html", fn conn ->
       conn
@@ -46,6 +44,10 @@ defmodule Crawler.CrawlLinkCollisionTest do
       start_crawl(page,
         scope: scope,
         workers: 2,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
         retries: 0,
         store: Store,
         save_to: root,
@@ -54,15 +56,21 @@ defmodule Crawler.CrawlLinkCollisionTest do
 
     on_exit(fn -> Crawler.stop(opts) end)
 
-    wait(fn ->
-      refute Crawler.running?(opts)
-      assert Store.find_processed({relative_target, scope})
-      assert Store.find_processed({absolute_target, scope})
-    end)
+    export = ready_export(opts)
+    assert Store.find_processed({relative_target, scope})
+    assert Store.find_processed({absolute_target, scope})
 
-    assert File.read!(saved(root, relative_target)) == @utf8_bom <> "relative body"
-    assert File.read!(saved(root, absolute_target)) == @utf8_bom <> "absolute body"
-    assert_link_opens(root, page, relative_target)
-    assert_link_opens(root, page, absolute_target)
+    source = resource_for_url(export, page)
+
+    assert [relative_href, absolute_href] =
+             Floki.attribute(Floki.parse_document!(read_resource(export, source)), "a", "href")
+
+    first = edge_target(export, source, 0)
+    second = edge_target(export, source, 1)
+    refute first["id"] == second["id"]
+    assert_opens(export, source, first, relative_href)
+    assert_opens(export, source, second, absolute_href)
+    assert read_resource(export, first) == @utf8_bom <> "relative body"
+    assert read_resource(export, second) == @utf8_bom <> "absolute body"
   end
 end

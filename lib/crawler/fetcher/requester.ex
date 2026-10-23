@@ -1,14 +1,16 @@
 defmodule Crawler.Fetcher.Requester do
+  import Kernel, except: [send: 2]
+
   @moduledoc """
   Makes HTTP requests.
   """
 
   alias Crawler.Cookies
+  alias Crawler.Fetcher.Requester.PreparedRequest
   alias Crawler.Fetcher.UrlFilter
   alias Crawler.HTTP
-  alias Crawler.HTTP.Body
+  alias Crawler.Limits
   alias Crawler.Robots
-  alias Crawler.Store
 
   @fetch_opts [
     redirect: true,
@@ -17,6 +19,7 @@ defmodule Crawler.Fetcher.Requester do
     retry: false,
     decode_body: false
   ]
+  @execution_fields [:scope, :generation, :queue, :execution_lease, :deadline, :crawler_deadline]
 
   @doc """
   Makes HTTP requests via `Crawler.HTTP`.
@@ -47,107 +50,166 @@ defmodule Crawler.Fetcher.Requester do
       200
   """
   def make(opts) do
-    modifier_opts = opts[:modifier].opts(opts)
-    request = prepared_request(opts, modifier_opts)
-    {request, user_cookie, modifier_opts} = scope_credentials(request, opts, modifier_opts)
-
-    HTTP.get(
-      opts[:url],
-      request |> put_cookie(opts, user_cookie) |> Map.fetch!(:headers),
-      fetch_opts(opts, modifier_opts, user_cookie),
-      &allow_redirect?(&1, opts)
-    )
-  end
-
-  defp prepared_request(opts, modifier_opts) do
-    Req.new(headers: [{"User-Agent", opts[:user_agent]}])
-    |> Req.merge(headers: opts[:modifier].headers(opts))
-    |> Req.merge(headers: Keyword.get(modifier_opts, :headers, []))
-    |> Req.merge(headers: req_headers(opts))
-    |> Req.Request.put_new_header("accept-encoding", "gzip, deflate")
-  end
-
-  defp req_headers(opts) do
-    opts |> req_options() |> Keyword.get(:headers, [])
-  end
-
-  defp fetch_opts(opts, modifier_opts, user_cookie) do
-    fetch_opts =
-      @fetch_opts
-      |> Keyword.merge(timeout_opts(opts[:timeout]))
-      |> Keyword.merge(Keyword.delete(modifier_opts, :headers))
-      |> Keyword.merge(Keyword.delete(req_options(opts), :headers))
-
-    fetch_opts =
-      if credential_host?(opts), do: fetch_opts, else: Keyword.delete(fetch_opts, :auth)
-
-    context = cookie_context(opts)
-
-    fetch_opts
-    |> Keyword.put(:into, &Body.stream/2)
-    |> Keyword.put(:crawler_scope, opts[:scope])
-    |> Keyword.put(:crawler_max_body, max_body(opts))
-    |> Keyword.put(:crawler_user_cookie, user_cookie)
-    |> Keyword.put(:crawler_generation, opts[:generation])
-    |> Keyword.put(:crawler_queue, opts[:queue])
-    |> Keyword.put(:crawler_cookie_site, context.site)
-    |> Keyword.put(:crawler_cookie_navigation, context.navigation)
-    |> Keyword.put(:crawler_cookie_credentials, context.credentials)
-  end
-
-  # The seed host keeps caller headers when the scheme or port changes.
-  # Another host gets its own jar cookies and the safe headers only.
-  defp scope_credentials(request, opts, modifier_opts) do
-    if credential_host?(opts) do
-      {request, cookie_value(request), modifier_opts}
-    else
-      {HTTP.drop_caller_credentials(request), nil, Keyword.delete(modifier_opts, :auth)}
+    case prepare(opts) do
+      {:ok, prepared} -> send(prepared, opts |> Map.new() |> Map.take(@execution_fields))
+      {:error, {:request_preparation, :unsupported_follow_redirects}} -> unsupported_redirect!()
+      error -> error
     end
   end
 
-  defp credential_host?(opts) do
-    url = to_string(opts[:url] || "")
-    HTTP.same_host?(opts[:site] || url, url)
+  @doc false
+  def call(opts), do: make(opts)
+
+  @doc false
+  def prepare(opts) do
+    opts = Map.new(opts)
+    cookie_limits = cookie_limits(opts)
+    opts = Map.merge(opts, cookie_limits)
+    modifier = opts[:modifier] || Crawler.Fetcher.Modifier
+    modifier_opts = modifier.opts(opts)
+
+    url =
+      Keyword.get(opts[:req_options] || [], :url, Keyword.get(modifier_opts, :url, opts[:url]))
+
+    with {:ok, url} <- HTTP.resolve_url(url) do
+      request =
+        Req.new(Keyword.take(Keyword.merge(modifier_opts, opts[:req_options] || []), [:plugins]))
+        |> Req.Request.register_options(HTTP.options())
+        |> Req.merge(@fetch_opts)
+        |> Req.merge(timeout_opts(opts[:timeout]))
+        |> Req.merge(url: opts[:url], headers: user_agent(opts))
+        |> Req.merge(headers: modifier.headers(opts))
+        |> Req.merge(Keyword.delete(modifier_opts, :plugins))
+        |> Req.merge(Keyword.delete(opts[:req_options] || [], :plugins))
+        |> Req.merge(url: url)
+        |> Req.Request.put_new_header("accept-encoding", "gzip, deflate")
+        |> Req.Request.merge_options(
+          crawler_scope: opts[:scope],
+          crawler_max_body: opts[:max_body],
+          crawler_generation: opts[:generation],
+          crawler_queue: opts[:queue],
+          crawler_execution_lease: opts[:execution_lease],
+          crawler_cookie_site: opts[:cookie_site] || opts[:url],
+          crawler_cookie_navigation: Cookies.request_navigation?(opts),
+          crawler_cookie_credentials: Cookies.credential_mode(opts),
+          crawler_deadline: opts[:deadline] || opts[:crawler_deadline]
+        )
+
+      context = %PreparedRequest.Context{
+        allow_redirect: fn url, execution_context ->
+          allow_redirect?(url, Map.merge(opts, Map.take(execution_context, @execution_fields)))
+        end,
+        policy: policy(opts),
+        cookie_partition: opts[:scope],
+        cookie_limits: cookie_limits,
+        opaque?: (opts[:url_filter] || UrlFilter) != UrlFilter
+      }
+
+      HTTP.prepare(request, opts[:site] || opts[:url], context)
+    end
+  rescue
+    _exception -> {:error, {:request_preparation, :invalid_options}}
   end
 
-  defp req_options(opts), do: opts[:req_options] || []
+  @doc false
+  def prepare_http(url, headers, options, allow_redirect) do
+    {effective_url, options} = Keyword.pop(options, :url, url)
+    {cookie_options, options} = Keyword.split(options, Map.keys(Cookies.limits()))
+    cookie_limits = cookie_limits(Map.new(cookie_options))
 
-  defp max_body(opts) do
-    case opts[:max_body] do
-      max when is_integer(max) and max >= 0 -> max
-      _ -> 10_485_760
+    with {:ok, target} <- HTTP.resolve_url(effective_url) do
+      {headers_options, options} = Keyword.pop(options, :headers, [])
+      {crawler_options, options} = Keyword.split(options, HTTP.options())
+      {plugins, options} = Keyword.split(options, [:plugins])
+
+      request =
+        Req.new(plugins)
+        |> Req.Request.register_options(HTTP.options())
+        |> Req.merge(url: target, headers: headers)
+        |> Req.merge(options)
+        |> Req.merge(headers: headers_options)
+        |> Req.Request.merge_options(crawler_options)
+
+      context = %PreparedRequest.Context{
+        allow_redirect: fn url, _execution_context -> allow_redirect.(url) end,
+        policy: {:direct, allow_redirect},
+        cookie_partition: crawler_options[:crawler_scope],
+        cookie_limits: cookie_limits,
+        opaque?: true
+      }
+
+      HTTP.prepare(request, crawler_options[:crawler_cookie_site] || url, context)
+    end
+  rescue
+    _exception -> {:error, {:request_preparation, :invalid_options}}
+  end
+
+  @doc false
+  def send(%PreparedRequest{} = prepared, execution_context \\ %{}) do
+    HTTP.send(prepared, execution_context)
+  end
+
+  @doc false
+  def bind_cookie_proof(%PreparedRequest{} = prepared, proof) do
+    %{prepared | context: %{prepared.context | cookie_proof: proof}}
+  end
+
+  @doc false
+  def reuse_disposition(%Req.Response{} = response) do
+    case Req.Response.get_private(response, :crawler_reuse) do
+      %PreparedRequest.ReuseDisposition{dependency: :initial, disposition: disposition} = receipt
+      when disposition in [:candidate, :private] ->
+        receipt
+
+      %PreparedRequest.ReuseDisposition{
+        dependency: {:redirect_jar, _proof},
+        disposition: disposition
+      } = receipt
+      when disposition in [:candidate, :private] ->
+        receipt
+
+      _ ->
+        private_disposition()
     end
   end
 
-  defp put_cookie(request, opts, user_cookie) do
-    context = cookie_context(opts)
-    jar = Store.cookie_header(opts[:scope], opts[:url], opts[:generation], context)
-    user_cookie = caller_cookie(opts[:url], context, user_cookie)
-
-    case Cookies.merge_header(user_cookie, jar) do
-      nil -> Req.Request.delete_header(request, "cookie")
-      header -> Req.Request.put_header(request, "cookie", header)
-    end
-  end
-
-  defp cookie_context(opts) do
-    %{
-      queue: opts[:queue],
-      site: opts[:cookie_site] || opts[:url],
-      navigation: Cookies.request_navigation?(opts),
-      credentials: Cookies.credential_mode(opts)
+  defp private_disposition do
+    %PreparedRequest.ReuseDisposition{
+      dependency: :initial,
+      disposition: :private,
+      reason: :cookie_proof_unproven
     }
   end
 
-  defp caller_cookie(url, context, user_cookie) do
-    if Cookies.caller_cookie?(url, context), do: user_cookie
+  @doc false
+  @spec unsupported_redirect!() :: no_return()
+  def unsupported_redirect! do
+    raise ArgumentError, ":follow_redirects is not supported; use :redirect instead"
   end
 
-  defp cookie_value(request) do
-    case Req.Request.get_header(request, "cookie") do
-      [] -> nil
-      values -> Enum.join(values, "; ")
-    end
+  defp user_agent(%{user_agent: agent}) when is_binary(agent), do: [{"user-agent", agent}]
+  defp user_agent(_opts), do: []
+
+  defp policy(opts) do
+    filter = opts[:url_filter] || UrlFilter
+
+    {
+      filter,
+      Crawler.Site.origin(opts[:site]),
+      opts[:reference_tag] in [nil, "a", "area", "meta"],
+      opts[:respect_robots] == true,
+      opts[:robots_fetch] == true,
+      opts[:sitemap_fetch] == true,
+      opts[:user_agent],
+      if(filter != UrlFilter, do: make_ref())
+    }
+  end
+
+  defp cookie_limits(opts) do
+    opts
+    |> Limits.cookies()
+    |> Limits.validate!(Cookies.limits())
+    |> Limits.cookies()
   end
 
   defp timeout_opts(timeout) when is_integer(timeout) or timeout == :infinity do
@@ -168,17 +230,24 @@ defmodule Crawler.Fetcher.Requester do
         http_url?(url)
 
       opts[:sitemap_fetch] == true ->
-        http_url?(url) and robots_allow?(opts)
+        http_url?(url) and robots_redirect(opts)
 
       true ->
         filter = opts[:url_filter] || UrlFilter
-        match?({:ok, true}, filter.filter(url, opts)) and robots_allow?(opts)
+        match?({:ok, true}, filter.filter(url, opts)) and robots_redirect(opts)
     end
   end
 
-  defp robots_allow?(opts) do
-    opts[:respect_robots] != true or Robots.permitted?(opts)
+  defp robots_redirect(%{respect_robots: true} = opts) do
+    case Robots.permitted_result(opts) do
+      {:ok, allowed?} -> allowed?
+      {:error, {kind, _}} = error when kind in [:limit, :deadline] -> error
+      {:error, :stale} = error -> error
+      _ -> false
+    end
   end
+
+  defp robots_redirect(_opts), do: true
 
   defp http_url?(url) do
     case URI.parse(url) do

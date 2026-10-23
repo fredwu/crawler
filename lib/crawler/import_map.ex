@@ -1,19 +1,51 @@
 defmodule Crawler.ImportMap do
   @moduledoc false
-
+  alias Crawler.Analysis.Budget
   alias Crawler.ImportMap.JSON
   alias Crawler.URL
 
   def empty, do: %{imports: %{}, scopes: []}
 
   def parse(text, base) when is_binary(text) and is_binary(base) do
-    case JSON.decode(text) do
-      {:ok, {:object, pairs}} -> build(pairs, base)
-      _ -> :error
+    case JSON.decode_located(text) do
+      {:ok, decoded} -> from_located(decoded, base)
+      _other -> :error
     end
   end
 
   def parse(_text, _base), do: :error
+
+  def from_located(decoded, base) do
+    case from_located_result(decoded, base, Budget.unlimited()) do
+      {:ok, map, _budget} -> map
+      {:error, _reason, _budget} -> :error
+      {:error, _reason} -> :error
+    end
+  end
+
+  def from_located_result(decoded, base, budget) do
+    case from_located_attempt(decoded, base, budget) do
+      {:error, reason, latest} ->
+        with {:ok, latest} <- Budget.release(latest, latest.scratch - budget.scratch),
+             {:ok, latest} <- Budget.refund(latest, latest.retained - budget.retained),
+             do: {:error, reason, latest}
+
+      result ->
+        result
+    end
+  end
+
+  defp from_located_attempt({:object, pairs}, base, budget) when is_binary(base) do
+    with_pairs(pairs, budget, fn pairs, budget ->
+      with {:ok, budget} <- charge(budget, Budget.cost(:context)),
+           {:ok, imports, budget} <- specifier_map(member(pairs, "imports"), base, budget),
+           {:ok, scopes, budget} <- scopes(member(pairs, "scopes"), base, budget) do
+        {:ok, %{imports: imports, scopes: scopes}, budget}
+      end
+    end)
+  end
+
+  defp from_located_attempt(_decoded, _base, budget), do: {:error, :invalid_import_map, budget}
 
   def merge_source(text, map, base) do
     case parse(text, base || "") do
@@ -22,45 +54,55 @@ defmodule Crawler.ImportMap do
     end
   end
 
-  # `old` is the map already reached. Its entries, including null, stay.
-  def merge(%{imports: new_imports, scopes: new_scopes}, %{
-        imports: old_imports,
-        scopes: old_scopes
-      }) do
-    %{
-      imports: Map.merge(new_imports, old_imports),
-      scopes: merge_scopes(new_scopes, old_scopes)
-    }
+  def merge(new, old) do
+    {:ok, map, _budget} = merge_result(new, old, Budget.unlimited())
+    map
   end
 
-  def resolve(specifier, %{imports: imports, scopes: scopes}, script_base)
-      when is_binary(specifier) and is_binary(script_base) do
-    case classify(specifier, script_base) do
-      :skip ->
-        :unmapped
+  def merge_result(new, old, budget) do
+    entries =
+      map_size(new.imports) + map_size(old.imports) +
+        Enum.reduce(new.scopes, 0, fn {_prefix, imports}, n -> n + map_size(imports) + 1 end) +
+        Enum.reduce(old.scopes, 0, fn {_prefix, imports}, n -> n + map_size(imports) + 1 end)
 
-      {kind, normalized} ->
-        case match_scopes(scopes, normalized, script_base) do
-          :miss -> fallback(imports, kind, normalized)
-          result -> result
+    with {:ok, budget} <-
+           Budget.charge(budget, Budget.cost(:map_entry, entries) + Budget.cost(:context)),
+         {:ok, budget} <- Budget.reserve(budget, Budget.cost(:map_entry, entries)) do
+      scopes = merge_scopes(new.scopes, old.scopes)
+      map = %{imports: Map.merge(new.imports, old.imports), scopes: scopes}
+
+      with {:ok, budget} <- Budget.release(budget, Budget.cost(:map_entry, entries)),
+           do: {:ok, map, budget}
+    end
+  end
+
+  def resolve(specifier, map, base) do
+    case resolve_result(specifier, map, base, Budget.unlimited()) do
+      {:ok, url, _budget} -> {:ok, url}
+      {:blocked, _budget} -> :blocked
+      {:unmapped, _budget} -> :unmapped
+    end
+  end
+
+  def resolve_result(specifier, %{imports: imports, scopes: scopes}, base, budget)
+      when is_binary(specifier) and is_binary(base) do
+    case classify(specifier, base, budget) do
+      {:skip, budget} ->
+        {:unmapped, budget}
+
+      {:ok, kind, normalized, budget} ->
+        case scoped_match(scopes, normalized, base) do
+          :miss -> finish_match(match_imports(imports, normalized), kind, normalized, budget)
+          match -> finish_match(match, kind, normalized, budget)
         end
+
+      error ->
+        error
     end
   end
 
-  def resolve(_specifier, _map, _script_base), do: :unmapped
+  def resolve_result(_specifier, _map, _base, budget), do: {:unmapped, budget}
 
-  defp build(pairs, base) do
-    pairs = collapse(pairs)
-
-    with {:ok, imports} <- specifier_map(member(pairs, "imports"), base),
-         {:ok, scopes} <- scope_map(member(pairs, "scopes"), base) do
-      %{imports: imports, scopes: scopes}
-    else
-      _ -> :error
-    end
-  end
-
-  # `nil` and `false` are real JSON values. A missing member is the only absence.
   defp member(pairs, key) do
     case List.keyfind(pairs, key, 0) do
       nil -> :absent
@@ -68,179 +110,179 @@ defmodule Crawler.ImportMap do
     end
   end
 
-  defp specifier_map(:absent, _base), do: {:ok, %{}}
-  defp specifier_map({:present, {:object, pairs}}, base), do: {:ok, normalize_pairs(pairs, base)}
-  defp specifier_map({:present, _value}, _base), do: :error
+  defp specifier_map(:absent, _base, budget), do: {:ok, %{}, budget}
 
-  defp scope_map(:absent, _base), do: {:ok, []}
+  defp specifier_map({:present, {:object, pairs}}, base, budget),
+    do: normalize_pairs(pairs, base, budget)
 
-  defp scope_map({:present, {:object, pairs}}, base) do
-    scopes = pairs |> collapse() |> Enum.reduce([], &put_scope(&1, &2, base))
-    {:ok, sort_scopes(scopes)}
-  end
+  defp specifier_map(_value, _base, budget), do: {:error, :invalid_import_map, budget}
 
-  defp scope_map({:present, _value}, _base), do: :error
+  defp scopes(:absent, _base, budget), do: {:ok, [], budget}
 
-  defp put_scope({key, value}, acc, base) do
-    case scope_entry(key, value, base) do
-      {:ok, prefix, imports} -> put_new_scope(acc, prefix, imports)
-      :ignore -> acc
-    end
-  end
-
-  defp put_new_scope(acc, prefix, imports) do
-    if List.keymember?(acc, prefix, 0), do: acc, else: [{prefix, imports} | acc]
-  end
-
-  defp scope_entry("", _value, _base), do: :ignore
-
-  defp scope_entry(key, {:object, pairs}, base) do
-    case URL.resolve(key, base) do
-      {:ok, prefix} -> {:ok, prefix, normalize_pairs(pairs, base)}
-      :skip -> :ignore
-    end
-  end
-
-  defp scope_entry(_key, _value, _base), do: :ignore
-
-  defp normalize_pairs(pairs, base) do
-    pairs |> collapse() |> Enum.reduce(%{}, &put_entry(&1, &2, base))
-  end
-
-  defp put_entry({key, value}, acc, base) do
-    case entry(key, value, base) do
-      {:ok, normalized, address} -> put_new_address(acc, normalized, address)
-      :ignore -> acc
-    end
-  end
-
-  defp put_new_address(acc, normalized, address) do
-    if Map.has_key?(acc, normalized), do: acc, else: Map.put(acc, normalized, address)
-  end
-
-  defp entry("", _value, _base), do: :ignore
-
-  defp entry(key, value, base) do
-    prefix? = String.ends_with?(key, "/")
-
-    with {:ok, normalized} <- normalize_key(key, base),
-         {:ok, address} <- normalize_address(value, base, prefix?) do
-      {:ok, normalized, address}
-    else
-      _ -> :ignore
-    end
-  end
-
-  defp normalize_key(key, base) do
-    if url_like?(key) do
-      case URL.resolve(key, base) do
-        {:ok, url} -> {:ok, url}
-        :skip -> :ignore
+  defp scopes({:present, {:object, pairs}}, base, budget) do
+    with_pairs(pairs, budget, fn pairs, budget ->
+      with {:ok, scopes, budget} <-
+             each(pairs, [], budget, &normalize_scope(&1, base, &2, &3)) do
+        {:ok, sort_scopes(scopes), budget}
       end
-    else
-      {:ok, key}
-    end
-  end
-
-  defp normalize_address(nil, _base, _prefix?), do: {:ok, :blocked}
-
-  defp normalize_address(value, base, prefix?) when is_binary(value) do
-    case URL.resolve(value, base) do
-      {:ok, url} ->
-        if prefix? and not String.ends_with?(url, "/"), do: :ignore, else: {:ok, url}
-
-      :skip ->
-        if prefix? and not String.ends_with?(value, "/"), do: :ignore, else: {:ok, :blocked}
-    end
-  end
-
-  defp normalize_address(_value, _base, _prefix?), do: :ignore
-
-  defp classify(specifier, base) do
-    if url_like?(specifier) do
-      case URL.resolve(specifier, base) do
-        {:ok, url} -> {:url, url}
-        :skip -> :skip
-      end
-    else
-      {:bare, specifier}
-    end
-  end
-
-  defp fallback(imports, kind, normalized) do
-    case match_imports(imports, normalized) do
-      :miss -> if kind == :url, do: {:ok, normalized}, else: :unmapped
-      result -> result
-    end
-  end
-
-  defp match_scopes(scopes, normalized, script_base) do
-    Enum.reduce_while(scopes, :miss, fn {prefix, imports}, :miss ->
-      scope_result(prefix, imports, normalized, script_base)
     end)
   end
 
-  defp scope_result(prefix, imports, normalized, script_base) do
-    if scope_match?(prefix, script_base) do
-      scoped_imports(imports, normalized)
+  defp scopes(_value, _base, budget), do: {:error, :invalid_import_map, budget}
+
+  defp normalize_scope({key, {:object, entries}}, base, acc, budget) when key != "" do
+    case URL.resolve_result(key, base, budget) do
+      {:ok, prefix, budget} ->
+        with {:ok, imports, budget} <- normalize_pairs(entries, base, budget),
+             {:ok, budget} <- charge(budget, Budget.cost(:binding), facts: 1) do
+          acc =
+            if List.keymember?(acc, prefix, 0),
+              do: acc,
+              else: [{prefix, imports} | acc]
+
+          {:ok, acc, budget}
+        end
+
+      {:skip, budget} ->
+        {:ok, acc, budget}
+
+      error ->
+        error
+    end
+  end
+
+  defp normalize_scope(_entry, _base, acc, budget), do: {:ok, acc, budget}
+
+  defp normalize_pairs(pairs, base, budget) do
+    with_pairs(pairs, budget, fn pairs, budget ->
+      each(pairs, %{}, budget, &normalize_pair(&1, base, &2, &3))
+    end)
+  end
+
+  defp normalize_pair({"", _value}, _base, acc, budget), do: {:ok, acc, budget}
+
+  defp normalize_pair({key, value}, base, acc, budget) do
+    with {:ok, budget} <- charge(budget, Budget.cost(:binding), facts: 1) do
+      case normalize_key(key, base, budget) do
+        {:ok, normalized, budget} ->
+          case normalize_address(text(value), base, String.ends_with?(key, "/"), budget) do
+            {:ok, address, budget} -> {:ok, Map.put_new(acc, normalized, address), budget}
+            {:ignore, budget} -> {:ok, acc, budget}
+            error -> error
+          end
+
+        {:ignore, budget} ->
+          {:ok, acc, budget}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  defp normalize_key(key, base, budget) do
+    if url_like?(key) do
+      case URL.resolve_result(key, base, budget) do
+        {:ok, url, budget} -> {:ok, url, budget}
+        {:skip, budget} -> {:ignore, budget}
+        error -> error
+      end
     else
-      {:cont, :miss}
+      {:ok, key, budget}
     end
   end
 
-  defp scoped_imports(imports, normalized) do
-    case match_imports(imports, normalized) do
-      :miss -> {:cont, :miss}
-      result -> {:halt, result}
+  defp normalize_address(nil, _base, _prefix, budget), do: {:ok, :blocked, budget}
+
+  defp normalize_address(value, base, prefix?, budget) when is_binary(value) do
+    case URL.resolve_result(value, base, budget) do
+      {:ok, url, budget} ->
+        if prefix? and not String.ends_with?(url, "/"),
+          do: {:ignore, budget},
+          else: {:ok, url, budget}
+
+      {:skip, budget} ->
+        if prefix? and not String.ends_with?(value, "/"),
+          do: {:ignore, budget},
+          else: {:ok, :blocked, budget}
+
+      error ->
+        error
     end
   end
 
-  defp scope_match?(prefix, script_base) do
-    prefix == script_base or
-      (String.ends_with?(prefix, "/") and String.starts_with?(script_base, prefix))
+  defp normalize_address(_value, _base, _prefix, budget), do: {:ignore, budget}
+
+  defp classify(specifier, base, budget) do
+    if url_like?(specifier) do
+      case URL.resolve_result(specifier, base, budget) do
+        {:ok, url, budget} -> {:ok, :url, url, budget}
+        other -> other
+      end
+    else
+      {:ok, :bare, specifier, budget}
+    end
   end
+
+  defp scoped_match(scopes, normalized, base) do
+    Enum.reduce_while(scopes, :miss, fn {prefix, imports}, :miss ->
+      if prefix == base or (String.ends_with?(prefix, "/") and String.starts_with?(base, prefix)) do
+        scoped_match_result(match_imports(imports, normalized))
+      else
+        {:cont, :miss}
+      end
+    end)
+  end
+
+  defp scoped_match_result(:miss), do: {:cont, :miss}
+  defp scoped_match_result(match), do: {:halt, match}
 
   defp match_imports(imports, normalized) do
-    imports
-    |> Enum.sort_by(fn {key, _address} ->
-      if String.ends_with?(key, "/"), do: {1, -byte_size(key)}, else: {0, 0}
-    end)
-    |> Enum.reduce_while(:miss, fn {key, address}, :miss ->
-      cond do
-        key == normalized ->
-          {:halt, finish(address)}
+    case Map.fetch(imports, normalized) do
+      {:ok, address} ->
+        {:exact, address}
 
-        String.ends_with?(key, "/") and String.starts_with?(normalized, key) ->
-          {:halt, prefix_finish(normalized, key, address)}
-
-        true ->
-          {:cont, :miss}
-      end
-    end)
-  end
-
-  defp finish(:blocked), do: :blocked
-  defp finish(url), do: {:ok, url}
-
-  defp prefix_finish(_normalized, _key, :blocked), do: :blocked
-
-  defp prefix_finish(normalized, key, address) do
-    rest = binary_part(normalized, byte_size(key), byte_size(normalized) - byte_size(key))
-
-    case URL.resolve(rest, address) do
-      {:ok, url} -> if String.starts_with?(url, address), do: {:ok, url}, else: :blocked
-      :skip -> :blocked
+      :error ->
+        Enum.reduce(imports, :miss, &match_prefix(&1, &2, normalized))
     end
   end
 
-  defp merge_scopes(new_scopes, old_scopes) do
-    new_scopes = Map.new(new_scopes)
-    old_scopes = Map.new(old_scopes)
+  defp match_prefix({key, address}, best, normalized) do
+    if String.ends_with?(key, "/") and String.starts_with?(normalized, key) and
+         (best == :miss or byte_size(key) > byte_size(elem(best, 1))),
+       do: {:prefix, key, address},
+       else: best
+  end
 
-    (Map.keys(old_scopes) ++ Map.keys(new_scopes))
+  defp finish_match(:miss, :url, normalized, budget), do: {:ok, normalized, budget}
+  defp finish_match(:miss, _kind, _normalized, budget), do: {:unmapped, budget}
+  defp finish_match({:exact, :blocked}, _kind, _normalized, budget), do: {:blocked, budget}
+  defp finish_match({:exact, address}, _kind, _normalized, budget), do: {:ok, address, budget}
+  defp finish_match({:prefix, _key, :blocked}, _kind, _normalized, budget), do: {:blocked, budget}
+
+  defp finish_match({:prefix, key, address}, _kind, normalized, budget) do
+    rest = binary_part(normalized, byte_size(key), byte_size(normalized) - byte_size(key))
+
+    case URL.resolve_result(rest, address, budget) do
+      {:ok, url, budget} ->
+        if String.starts_with?(url, address), do: {:ok, url, budget}, else: {:blocked, budget}
+
+      {:skip, budget} ->
+        {:blocked, budget}
+
+      error ->
+        error
+    end
+  end
+
+  defp merge_scopes(new, old) do
+    new = Map.new(new)
+    old = Map.new(old)
+
+    (Map.keys(old) ++ Map.keys(new))
     |> Enum.uniq()
     |> Enum.map(fn prefix ->
-      {prefix, Map.merge(Map.get(new_scopes, prefix, %{}), Map.get(old_scopes, prefix, %{}))}
+      {prefix, Map.merge(Map.get(new, prefix, %{}), Map.get(old, prefix, %{}))}
     end)
     |> sort_scopes()
   end
@@ -248,8 +290,35 @@ defmodule Crawler.ImportMap do
   defp sort_scopes(scopes),
     do: Enum.sort_by(scopes, fn {prefix, _imports} -> -byte_size(prefix) end)
 
-  # JSON objects keep the last duplicate key. Later normalization keeps the first address.
-  defp collapse(pairs), do: JSON.collapse_pairs(pairs)
+  defp each(items, acc, budget, fun) do
+    Enum.reduce_while(items, {:ok, acc, budget}, fn item, {:ok, acc, budget} ->
+      case fun.(item, acc, budget) do
+        {:ok, acc, budget} -> {:cont, {:ok, acc, budget}}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp with_pairs(pairs, budget, fun) do
+    scratch = length(pairs) * (Budget.cost(:map_entry) * 2 + Budget.cost(:list_cell) * 3)
+
+    with {:ok, budget} <- reserve(budget, scratch),
+         {:ok, value, budget} <- fun.(JSON.collapse_pairs(pairs), budget),
+         {:ok, budget} <- release(budget, scratch),
+         do: {:ok, value, budget}
+  end
+
+  defp charge(budget, bytes, counters \\ []) do
+    ledger_result(Budget.charge(budget, bytes, counters), budget)
+  end
+
+  defp reserve(budget, bytes), do: ledger_result(Budget.reserve(budget, bytes), budget)
+  defp release(budget, bytes), do: ledger_result(Budget.release(budget, bytes), budget)
+  defp ledger_result({:ok, budget}, _previous), do: {:ok, budget}
+  defp ledger_result({:error, reason}, budget), do: {:error, reason, budget}
+
+  defp text({:str, value, _at, _len}), do: value
+  defp text(value), do: value
 
   defp url_like?(specifier) do
     String.starts_with?(specifier, "/") or String.starts_with?(specifier, "./") or

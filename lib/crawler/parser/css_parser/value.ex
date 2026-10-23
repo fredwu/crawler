@@ -1,6 +1,8 @@
 defmodule Crawler.Parser.CssParser.Value do
   @moduledoc false
 
+  alias Crawler.Analysis.Budget
+  alias Crawler.Parser.CssParser.Buffer
   alias Crawler.Parser.CssParser.Identifier
 
   @entity_quote ~r/^&(?:quot|apos|#0*(?:34|39)|#x0*(?:22|27));/i
@@ -25,75 +27,106 @@ defmodule Crawler.Parser.CssParser.Value do
   end
 
   def quoted(body, offset) do
+    {token, tail, finish, valid?, _budget} = quoted(body, offset, Budget.unlimited())
+    {token, tail, finish, valid?}
+  end
+
+  def quoted(body, offset, budget) do
+    budget = token_budget(budget)
     {char, length, normalized} = quote_info(body)
-    {value, tail, closed?} = string(drop(body, length), char, [])
+    {value, tail, closed?, budget} = string(drop(body, length), char, Buffer.new(budget))
     consumed = byte_size(body) - byte_size(tail)
     token = Map.put(token(offset, consumed, value, normalized), :closed?, closed?)
-    {token, tail, offset + consumed, closed? or tail == ""}
+    {token, tail, offset + consumed, closed? or tail == "", budget}
   end
 
   def bare(body, offset) do
-    {value, tail, _valid?} = unquoted(body, :candidate, [])
+    {token, tail, finish, _budget} = bare(body, offset, Budget.unlimited())
+    {token, tail, finish}
+  end
+
+  def bare(body, offset, budget) do
+    budget = token_budget(budget)
+    {value, tail, _valid?, budget} = unquoted(body, :candidate, Buffer.new(budget))
     consumed = byte_size(body) - byte_size(tail)
-    {token(offset, consumed, value, ""), tail, offset + consumed}
+    {token(offset, consumed, value, ""), tail, offset + consumed, budget}
   end
 
   def url(body, offset) do
+    {token, tail, finish, comments, _budget} = url(body, offset, Budget.unlimited())
+    {token, tail, finish, comments}
+  end
+
+  def url(body, offset, budget, comments \\ []) do
     {body, offset} = whitespace(body, offset)
     quoted? = quote_info(body) != nil
 
-    {token, tail, finish, valid?} =
+    {token, tail, finish, valid?, budget} =
       if quoted? do
-        quoted(body, offset)
+        quoted(body, offset, budget)
       else
-        {value, tail, valid?} = unquoted(body, :url, [])
+        budget = token_budget(budget)
+        {value, tail, valid?, budget} = unquoted(body, :url, Buffer.new(budget))
         length = byte_size(body) - byte_size(tail)
-        {token(offset, length, value, ""), tail, offset + length, valid?}
+        {token(offset, length, value, ""), tail, offset + length, valid?, budget}
       end
 
-    complete_url(token, tail, finish, valid?, quoted?)
+    complete_url(token, tail, finish, valid?, quoted?, comments, budget)
   end
 
-  defp complete_url(token, tail, finish, true, quoted?) do
-    {tail, finish, comments} =
+  defp complete_url(token, tail, finish, true, quoted?, comments, budget) do
+    {tail, finish, comments, budget} =
       if quoted? do
-        trivia(tail, finish)
+        trivia(tail, finish, budget, comments)
       else
         {tail, finish} = whitespace(tail, finish)
-        {tail, finish, []}
+        {tail, finish, comments, budget}
       end
 
     case tail do
       <<")", rest::binary>> ->
-        {token, rest, finish + 1, comments}
+        {token, rest, finish + 1, comments, budget}
 
       "" ->
-        {token, "", finish, comments}
+        {token, "", finish, comments, budget}
 
       _ ->
-        discard_url(tail, finish, comments)
+        discard_url(tail, finish, comments, budget)
     end
   end
 
-  defp complete_url(_token, tail, finish, false, _quoted?), do: discard_url(tail, finish, [])
+  defp complete_url(_token, tail, finish, false, _quoted?, comments, budget),
+    do: discard_url(tail, finish, comments, budget)
 
-  defp discard_url(tail, finish, comments) do
+  defp discard_url(tail, finish, comments, budget) do
+    bytes = Budget.cost(:frame, 2)
+    budget = take!(Budget.reserve(budget, bytes))
     rest = bad_url(tail)
-    {nil, rest, finish + byte_size(tail) - byte_size(rest), comments}
+    budget = take!(Budget.release(budget, bytes))
+    {nil, rest, finish + byte_size(tail) - byte_size(rest), comments, budget}
   end
 
-  def trivia(body, offset), do: trivia(body, offset, [])
+  def trivia(body, offset) do
+    {tail, finish, comments, _budget} = trivia(body, offset, Budget.unlimited())
+    {tail, finish, comments}
+  end
 
-  defp trivia(<<"/*", rest::binary>>, offset, comments) do
+  def trivia(body, offset, budget, comments \\ [])
+
+  def trivia(<<"/*", rest::binary>>, offset, budget, comments) do
+    budget =
+      take!(Budget.charge(budget, Budget.cost(:segment) + Budget.cost(:list_cell), facts: 1))
+
     length = comment_length(rest) + 2
-    trivia(drop(rest, length - 2), offset + length, [{offset, length} | comments])
+    trivia(drop(rest, length - 2), offset + length, budget, [{offset, length} | comments])
   end
 
-  defp trivia(<<byte, rest::binary>>, offset, comments) when byte in [?\s, ?\t, ?\n, ?\r, ?\f] do
-    trivia(rest, offset + 1, comments)
+  def trivia(<<byte, rest::binary>>, offset, budget, comments)
+      when byte in [?\s, ?\t, ?\n, ?\r, ?\f] do
+    trivia(rest, offset + 1, budget, comments)
   end
 
-  defp trivia(body, offset, comments), do: {body, offset, comments}
+  def trivia(body, offset, budget, comments), do: {body, offset, comments, budget}
 
   defp whitespace(<<byte, rest::binary>>, offset) when byte in [?\s, ?\t, ?\n, ?\r, ?\f] do
     whitespace(rest, offset + 1)
@@ -101,58 +134,59 @@ defmodule Crawler.Parser.CssParser.Value do
 
   defp whitespace(body, offset), do: {body, offset}
 
-  defp string(<<>>, _quote, acc), do: {finish(acc), "", false}
-  defp string(<<"\\">>, _quote, acc), do: {finish(acc), "", false}
+  defp string(<<>>, _quote, buffer), do: finish(buffer, "", false)
+  defp string(<<"\\">>, _quote, buffer), do: finish(buffer, "", false)
 
-  defp string(<<"\\\r\n", rest::binary>>, quote, acc), do: string(rest, quote, acc)
+  defp string(<<"\\\r\n", rest::binary>>, quote, buffer), do: string(rest, quote, buffer)
 
-  defp string(<<"\\", byte, rest::binary>>, quote, acc) when byte in [?\n, ?\r, ?\f] do
-    string(rest, quote, acc)
+  defp string(<<"\\", byte, rest::binary>>, quote, buffer) when byte in [?\n, ?\r, ?\f] do
+    string(rest, quote, buffer)
   end
 
-  defp string(<<"\\", _rest::binary>> = body, quote, acc) do
-    {decoded, rest} = Identifier.decode_escape(body)
-    string(rest, quote, [decoded | acc])
+  defp string(<<"\\", _rest::binary>> = body, quote, buffer) do
+    {buffer, rest} = Buffer.escaped(buffer, body)
+    string(rest, quote, buffer)
   end
 
-  defp string(<<byte, _rest::binary>> = body, _quote, acc) when byte in [?\n, ?\r, ?\f],
-    do: {finish(acc), body, false}
+  defp string(<<byte, _rest::binary>> = body, _quote, buffer) when byte in [?\n, ?\r, ?\f],
+    do: finish(buffer, body, false)
 
-  defp string(body, expected, acc) do
+  defp string(body, expected, buffer) do
     case quote_info(body) do
       {^expected, length, _normalized} ->
-        {finish(acc), drop(body, length), true}
+        finish(buffer, drop(body, length), true)
 
       _ ->
         <<byte, rest::binary>> = body
-        string(rest, expected, [byte | acc])
+        string(rest, expected, Buffer.push(buffer, byte))
     end
   end
 
-  defp unquoted(<<>>, _kind, acc), do: {finish(acc), "", true}
-  defp unquoted(<<"\\">>, :url, acc), do: {finish([<<0xFFFD::utf8>> | acc]), "", true}
+  defp unquoted(<<>>, _kind, buffer), do: finish(buffer, "", true)
+  defp unquoted(<<"\\">>, :url, buffer), do: finish(Buffer.replacement(buffer), "", true)
 
-  defp unquoted(<<"\\", byte, _rest::binary>> = body, :url, acc)
+  defp unquoted(<<"\\", byte, _rest::binary>> = body, :url, buffer)
        when byte in [?\n, ?\r, ?\f],
-       do: {finish(acc), body, false}
+       do: finish(buffer, body, false)
 
-  defp unquoted(<<byte, _rest::binary>> = body, :url, acc)
+  defp unquoted(<<byte, _rest::binary>> = body, :url, buffer)
        when byte in [?", ?', ?(] or non_printable(byte),
-       do: {finish(acc), body, false}
+       do: finish(buffer, body, false)
 
-  defp unquoted(<<"\\", _rest::binary>> = body, kind, acc) do
-    {decoded, rest} = Identifier.decode_escape(body)
-    unquoted(rest, kind, [decoded | acc])
+  defp unquoted(<<"\\", _rest::binary>> = body, kind, buffer) do
+    {buffer, rest} = Buffer.escaped(buffer, body)
+    unquoted(rest, kind, buffer)
   end
 
-  defp unquoted(<<byte, _rest::binary>> = body, _kind, acc)
+  defp unquoted(<<byte, _rest::binary>> = body, _kind, buffer)
        when byte in [?\s, ?\t, ?\n, ?\r, ?\f, ?)],
-       do: {finish(acc), body, true}
+       do: finish(buffer, body, true)
 
-  defp unquoted(<<byte, _rest::binary>> = body, :candidate, acc) when byte in [?\,, ?(],
-    do: {finish(acc), body, true}
+  defp unquoted(<<byte, _rest::binary>> = body, :candidate, buffer) when byte in [?\,, ?(],
+    do: finish(buffer, body, true)
 
-  defp unquoted(<<byte, rest::binary>>, kind, acc), do: unquoted(rest, kind, [byte | acc])
+  defp unquoted(<<byte, rest::binary>>, kind, buffer),
+    do: unquoted(rest, kind, Buffer.push(buffer, byte))
 
   defp bad_url(<<>>), do: ""
   defp bad_url(<<")", rest::binary>>), do: rest
@@ -191,6 +225,13 @@ defmodule Crawler.Parser.CssParser.Value do
     end
   end
 
-  defp finish(acc), do: acc |> Enum.reverse() |> IO.iodata_to_binary()
+  defp finish(buffer, tail, valid?) do
+    {value, budget} = Buffer.finish(buffer)
+    {value, tail, valid?, budget}
+  end
+
+  defp token_budget(budget), do: take!(Budget.charge(budget, Budget.cost(:token), facts: 1))
+  defp take!({:ok, budget}), do: budget
+  defp take!({:error, reason}), do: throw({:css_budget, reason})
   defp drop(body, length), do: binary_part(body, length, byte_size(body) - length)
 end

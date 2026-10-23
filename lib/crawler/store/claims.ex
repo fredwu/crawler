@@ -29,34 +29,29 @@ defmodule Crawler.Store.Claims do
     %{claims | active: Map.put(claims.active, ref, claim)}
   end
 
-  def source_ref(claims, worker, key, queue) do
-    Enum.find_value(claims.active, fn
-      {ref, %Claim{worker: ^worker, primary_key: ^key, queue: ^queue, reserved?: true}} -> ref
-      _ -> nil
-    end)
-  end
-
   def owned?(claims, ref, worker), do: match?(%Claim{worker: ^worker}, claims.active[ref])
 
-  def in_use?(claims, key, worker) do
+  def in_use?(claims, key, worker, generation, active_queues) do
     Enum.any?(claims.active, fn {_ref, claim} ->
-      claim.worker != worker and
+      claim.worker != worker and claim.generation === generation and
+        Map.has_key?(active_queues, claim.queue) and
         (claim.primary_key === key or MapSet.member?(claim.aliases, key))
     end)
   end
 
-  def add_alias(claims, worker, {_url, scope} = key, queue) do
-    update_aliases(claims, worker, scope, queue, &MapSet.put(&1, key))
+  def add_alias(claims, worker, {_url, scope} = key, queue, generation) do
+    update_aliases(claims, worker, scope, queue, generation, &MapSet.put(&1, key))
   end
 
-  def delete_alias(claims, worker, {_url, scope} = key, queue) do
-    update_aliases(claims, worker, scope, queue, &MapSet.delete(&1, key))
+  def delete_alias(claims, worker, {_url, scope} = key, queue, generation) do
+    update_aliases(claims, worker, scope, queue, generation, &MapSet.delete(&1, key))
   end
 
-  defp update_aliases(claims, worker, scope, queue, update) do
+  defp update_aliases(claims, worker, scope, queue, generation, update) do
     active =
       Map.new(claims.active, fn
-        {ref, %Claim{worker: ^worker, scope: ^scope, queue: ^queue} = claim} ->
+        {ref,
+         %Claim{worker: ^worker, scope: ^scope, queue: ^queue, generation: ^generation} = claim} ->
           {ref, %{claim | aliases: update.(claim.aliases)}}
 
         entry ->
@@ -74,13 +69,5 @@ defmodule Crawler.Store.Claims do
       _ ->
         {nil, claims}
     end
-  end
-
-  def retire_scope(claims, scope), do: retire(claims, &(&1.scope === scope))
-  def retire_queue(claims, queue), do: retire(claims, &(&1.queue == queue))
-
-  defp retire(claims, match?) do
-    {removed, kept} = Enum.split_with(claims.active, fn {_ref, claim} -> match?.(claim) end)
-    {Enum.map(removed, &elem(&1, 0)), %{claims | active: Map.new(kept)}}
   end
 end

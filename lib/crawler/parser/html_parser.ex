@@ -3,6 +3,7 @@ defmodule Crawler.Parser.HtmlParser do
   Parses HTML files.
   """
 
+  alias Crawler.Analysis
   alias Crawler.HTMLReferences
   alias Crawler.HTMLSpans
 
@@ -43,10 +44,41 @@ defmodule Crawler.Parser.HtmlParser do
     end)
   end
 
+  def references(%Analysis{} = analysis, opts), do: references(analysis, opts, analysis.root)
+
   def references(body, opts) do
     body
     |> HTMLSpans.tags()
     |> reference_tags(body, opts)
+  end
+
+  @doc false
+  def references(%Analysis{} = analysis, opts, region_id) do
+    region = analysis.regions[region_id]
+    children = Enum.map(region.children, &analysis.regions[&1])
+    by_tag = Enum.group_by(children, & &1.metadata.tag.span)
+
+    region.facts.tags
+    |> Enum.reject(&(&1.closing? or &1.in_template?))
+    |> Enum.map(fn tag ->
+      sources = Map.get(by_tag, tag.span, [])
+
+      attributes =
+        case sources do
+          [source | _rest] ->
+            source.metadata.tag.active_attributes
+
+          [] ->
+            tag
+            |> HTMLSpans.active_attributes(region.kind)
+            |> Enum.map(&{&1.name, &1.decoded})
+        end
+
+      text = Enum.find(sources, &(&1.metadata[:inline_source] == true))
+      children = if text, do: [text.source], else: []
+      Map.merge(tag, %{attributes: attributes, children: children})
+    end)
+    |> Enum.filter(&eligible_tag?(&1, opts))
   end
 
   defp reference_tags(tags, body, opts) do
@@ -59,10 +91,12 @@ defmodule Crawler.Parser.HtmlParser do
       children = if tag.content_span, do: [HTMLSpans.slice(body, tag.content_span)], else: []
       Map.merge(tag, %{attributes: attrs, children: children})
     end)
-    |> Enum.filter(fn tag ->
-      HTMLReferences.attributes(tag.name, tag.attributes, opts, tag.namespace) != [] or
-        text_source?(tag, opts) or srcdoc_frame?(tag)
-    end)
+    |> Enum.filter(&eligible_tag?(&1, opts))
+  end
+
+  defp eligible_tag?(tag, opts) do
+    HTMLReferences.attributes(tag.name, tag.attributes, opts, tag.namespace) != [] or
+      text_source?(tag, opts) or srcdoc_frame?(tag)
   end
 
   defp text_source?(tag, opts) do

@@ -5,13 +5,12 @@ defmodule Crawler.PageIdentityTest do
   alias Crawler.Store
 
   import Crawler.RedirectHelpers
-  import Crawler.SnapshotHelpers
-  alias Crawler.Linker.Snapshot
+  import Crawler.ManagedSnapshotHelpers
 
   @utf8_bom <<0xEF, 0xBB, 0xBF>>
 
   test "http, https, userinfo, an empty query, and path case do not share a file" do
-    root = tmp("page-identity-distinct")
+    root = Path.join(tmp("page-identity-distinct"), "archive")
     scope = "page-identity-distinct"
     hub = "http://ex.com/id/hub"
 
@@ -39,7 +38,7 @@ defmodule Crawler.PageIdentityTest do
         if uri.path == "/id/hub" do
           Enum.map_join(leaves, "", fn leaf -> ~s(<a href="#{leaf}"></a>) end)
         else
-          "body:#{uri.scheme}:#{uri.userinfo}:#{uri.path}:#{inspect(uri.query)}:#{System.unique_integer([:positive])}"
+          "body:#{uri.scheme}:#{uri.userinfo}:#{uri.path}:#{inspect(uri.query)}"
         end
 
       {request,
@@ -50,37 +49,46 @@ defmodule Crawler.PageIdentityTest do
       crawl(hub,
         scope: scope,
         workers: 1,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
         max_depths: 2,
         save_to: root,
+        max_manifest_bytes: 16_777_216,
         req_options: [adapter: adapter, retry: false]
       )
 
-    await_idle(opts)
+    export = ready_export(opts)
 
     assert Store.ops_count(scope) == length(leaves) + 1
     requests = RequestLog.entries(seen)
     assert length(requests) == length(leaves) + 1
 
-    Enum.each(leaves, fn leaf ->
-      page = Store.find_processed({leaf, scope})
-      assert @utf8_bom <> page.body == File.read!(saved(root, leaf))
-      assert_link_opens(root, hub, leaf)
-    end)
+    source = resource_for_url(export, hub)
+    hrefs = Floki.attribute(Floki.parse_document!(read_resource(export, source)), "a", "href")
+    assert length(hrefs) == length(leaves)
 
-    refute File.read!(saved(root, "http://ex.com/id/scheme")) ==
-             File.read!(saved(root, "https://ex.com/id/scheme"))
+    targets =
+      for {{leaf, href}, index} <- Enum.with_index(Enum.zip(leaves, hrefs)) do
+        uri = URI.parse(leaf)
+        expected = "body:#{uri.scheme}:#{uri.userinfo}:#{uri.path}:#{inspect(uri.query)}"
+        page = Store.find_processed({leaf, scope})
+        assert page.body == expected
+        target = edge_target(export, source, index)
+        assert_opens(export, source, target, href)
+        assert read_resource(export, target) == @utf8_bom <> expected
+        target
+      end
 
-    refute File.read!(saved(root, "http://a:b@ex.com/id/secret")) ==
-             File.read!(saved(root, "http://ex.com/id/secret"))
-
-    refute File.read!(saved(root, "http://ex.com/id/search")) ==
-             File.read!(saved(root, "http://ex.com/id/search?"))
-
-    refute File.read!(saved(root, "http://ex.com/id/docs")) ==
-             File.read!(saved(root, "http://ex.com/id/Docs"))
-
-    paths = Enum.map(leaves, &String.downcase(Snapshot.path(&1)))
+    paths = Enum.map(targets, &String.downcase(&1["path"]))
     assert paths == Enum.uniq(paths)
+
+    for resource <- export.manifest["resources"] do
+      refute resource["path"] =~ "a:b"
+      refute resource["path"] =~ "A:B"
+      assert is_nil(URI.parse(resource["url"]).userinfo)
+    end
 
     assert {"https", nil, "/id/scheme", nil} in requests
     assert {"http", "a:b", "/id/secret", nil} in requests
@@ -90,7 +98,7 @@ defmodule Crawler.PageIdentityTest do
   end
 
   test "a redirect to a bare question mark stays a different page" do
-    root = tmp("page-identity-empty-query")
+    root = Path.join(tmp("page-identity-empty-query"), "archive")
     scope = "page-identity-empty-query"
     old = "http://ex.com/id/old"
     empty = "http://ex.com/id/search?"
@@ -120,12 +128,17 @@ defmodule Crawler.PageIdentityTest do
       crawl(old,
         scope: scope,
         workers: 1,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
         max_depths: 2,
         save_to: root,
+        max_manifest_bytes: 16_777_216,
         req_options: [adapter: adapter, retry: false]
       )
 
-    await_idle(opts)
+    export = ready_export(opts)
 
     assert queries |> RequestLog.entries() |> Enum.frequencies() == %{
              {"/id/old", nil} => 1,
@@ -133,19 +146,25 @@ defmodule Crawler.PageIdentityTest do
              {"/id/search", nil} => 1
            }
 
-    assert File.read!(saved(root, old)) =~ "EMPTY"
-    assert File.read!(saved(root, empty)) =~ "EMPTY"
-    assert File.read!(saved(root, bare)) == "BARE"
-    assert Snapshot.path(empty) != Snapshot.path(bare)
-    assert_link_opens(root, old, bare)
-    assert_link_opens(root, empty, bare)
+    assert read_resource(export, resource_for_url(export, empty)) =~ "EMPTY"
+    assert read_resource(export, resource_for_url(export, bare)) == "BARE"
+    refute resource_for_url(export, empty)["id"] == resource_for_url(export, bare)["id"]
+    source = resource_for_url(export, empty)
+    target = reference_target(export, source, bare)
+
+    assert [href] =
+             Floki.attribute(Floki.parse_document!(read_resource(export, source)), "a", "href")
+
+    assert_opens(export, source, target, href)
+    assert read_resource(export, target) == "BARE"
+    assert Store.find_processed({old, scope}).body =~ "EMPTY"
     assert Store.find_processed({empty, scope})
     assert Store.find_processed({bare, scope})
     assert Store.ops_count(scope) == 2
   end
 
   test "an allowed redirect to https is saved under both addresses" do
-    root = tmp("page-identity-https-redirect")
+    root = Path.join(tmp("page-identity-https-redirect"), "archive")
     scope = "page-identity-https-redirect"
     old = "http://ex.com/id/old"
     new = "https://ex.com/id/dir/new"
@@ -175,12 +194,17 @@ defmodule Crawler.PageIdentityTest do
       crawl(old,
         scope: scope,
         workers: 1,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
         max_depths: 2,
         save_to: root,
+        max_manifest_bytes: 16_777_216,
         req_options: [adapter: adapter, retry: false]
       )
 
-    await_idle(opts)
+    export = ready_export(opts)
 
     assert hits |> RequestLog.entries() |> Enum.frequencies() == %{
              {"http", "/id/old"} => 1,
@@ -188,12 +212,16 @@ defmodule Crawler.PageIdentityTest do
              {"https", "/id/dir/next"} => 1
            }
 
-    assert Snapshot.path(new) =~ "__scheme_https"
-    assert File.read!(saved(root, old)) =~ "LANDED"
-    assert File.read!(saved(root, new)) =~ "LANDED"
-    refute File.read!(saved(root, old)) == File.read!(saved(root, new))
-    assert_link_opens(root, old, nxt)
-    assert_link_opens(root, new, nxt)
+    assert read_resource(export, resource_for_url(export, new)) =~ "LANDED"
+    source = resource_for_url(export, new)
+    target = reference_target(export, source, nxt)
+
+    assert [href] =
+             Floki.attribute(Floki.parse_document!(read_resource(export, source)), "a", "href")
+
+    assert_opens(export, source, target, href)
+    assert read_resource(export, target) == "NEXT"
+    assert Store.find_processed({old, scope}).body =~ "LANDED"
     assert Store.find_processed({new, scope})
     assert Store.ops_count(scope) == 2
   end

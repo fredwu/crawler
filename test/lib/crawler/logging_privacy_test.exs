@@ -77,7 +77,6 @@ defmodule Crawler.LoggingPrivacyTest do
       assert url == opts.url
       assert cookie == [@cookie]
       assert authorization == expected_authorization(unquote(credential))
-      assert log =~ "Running worker"
       assert log =~ "Fetched http://example.com/logging/"
       assert_private(log)
     end
@@ -186,27 +185,53 @@ defmodule Crawler.LoggingPrivacyTest do
     assert_private(log)
   end
 
-  test "a publication callback preserves its original error type without its secret message" do
-    root = tmp(unique_scope("private-publication"))
-    on_exit(fn -> File.rm_rf(root) end)
+  test "a finalizer callback preserves its original error type without its secret message" do
+    require Logger
+
+    root = Path.join(tmp(unique_scope("private-publication")), "archive")
 
     opts = crawl_opts(:bearer)
+    adapter = opts.req_options[:adapter]
 
     opts =
-      Map.merge(opts, %{
-        generation: Store.generation(opts.scope),
-        save_to: root,
-        retries: 3,
-        before_publish: fn -> raise @bearer end
-      })
+      opts
+      |> Map.put(:save_to, root)
+      |> put_adapter(fn request ->
+        {request, response} = adapter.(request)
+        {request, %{response | headers: %{"content-type" => ["application/octet-stream"]}}}
+      end)
+
+    on_exit(fn ->
+      Store.dispose_scope(opts.scope)
+
+      Crawler.TestHelpers.wait(fn ->
+        refute Enum.any?(:sys.get_state(Store).exports, fn {{scope, _generation}, _export} ->
+                 scope === opts.scope
+               end)
+      end)
+
+      File.rm_rf(Path.dirname(root))
+    end)
 
     log =
       ExUnit.CaptureLog.capture_log([level: :debug], fn ->
-        assert {:error, {:error, %RuntimeError{message: @bearer}}} = Crawler.crawl_now(opts)
+        assert {:ok, staged} = Crawler.ManagedSnapshotHelpers.stage_copy(opts)
+
+        assert %RuntimeError{message: @bearer} =
+                 assert_raise(RuntimeError, @bearer, fn ->
+                   Crawler.ManagedSnapshotHelpers.finalize_copy(staged, fn _frame ->
+                     try do
+                       raise @bearer
+                     rescue
+                       error ->
+                         Logger.error(Crawler.Diagnostics.failure(:error, error, __STACKTRACE__))
+                         reraise error, __STACKTRACE__
+                     end
+                   end)
+                 end)
       end)
 
     assert log =~ "RuntimeError"
-    assert log =~ "Crawler.Snapper.publish/3"
     refute log =~ "FunctionClauseError"
     assert_private(log)
   end
@@ -216,32 +241,29 @@ defmodule Crawler.LoggingPrivacyTest do
 
     log =
       ExUnit.CaptureLog.capture_log([level: :debug], fn ->
-        assert {:error, message} = Crawler.crawl_now(opts)
-        assert message =~ "Failed to fetch <invalid URL>"
-        assert message =~ "Crawler.HTTP.InvalidURL"
-        assert_private(message)
+        assert {:error, %Crawler.HTTP.InvalidURL{} = error} = Crawler.crawl_now(opts)
+        assert Exception.message(error) == "invalid HTTP URL: <invalid URL>"
+        assert_private(Exception.message(error))
+        assert_private(Exception.format(:error, error, []))
       end)
 
     refute_received {:requested, _, _, _}
-    assert log =~ "Running worker"
-    assert log =~ "<invalid URL>"
     assert_private(log)
   end
 
-  test "a policy-rejected malformed root URL returns a warning without its credentials" do
+  test "a malformed root URL is rejected during preparation before policy without exposing credentials" do
     invalid = "http://#{@userinfo}@/logging/private"
     opts = Map.merge(crawl_opts(:userinfo), %{url: invalid, url_filter: RejectFilter})
 
     log =
       ExUnit.CaptureLog.capture_log([level: :debug], fn ->
-        assert {:warn, message} = Crawler.crawl_now(opts)
-        assert message =~ "perform_url_filtering"
-        assert message =~ "<invalid URL>"
-        assert message =~ "depth: 0"
-        assert_private(message)
+        assert {:error, %Crawler.HTTP.InvalidURL{} = error} = Crawler.crawl_now(opts)
+        assert Exception.message(error) == "invalid HTTP URL: <invalid URL>"
+        assert_private(Exception.message(error))
+        assert_private(Exception.format(:error, error, []))
       end)
 
-    assert_receive {:filtered, ^invalid}
+    refute_received {:filtered, ^invalid}
     refute_received {:requested, _, _, _}
     assert_private(log)
   end

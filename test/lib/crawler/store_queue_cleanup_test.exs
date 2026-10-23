@@ -45,6 +45,7 @@ defmodule Crawler.StoreQueueCleanupTest do
     on_exit(fn -> send(handler, :release) end)
     assert %Page{body: nil, processed: nil} = Store.find(key)
 
+    assert Store.pending_count(scope) == 1
     exercise_queue_cleanup(event, scope, generation, url)
     assert %Page{body: nil} = Store.find(key)
     assert Store.generation(scope) == generation
@@ -59,10 +60,13 @@ defmodule Crawler.StoreQueueCleanupTest do
     assert Store.generation(scope) == generation
     assert Store.pending_count(scope) == 0
     assert Store.inflight_count(scope) == 0
-    assert Store.ops_count(scope) == 0
+    assert Store.ops_count(scope) == 1
   end
 
   defp exercise_queue_cleanup(event, scope, generation, url) do
+    pending = Store.pending_count(scope)
+    inflight = Store.inflight_count(scope)
+
     queue =
       spawn(fn ->
         receive do
@@ -88,8 +92,8 @@ defmodule Crawler.StoreQueueCleanupTest do
 
     refute Store.find(failed)
     assert Store.find_processed(kept)
-    assert Store.pending_count(scope) == 0
-    assert Store.inflight_count(scope) == 0
+    assert Store.pending_count(scope) == pending
+    assert Store.inflight_count(scope) == inflight
     assert {:ok, _} = Store.add(failed, generation)
   end
 end

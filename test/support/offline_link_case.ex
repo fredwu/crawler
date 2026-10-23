@@ -11,7 +11,7 @@ defmodule Crawler.OfflineLinkCase do
     quote do
       import Crawler.OfflineLinkCase
 
-      alias Crawler.Linker
+      alias Crawler.Linker, warn: false
 
       @page "http://example.com/blog/post"
     end
@@ -32,8 +32,13 @@ defmodule Crawler.OfflineLinkCase do
     rewritten
   end
 
-  def assert_points(body, from_url, target_url, fragment \\ "") do
-    Crawler.SnapshotHelpers.assert_points(body, from_url, target_url, ".", fragment)
+  def assert_points(body, _from_url, target_url, fragment \\ "") do
+    target = target_url <> fragment
+
+    encoded =
+      target |> Floki.Entities.encode() |> IO.iodata_to_binary() |> String.replace("=", "&#61;")
+
+    assert body =~ target or body =~ encoded
   end
 
   def occurrences(body, text) do

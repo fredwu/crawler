@@ -1,7 +1,6 @@
 defmodule Crawler.Parser.DrawingMathTest do
   use ExUnit.Case, async: true
 
-  alias Crawler.Linker
   alias Crawler.Parser
   alias Crawler.Snapper.LinkReplacer
 
@@ -77,8 +76,8 @@ defmodule Crawler.Parser.DrawingMathTest do
            ]
 
     saved = rewrite(source, ["css"])
-    paint = Linker.offline_link(@page, asset("paint.png"))
-    sprite = Linker.offline_link(@page, "http://example.com/dir/sprite.svg#icon")
+    paint = asset("paint.png")
+    sprite = "http://example.com/dir/sprite.svg#icon"
 
     assert saved =~ "filter: url(#blur); background:"
     assert saved =~ ~s|style="filter: url(#blur)"|
@@ -112,7 +111,7 @@ defmodule Crawler.Parser.DrawingMathTest do
     assert saved =~ "url(http://www.w3.org/2000/svg)"
     assert saved =~ ~s|@namespace "http://www.w3.org/1999/xhtml"|
     assert saved =~ "svg|a"
-    assert saved =~ Linker.offline_link(@page, asset("paint.png"))
+    assert saved =~ asset("paint.png")
     refute saved =~ ~s|url("paint.png")|
   end
 
@@ -147,8 +146,8 @@ defmodule Crawler.Parser.DrawingMathTest do
     assert saved =~ ~s|url("#blur")|
     assert saved =~ "url('#blur')"
     assert saved =~ "url( #blur )"
-    assert saved =~ Linker.offline_link(sheet, asset("paint.png"))
-    assert saved =~ Linker.offline_link(sheet, "http://example.com/dir/sprite.svg#icon")
+    assert saved =~ asset("paint.png")
+    assert saved =~ "http://example.com/dir/sprite.svg#icon"
     refute saved =~ ~s|url("paint.png")|
     refute saved =~ ~s|url("sprite.svg#icon")|
   end
@@ -205,9 +204,22 @@ defmodule Crawler.Parser.DrawingMathTest do
     </svg>
     """
 
+    xml = """
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+      <a href="#icon">Page</a>
+      <a href="#icon">Shade</a>
+      <use href="#icon"/>
+      <pattern href="#icon"/>
+      <feImage xlink:href="#icon"/>
+      <filter href="#icon"/>
+      <linearGradient href="#icon"/>
+      <image href="sprite.svg#mark"/>
+    </svg>
+    """
+
     for saved <- [
           rewrite(source, ["images", "css"]),
-          rewrite(source, %{assets: ["images", "css"], content_type: "image/svg+xml"})
+          rewrite(xml, %{assets: ["images", "css"], content_type: "image/svg+xml"})
         ] do
       assert saved =~ ~s|<use href="#icon"/>|
       assert saved =~ ~s|<pattern href="#icon"/>|
@@ -360,8 +372,8 @@ defmodule Crawler.Parser.DrawingMathTest do
            ]
 
     saved = rewrite(source, [])
-    next_href = Linker.offline_link(@page, "http://example.com/next")
-    out_href = Linker.offline_link(@page, "https://other.test/out")
+    next_href = "http://example.com/next"
+    out_href = "https://other.test/out"
     assert saved =~ ~s|<mrow href="#{next_href}">|
     assert saved =~ ~s|<a href="#{next_href}">Page</a>|
     assert saved =~ ~s|<mo href="#{out_href}">|

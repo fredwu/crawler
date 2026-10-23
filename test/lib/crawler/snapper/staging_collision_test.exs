@@ -1,87 +1,104 @@
 defmodule Crawler.Snapper.StagingCollisionTest do
   use Crawler.TestCase, async: false
 
-  import Crawler.SnapshotHelpers, only: [link_path: 1, saved: 2]
+  import Crawler.ManagedSnapshotHelpers
 
-  alias Crawler.Linker.Snapshot
-  alias Crawler.Snapper
   alias Crawler.Store
 
   test "a URL named after an active staging file can publish before that file", context do
-    root = root()
-    observer = self()
+    parent_root = root()
     first_url = context.url <> "/first.bin"
-    directory = Path.dirname(saved(root, first_url))
+    first_destination = Path.join(parent_root, "first")
+    observer = self()
+    ReqTestSite.expect_once(context.site, "GET", "/first.bin", &bytes(&1, "FIRST"))
 
-    ReqTestSite.expect_once(context.site, "GET", "/first.bin", fn conn ->
-      conn
-      |> Plug.Conn.put_resp_header("content-type", "application/octet-stream")
-      |> Plug.Conn.resp(200, "FIRST")
-    end)
+    first_options =
+      options(first_url, first_destination, context.req_options)
+      |> Map.put(:max_manifest_bytes, 4_194_304)
 
-    before_publish = fn ->
-      [temp] = Path.wildcard(Path.join(directory, ".crawler-*.tmp"), match_dot: true)
-      send(observer, {:staged, self(), temp})
+    assert {:ok, first} = stage_copy(first_options)
 
-      receive do
-        :publish -> :ok
-      end
-    end
+    {driver, driver_ref} =
+      spawn_monitor(fn ->
+        result =
+          finalize_copy(first, fn frame ->
+            [artifact] = Map.values(frame.snapshot.artifacts)
+            file = Path.join([frame.filesystem.receipt.stage, "archive", artifact.path])
+            send(observer, {:staged, self(), file})
 
-    assert {:ok, first} =
-             start_crawl(first_url,
-               scope: unique_scope("active-staging"),
-               workers: 1,
-               retries: 0,
-               store: Store,
-               save_to: root,
-               before_publish: before_publish,
-               req_options: context.req_options
-             )
+            receive do
+              :publish -> :ok
+            end
+          end)
 
-    on_exit(fn -> Crawler.stop(first) end)
-    assert_receive {:staged, worker, temp}, 2_000
-    on_exit(fn -> send(worker, :publish) end)
+        send(observer, {:first_result, result})
+      end)
+
+    on_exit(fn -> Process.exit(driver, :kill) end)
+    assert_receive {:staged, executor, temp}, 2_000
+    on_exit(fn -> send(executor, :publish) end)
     basename = Path.basename(temp)
     second_url = context.url <> "/" <> basename
     assert File.regular?(temp)
     assert File.read!(temp) == "FIRST"
-
-    ReqTestSite.expect_once(context.site, "GET", "/" <> basename, fn conn ->
-      conn
-      |> Plug.Conn.put_resp_header("content-type", "application/octet-stream")
-      |> Plug.Conn.resp(200, "SECOND")
-    end)
+    ReqTestSite.expect_once(context.site, "GET", "/" <> basename, &bytes(&1, "SECOND"))
 
     assert {:ok, second} =
              start_crawl(second_url,
                scope: unique_scope("staging-named-page"),
                workers: 1,
+               max_body: 1_048_576,
+               max_analysis_bytes: 16_777_216,
+               max_manifest_bytes: 4_194_304,
                retries: 0,
                store: Store,
-               save_to: root,
+               save_to: Path.join(parent_root, "second"),
                req_options: context.req_options
              )
 
     on_exit(fn -> Crawler.stop(second) end)
-    await_idle(second)
-    assert File.read!(saved(root, second_url)) == "SECOND"
+    result = Store.await_direct(second.target_handle, Crawler.Deadline.after_ms(5_000))
+
+    assert {:terminal, %Crawler.Job.Outcome{status: :succeeded}, _} = result,
+           "second root canonical outcome: #{inspect(result)}"
+
+    export = ready_export(second)
+    assert read_resource(export, resource_for_url(export, second_url)) == "SECOND"
     assert Store.find_processed({second_url, second.scope}).body == "SECOND"
     assert File.read!(temp) == "FIRST"
-    refute Path.dirname(saved(root, second_url)) == temp
+    refute File.exists?(first_destination)
+    refute artifact_path(export, resource_for_url(export, second_url)) == temp
 
-    send(worker, :publish)
-    await_idle(first)
-    assert File.read!(saved(root, first_url)) == "FIRST"
-    assert File.read!(saved(root, second_url)) == "SECOND"
-    assert Path.wildcard(Path.join(root, "**/.crawler-*.tmp"), match_dot: true) == []
+    contender_url = context.url <> "/contender.bin"
+    ReqTestSite.expect_once(context.site, "GET", "/contender.bin", &bytes(&1, "CONTENDER"))
+
+    contender =
+      options(contender_url, first_destination, context.req_options)
+      |> Map.put(:max_manifest_bytes, 4_194_304)
+
+    assert {:error, {:snapshot, :destination_owned}} = stage_copy(contender)
+    assert File.read!(temp) == "FIRST"
+    send(executor, :publish)
+    assert_receive {:first_result, {:ok, :committed}}, 2_000
+    assert_receive {:DOWN, ^driver_ref, :process, ^driver, :normal}, 2_000
+    first_export = ready_export(first)
+    assert read_resource(first_export, resource_for_url(first_export, first_url)) == "FIRST"
+    assert read_resource(export, resource_for_url(export, second_url)) == "SECOND"
+
+    assert Enum.reject(
+             Path.wildcard(Path.join(parent_root, ".crawler-fs-*"), match_dot: true),
+             &(Path.basename(&1) == ".crawler-fs-claims")
+           ) == []
+
+    Crawler.stop(first)
+    Crawler.stop(second)
   end
 
   test "completed archives never occupy the staging namespace" do
-    root = root()
+    parent_root = root()
+    destination = Path.join(parent_root, "archive")
     scope = unique_scope("completed-staging-name")
     on_exit(fn -> Store.drop_scope(scope) end)
-    generation = Store.generation(scope)
 
     urls = [
       "http://example.com/.crawler-1.tmp",
@@ -91,43 +108,94 @@ defmodule Crawler.Snapper.StagingCollisionTest do
       "http://example.com/.crawler-#{String.duplicate("a", 250)}.bin"
     ]
 
-    paths = Enum.map(urls, &Snapshot.path/1)
-    assert length(Enum.uniq(paths)) == length(urls)
-
     for {url, index} <- Enum.with_index(urls) do
-      path = Snapshot.path(url)
-      refute Enum.any?(String.split(path, "/"), &String.starts_with?(&1, ".crawler-"))
-      assert Enum.all?(String.split(path, "/"), &(byte_size(&1) <= 255))
-      assert link_path(Snapshot.url_path(url)) == path
+      body = "ARCHIVE-#{index}"
 
-      assert {:ok, _opts} =
-               Snapper.snap("ARCHIVE-#{index}", %{
-                 url: url,
-                 save_to: root,
-                 content_type: "application/octet-stream",
-                 scope: scope,
-                 generation: generation
-               })
+      current =
+        options(
+          url,
+          destination,
+          [
+            adapter: fn request ->
+              {request,
+               Req.Response.new(
+                 status: 200,
+                 headers: [{"content-type", "application/octet-stream"}],
+                 body: body
+               )}
+            end,
+            retry: false
+          ],
+          scope
+        )
+
+      assert {:ok, _} = stage_copy(current)
     end
 
     file_url = "http://example.com/after.bin"
 
-    assert {:ok, _opts} =
-             Snapper.snap("AFTER", %{
-               url: file_url,
-               save_to: root,
-               content_type: "application/octet-stream",
-               scope: scope,
-               generation: generation
-             })
+    assert {:ok, opts} =
+             stage_copy(
+               options(
+                 file_url,
+                 destination,
+                 [
+                   adapter: fn request ->
+                     {request,
+                      Req.Response.new(
+                        status: 200,
+                        headers: [{"content-type", "application/octet-stream"}],
+                        body: "AFTER"
+                      )}
+                   end,
+                   retry: false
+                 ],
+                 scope
+               )
+             )
 
-    assert File.read!(saved(root, file_url)) == "AFTER"
+    assert {:ok, :committed} = finalize_copy(opts)
+    export = ready_export(opts)
+    assert read_resource(export, resource_for_url(export, file_url)) == "AFTER"
 
     for {url, index} <- Enum.with_index(urls) do
-      assert File.read!(saved(root, url)) == "ARCHIVE-#{index}"
+      resource = resource_for_url(export, url)
+      assert read_resource(export, resource) == "ARCHIVE-#{index}"
+      refute Enum.any?(String.split(resource["path"], "/"), &String.starts_with?(&1, ".crawler-"))
+      assert Enum.all?(String.split(resource["path"], "/"), &(byte_size(&1) <= 255))
     end
 
-    assert Path.wildcard(Path.join(root, "**/.crawler-*.tmp"), match_dot: true) == []
+    assert Enum.reject(
+             Path.wildcard(Path.join(parent_root, ".crawler-fs-*"), match_dot: true),
+             &(Path.basename(&1) == ".crawler-fs-claims")
+           ) == []
+
+    Crawler.stop(opts)
+  end
+
+  defp options(url, destination, req_options, scope \\ unique_scope("staging-owner")) do
+    on_exit(fn -> Store.drop_scope(scope) end)
+
+    %{
+      url: url,
+      scope: scope,
+      save_to: destination,
+      content_type: "application/octet-stream",
+      store: Store,
+      workers: 1,
+      max_body: 1_048_576,
+      max_analysis_bytes: 16_777_216,
+      max_manifest_bytes: 16_777_216,
+      respect_robots: false,
+      retries: 0,
+      req_options: req_options
+    }
+  end
+
+  defp bytes(conn, body) do
+    conn
+    |> Plug.Conn.put_resp_header("content-type", "application/octet-stream")
+    |> Plug.Conn.resp(200, body)
   end
 
   defp root do

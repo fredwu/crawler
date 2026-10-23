@@ -132,7 +132,8 @@ defmodule Crawler.StoreRestartTest do
     {:links, links} = Process.info(opts.queue_owner, :links)
     children = links -- [queue_supervisor]
     assert opts.queue in children
-    assert Process.whereis(:"opq-#{inspect(opts.queue)}") in children
+    assert [{options, _}] = Registry.lookup(OPQ.Registry, opts.queue)
+    assert options in children
 
     worker_supervisor =
       Enum.find(children, fn pid ->

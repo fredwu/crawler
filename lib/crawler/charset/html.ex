@@ -1,10 +1,12 @@
 defmodule Crawler.Charset.HTML do
   @moduledoc false
 
+  alias Crawler.Analysis.Budget
   alias Crawler.Charset.Encoding
   alias Crawler.Charset.HTMLScanner
   alias Crawler.Charset.Labels
   alias Crawler.Charset.Parameters
+  alias Crawler.HTMLSpans
 
   @prescan_bytes 1024
 
@@ -48,16 +50,82 @@ defmodule Crawler.Charset.HTML do
   # The saved document is UTF-8. A meta that still names another encoding
   # would make a browser open a different path from the file that was fetched.
   def declare_utf8(body) do
-    {parts, offset} =
-      body
-      |> HTMLScanner.meta_spans()
-      |> Enum.reduce({[], 0}, fn {start, length}, {parts, offset} ->
-        before_tag = binary_part(body, offset, start - offset)
-        tag = binary_part(body, start, length)
-        {[parts, before_tag, rewrite_tag(tag)], start + length}
-      end)
+    {:ok, decoded, _budget, _owned} = declare_result(body, Budget.unlimited(), :infinity, 0)
+    decoded
+  end
 
-    IO.iodata_to_binary([parts, binary_part(body, offset, byte_size(body) - offset)])
+  def declare_result(body, budget, cap, owned) do
+    scratch = Budget.cost(:frame)
+
+    with {:ok, budget} <- Budget.reserve(budget, scratch) do
+      acc = %{edits: [], count: 0, bytes: 0, size: byte_size(body), cap: cap}
+
+      with {:ok, acc, budget} <-
+             HTMLSpans.reduce_tags_result(body, [attributes: false], budget, acc, &rewrite_meta/3),
+           {:ok, decoded, budget, owned} <- apply_edits(body, acc, budget, owned),
+           {:ok, budget} <- Budget.release(budget, scratch),
+           do: {:ok, decoded, budget, owned}
+    end
+  end
+
+  defp rewrite_meta(%{name: "meta", closing?: false} = tag, acc, budget) do
+    scratch = 4_096 + byte_size(tag.source) * 512
+
+    with {:ok, budget} <- Budget.reserve(budget, scratch) do
+      rewritten = :binary.copy(rewrite_tag(tag.source))
+
+      if rewritten == tag.source do
+        with {:ok, budget} <- Budget.release(budget, scratch), do: {:cont, acc, budget}
+      else
+        {start, length} = tag.span
+        size = acc.size + byte_size(rewritten) - length
+        bytes = Budget.cost(:edit) + :binary.referenced_byte_size(rewritten)
+
+        with {:ok, budget} <- Budget.settle(budget, scratch, bytes) do
+          acc = %{
+            acc
+            | edits: [{start, length, rewritten} | acc.edits],
+              count: acc.count + 1,
+              bytes: acc.bytes + bytes,
+              size: size
+          }
+
+          {:cont, acc, budget}
+        end
+      end
+    end
+  end
+
+  defp rewrite_meta(_tag, acc, budget), do: {:cont, acc, budget}
+
+  defp apply_edits(_body, %{size: size, cap: cap}, _budget, _owned)
+       when is_integer(cap) and size > cap,
+       do: {:error, {:limit, :max_body}}
+
+  defp apply_edits(body, %{edits: []}, budget, owned), do: {:ok, body, budget, owned}
+
+  defp apply_edits(body, acc, budget, owned) do
+    retained = Budget.cost(:binary) + acc.size
+
+    scratch =
+      retained + acc.count * (Budget.cost(:list_cell, 4) + Budget.cost(:binary, 2)) +
+        Budget.cost(:binary, 2)
+
+    with {:ok, budget} <- Budget.reserve(budget, scratch) do
+      {parts, offset} =
+        acc.edits
+        |> Enum.reverse()
+        |> Enum.reduce({[], 0}, fn {start, length, replacement}, {parts, offset} ->
+          before = binary_part(body, offset, start - offset)
+          {[parts, before, replacement], start + length}
+        end)
+
+      decoded = IO.iodata_to_binary([parts, binary_part(body, offset, byte_size(body) - offset)])
+
+      with {:ok, budget} <- Budget.settle(budget, scratch, retained),
+           {:ok, budget} <- Budget.refund(budget, owned + acc.bytes),
+           do: {:ok, decoded, budget, retained}
+    end
   end
 
   def xml_charset(body) do
@@ -76,9 +144,49 @@ defmodule Crawler.Charset.HTML do
   end
 
   def declare_xml_utf8(body) do
-    case xml_declaration(body) do
-      {declaration, rest} -> rewrite_xml_encoding(declaration) <> rest
-      nil -> body
+    {:ok, decoded, _budget, _owned} = declare_xml_result(body, Budget.unlimited(), :infinity, 0)
+    decoded
+  end
+
+  def declare_xml_result(body, budget, cap, owned) do
+    with {:ok, budget} <- Budget.reserve(budget, Budget.cost(:frame)) do
+      case xml_declaration(body) do
+        {declaration, rest} ->
+          rewrite_xml_declaration(body, declaration, rest, budget, cap, owned)
+
+        nil ->
+          with {:ok, budget} <- Budget.release(budget, Budget.cost(:frame)),
+               do: {:ok, body, budget, owned}
+      end
+    end
+  end
+
+  defp rewrite_xml_declaration(body, declaration, rest, budget, cap, owned) do
+    scratch = 4_096 + byte_size(declaration) * 512
+
+    with {:ok, budget} <- Budget.reserve(budget, scratch) do
+      rewritten = :binary.copy(rewrite_xml_encoding(declaration))
+
+      if rewritten == declaration do
+        with {:ok, budget} <- Budget.release(budget, scratch + Budget.cost(:frame)),
+             do: {:ok, body, budget, owned}
+      else
+        size = byte_size(rewritten) + byte_size(rest)
+
+        if cap != :infinity and size > cap do
+          {:error, {:limit, :max_body}}
+        else
+          bytes = Budget.cost(:binary) + size
+
+          with {:ok, budget} <- Budget.charge(budget, bytes) do
+            decoded = IO.iodata_to_binary([rewritten, rest])
+
+            with {:ok, budget} <- Budget.release(budget, scratch + Budget.cost(:frame)),
+                 {:ok, budget} <- Budget.refund(budget, owned),
+                 do: {:ok, decoded, budget, bytes}
+          end
+        end
+      end
     end
   end
 

@@ -2,10 +2,11 @@ defmodule Crawler.RedirectAliasRetryTest do
   use Crawler.TestCase, async: false
 
   alias Crawler.Store
+  alias Crawler.Store.Page
 
   defmodule TransientStore do
     def add_page_data({url, scope}, _body, opts) do
-      if url == opts[:landing_url] do
+      if Crawler.URL.canonical(url) === Crawler.URL.canonical(opts[:landing_url]) do
         :counters.add(opts[:storage_attempts], 1, 1)
 
         if :counters.get(opts[:storage_attempts], 1) == 1 do
@@ -52,8 +53,19 @@ defmodule Crawler.RedirectAliasRetryTest do
     end
 
     await_idle(opts)
-    assert Store.find_processed({requested, scope})
-    assert Store.find_processed({landing, scope})
+
+    assert %Page{
+             processed: true,
+             body: nil,
+             opts: nil,
+             analysis: nil,
+             interpretation: nil,
+             source_revision: nil,
+             credit: nil
+           } =
+             Store.find_processed({requested, scope})
+
+    assert %Page{processed: true} = Store.find_processed({landing, scope})
     assert Store.ops_count(scope) == 1
     assert :counters.get(storage_attempts, 1) == 2
     assert :counters.get(requests, 1) == 2

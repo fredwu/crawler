@@ -1,168 +1,172 @@
 defmodule Crawler.Snapper do
   @moduledoc """
-  Stores crawled pages offline.
+  Publishes one standalone snapshot through the export filesystem boundary.
+
+  Text input must be decoded UTF-8. Decode response bytes with
+  [`Crawler.Charset.decode/2`](https://github.com/fredwu/crawler/blob/master/lib/crawler/charset.ex#L11) before calling this module. Opaque binary input is
+  stored unchanged. HTML output has one UTF-8 byte-order mark; XHTML does not.
+
+  Standalone references use resolved online destinations without URL userinfo.
+  Saving another file does not bind a reference to that file. Managed exports
+  must stage through their export owner.
   """
 
   require Logger
 
+  alias Crawler.Analysis
+  alias Crawler.Analysis.Budget
   alias Crawler.Diagnostics
+  alias Crawler.Export.Filesystem
+  alias Crawler.Export.Paths
   alias Crawler.MediaType
-  alias Crawler.Snapper.DirMaker
-  alias Crawler.Snapper.LinkReplacer
-  alias Crawler.Snapper.Staging
-  alias Crawler.Store
+  alias Crawler.Parser
+  alias Crawler.Parser.Prepared
 
   @utf8_bom <<0xEF, 0xBB, 0xBF>>
+  @managed_keys [:generation, :execution_lease, :scheduler_claim]
 
   @doc """
-  In order to store pages offline, it provides the following functionalities:
+  Atomically publishes one file below an existing isolated `:save_to` root.
 
-  - replaces all URLs to their equivalent relative paths
-  - creates directories when necessary to store the files
-  - marks saved HTML as UTF-8 with a byte-order mark
+  The caller must supply an opaque `:public_id` accepted by
+  [`Crawler.Export.Paths.artifact/2`](https://github.com/fredwu/crawler/blob/master/lib/crawler/export/paths.ex#L43). The response content type selects the suffix,
+  including `.bin` for an unknown type. Use a distinct ID for each response or
+  interpretation variant. Reusing an ID and content type replaces that file.
 
-  ## Examples
+  Returns `{:ok, %{public_id: id, path: relative_path}}` after publication and
+  cleanup. This is a per-file acknowledgement, not archive readiness. Open the
+  file with `Path.join(save_to, result.path)`. Concurrent writers can receive
+  `:destination_owned`; this function does not retry.
 
-      iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://hello-world.local", content_type: "text/html"})
-      iex> File.read(tmp("snapper/hello-world.local", "__index.html"))
-      {:ok, <<0xEF, 0xBB, 0xBF, "hello">>}
+  Filesystem failures return `{:error, {:snapshot, operation, reason}}`. A cleanup
+  failure includes its private recovery receipt. Keep that receipt private and
+  use it only under the filesystem recovery contract. Parse, render, and analysis
+  budget errors pass through unchanged.
 
-      iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://snapper.local/index.html", content_type: "text/html"})
-      iex> File.read(tmp("snapper/snapper.local", "index.html"))
-      {:ok, <<0xEF, 0xBB, 0xBF, "hello">>}
+  Managed or stale managed calls return
+  `{:error, {:snapshot, :managed_export_required}}` before parsing or writing.
+  A `Prepared` value reuses its authoritative analysis and occurrence collection.
 
-      iex> Snapper.snap("hello", %{save_to: "nope", url: "http://snapper.local/index.html"})
-      {:error, {:snapshot, :write, :enoent}}
-
-      iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://snapper.local/hello", content_type: "text/html"})
-      iex> File.read(tmp("snapper/snapper.local/hello", "__index.html"))
-      {:ok, <<0xEF, 0xBB, 0xBF, "hello">>}
-
-      iex> Snapper.snap("hello", %{save_to: tmp("snapper"), url: "http://snapper.local/hello1/", content_type: "text/html"})
-      iex> File.read(tmp("snapper/snapper.local/hello1", "__index.html"))
-      {:ok, <<0xEF, 0xBB, 0xBF, "hello">>}
-
-      iex> Snapper.snap(
-      iex>   "<a href='http://another.domain/page'></a>",
-      iex>   %{
-      iex>     save_to: tmp("snapper"),
-      iex>     url: "http://snapper.local/depth0",
-      iex>     depth: 1,
-      iex>     max_depths: 2,
-      iex>     html_tag: "a",
-      iex>     content_type: "text/html",
-      iex>   }
-      iex> )
-      iex> File.read(tmp("snapper/snapper.local/depth0", "__index.html"))
-      {:ok, <<0xEF, 0xBB, 0xBF, "<a href='../../another.domain/page/__index.html'></a>">>}
-
-      iex> Snapper.snap(
-      iex>   "<a href='https://another.domain:8888/page'></a>",
-      iex>   %{
-      iex>     save_to: tmp("snapper"),
-      iex>     url: "http://snapper.local:7777/dir/depth1",
-      iex>     depth: 1,
-      iex>     max_depths: 2,
-      iex>     html_tag: "a",
-      iex>     content_type: "text/html",
-      iex>   }
-      iex> )
-      iex> File.read(tmp("snapper/snapper.local__port_7777/dir/depth1", "__index.html"))
-      {:ok, <<0xEF, 0xBB, 0xBF, "<a href='../../../another.domain__port_8888__scheme_https/page/__index.html'></a>">>}
+  An optional `:before_publish` callback runs after staging and before final
+  validation and rename. Its return is ignored. Exceptions propagate after
+  staging cleanup.
   """
+  def snap(%Prepared{} = prepared, opts) do
+    with :ok <- standalone(opts, prepared.opts),
+         {:ok, path} <- artifact_path(opts),
+         :ok <- root(opts[:save_to]),
+         {:ok, body, budget} <- render(prepared) do
+      publish(body, budget, path, opts)
+    end
+  end
+
   def snap(body, opts) do
-    {:ok, body} = LinkReplacer.replace_links(body, opts)
-    body = snapshot_body(body, opts)
-    file_path = DirMaker.make_dir(opts)
+    with :ok <- standalone(opts, nil),
+         {:ok, _path} <- artifact_path(opts),
+         :ok <- root(opts[:save_to]),
+         {:ok, prepared} <- Parser.prepare_for_parse(body, opts),
+         do: snap(prepared, opts)
+  end
 
-    if publish?(opts) do
-      publish(body, file_path, opts)
-    else
-      write_file(file_path, body, opts)
+  defp standalone(opts, prepared_opts) do
+    if managed?(opts) or managed?(prepared_opts) or
+         not is_nil(Process.get(:crawler_execution_lease)),
+       do: {:error, {:snapshot, :managed_export_required}},
+       else: :ok
+  end
+
+  defp managed?(nil), do: false
+  defp managed?(opts), do: Enum.any?(@managed_keys, &(not is_nil(opts[&1])))
+
+  defp artifact_path(opts) do
+    case Paths.artifact(opts[:public_id], opts[:content_type]) do
+      {:ok, path} -> {:ok, path}
+      {:error, reason} -> {:error, {:snapshot, :path, reason}}
     end
   end
 
-  defp snapshot_body(body, opts) do
-    if MediaType.html?(opts[:content_type]) and not MediaType.xhtml?(opts[:content_type]) and
-         not String.starts_with?(body, @utf8_bom) do
-      @utf8_bom <> body
-    else
-      body
+  defp root(root) when is_binary(root) and root != "" do
+    if String.valid?(root) and not String.contains?(root, <<0>>),
+      do: :ok,
+      else: {:error, {:snapshot, :acquire, :invalid_root}}
+  end
+
+  defp root(_root), do: {:error, {:snapshot, :acquire, :invalid_root}}
+
+  defp render(%Prepared{analysis: nil, source: source}), do: {:ok, source, nil}
+
+  defp render(%Prepared{analysis: analysis, collection: collection}) do
+    with {:ok, body, stats} <-
+           Analysis.render_with_stats(analysis, collection, &Analysis.online_fallback/1),
+         do: {:ok, body, struct!(Budget, stats.budget)}
+  end
+
+  defp publish(body, budget, path, opts) do
+    case Filesystem.acquire_file(opts[:save_to], path) do
+      {:ok, filesystem, receipt} ->
+        result =
+          try do
+            stage_and_publish(filesystem, body, budget, path, opts)
+          catch
+            kind, reason -> {:raised, kind, reason, __STACKTRACE__}
+          end
+
+        cleanup = Filesystem.abort(filesystem)
+        finish(result, cleanup, receipt, opts)
+
+      {:error, reason} ->
+        write_error(:acquire, reason, opts)
     end
   end
 
-  defp publish?(opts) do
-    not is_nil(opts[:generation])
+  defp stage_and_publish(filesystem, body, budget, path, opts) do
+    bom? =
+      MediaType.html?(opts[:content_type]) and not MediaType.xhtml?(opts[:content_type]) and
+        not String.starts_with?(body, @utf8_bom)
+
+    bytes = byte_size(body) + if(bom?, do: byte_size(@utf8_bom), else: 0)
+
+    with {:ok, ticket} <-
+           filesystem_result(Filesystem.reserve(filesystem, :archive, path, bytes), :write, opts),
+         {:ok, body} <- snapshot_body(body, budget, bom?),
+         :ok <- filesystem_result(Filesystem.write(filesystem, ticket, body), :write, opts),
+         _ <- before_publish(opts),
+         {:ok, prepared} <- filesystem_result(Filesystem.prepare(filesystem), :prepare, opts),
+         :ok <- filesystem_result(Filesystem.promote(prepared), :rename, opts) do
+      {:ok, %{public_id: opts[:public_id], path: path}}
+    end
   end
 
-  defp publish(body, file_path, opts) do
-    temp = Path.join(Path.dirname(file_path), Staging.filename())
+  defp snapshot_body(body, _budget, false), do: {:ok, body}
+  defp snapshot_body(body, nil, true), do: {:ok, @utf8_bom <> body}
 
-    watcher = watch_temp(temp)
-
-    try do
-      case File.write(temp, body) do
-        :ok ->
-          before_publish(opts)
-          publish_temp(temp, file_path, opts)
-
-        {:error, reason} ->
-          write_error(:write, reason, opts)
-      end
-    after
-      finish_temp(watcher)
-    end
+  defp snapshot_body(body, budget, true) do
+    with {:ok, _budget} <-
+           Budget.charge(budget, byte_size(body) + byte_size(@utf8_bom) + Budget.cost(:binary)),
+         do: {:ok, @utf8_bom <> body}
   end
 
   defp before_publish(%{before_publish: fun}) when is_function(fun, 0), do: fun.()
   defp before_publish(_opts), do: :ok
 
-  defp watch_temp(temp) do
-    worker = self()
+  defp finish({:raised, kind, reason, stacktrace}, _cleanup, _receipt, _opts),
+    do: :erlang.raise(kind, reason, stacktrace)
 
-    # A killed caller skips `after`; its monitor still triggers staging cleanup.
-    spawn_monitor(fn ->
-      ref = Process.monitor(worker)
+  defp finish(result, {:ok, _placement}, _receipt, _opts), do: result
 
-      receive do
-        {:finished, ^worker} -> :ok
-        {:DOWN, ^ref, :process, ^worker, _} -> :ok
-      end
+  defp finish(_result, {:error, reason}, receipt, opts),
+    do: write_error(:cleanup, {reason, receipt}, opts)
 
-      File.rm(temp)
-    end)
-  end
+  defp filesystem_result({:error, reason}, operation, opts),
+    do: write_error(operation, reason, opts)
 
-  defp finish_temp({watcher, ref}) do
-    send(watcher, {:finished, self()})
-
-    receive do
-      {:DOWN, ^ref, :process, ^watcher, _} -> :ok
-    end
-  end
-
-  defp publish_temp(temp, file_path, opts) do
-    case Store.publish_file(opts[:scope], opts[:generation], file_path, temp, opts[:queue]) do
-      :ok ->
-        {:ok, opts}
-
-      {:error, :stale} = error ->
-        error
-
-      {:error, {:snapshot, operation, reason}} ->
-        write_error(operation, reason, opts)
-    end
-  end
-
-  defp write_file(file_path, body, opts) do
-    case File.write(file_path, body) do
-      :ok -> {:ok, opts}
-      {:error, reason} -> write_error(:write, reason, opts)
-    end
-  end
+  defp filesystem_result(result, _operation, _opts), do: result
 
   defp write_error(operation, reason, opts) do
-    Logger.error("Snapshot #{operation} failed for #{Diagnostics.url(opts[:url])}: #{reason}")
+    category = if is_atom(reason), do: reason, else: :filesystem_failure
+
+    Logger.error("Snapshot #{operation} failed for #{Diagnostics.url(opts[:url])}: #{category}")
+
     {:error, {:snapshot, operation, reason}}
   end
 end

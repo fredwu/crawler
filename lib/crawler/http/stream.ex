@@ -6,6 +6,13 @@ defmodule Crawler.HTTP.Stream do
   def stream(req, finch_request, finch_name, finch_options) do
     response = Req.Response.new()
 
+    case Body.check_deadline(req, response) do
+      :ok -> run(req, response, finch_request, finch_name, finch_options)
+      {:error, error} -> Req.Request.halt(req, error)
+    end
+  end
+
+  defp run(req, response, finch_request, finch_name, finch_options) do
     case Finch.stream_while(
            finch_request,
            finch_name,
@@ -22,19 +29,26 @@ defmodule Crawler.HTTP.Stream do
     end
   end
 
-  defp collect({:status, status}, {req, response}, _into) do
+  defp collect(event, {req, response}, into) do
+    case Body.check_deadline(req, response) do
+      :ok -> collect_event(event, {req, response}, into)
+      {:error, error} -> {:halt, Req.Request.halt(req, error)}
+    end
+  end
+
+  defp collect_event({:status, status}, {req, response}, _into) do
     {:cont, {req, %{response | status: status}}}
   end
 
-  defp collect({:headers, fields}, {req, response}, _into) do
+  defp collect_event({:headers, fields}, {req, response}, _into) do
     {:cont, {req, append_headers(response, fields)}}
   end
 
-  defp collect({:data, data}, acc, into) do
+  defp collect_event({:data, data}, acc, into) do
     into.({:data, data}, acc)
   end
 
-  defp collect({:trailers, fields}, {req, response}, _into) do
+  defp collect_event({:trailers, fields}, {req, response}, _into) do
     {:cont, {req, update_in(response.trailers, &Map.merge(&1, pair_map(fields)))}}
   end
 

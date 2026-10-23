@@ -1,9 +1,9 @@
 defmodule Crawler.Parser.CssParser.AsciiNamesTest do
   use ExUnit.Case, async: true
 
+  alias Crawler.Analysis
   alias Crawler.Parser.CssParser
   alias Crawler.Parser.CssParser.Identifier
-  alias Crawler.Snapper.LinkReplacer.Css
 
   test "Unicode lookalike function names remain unknown after escape decoding" do
     for name <- ["-webKit-image-set", ~S|-web\212A it-image-set|, "image-ſet", "ＵＲＬ"] do
@@ -14,7 +14,7 @@ defmodule Crawler.Parser.CssParser.AsciiNamesTest do
       assert start == byte_size(unknown <> ";background:url(")
       assert binary_part(source, start, length) == "real.png"
 
-      assert Css.replace(source, "real.png", "saved.png", entity_quotes: false) ==
+      assert render_css(source, "real.png", "saved.png") ==
                unknown <> ";background:url(saved.png)"
     end
 
@@ -36,7 +36,7 @@ defmodule Crawler.Parser.CssParser.AsciiNamesTest do
       assert [%{start: start, length: length, value: "real.png"}] = CssParser.spans(source)
       assert binary_part(source, start, length) == ~s|"real.png"|
 
-      assert Css.replace(source, "real.png", "saved.png", entity_quotes: false) ==
+      assert render_css(source, "real.png", "saved.png") ==
                ~s|#{name}("saved.png"#{descriptor})|
     end
   end
@@ -46,14 +46,40 @@ defmodule Crawler.Parser.CssParser.AsciiNamesTest do
       source = ~s|@#{name} "theme.css";|
       assert CssParser.parse(source) == [{"link", [{"href", "theme.css"}], []}]
 
-      assert Css.replace(source, "theme.css", "saved.css", entity_quotes: false) ==
+      assert render_css(source, "theme.css", "saved.css") ==
                ~s|@#{name} "saved.css";|
     end
 
     for name <- ["İMPORT", "ＩＭＰＯＲＴ", ~S|\130 MPORT|] do
       source = ~s|@#{name} "theme.css";|
       assert CssParser.parse(source) == []
-      assert Css.replace(source, "theme.css", "saved.css", entity_quotes: false) == source
+      assert render_css(source, "theme.css", "saved.css") == source
     end
+  end
+
+  defp render_css(source, value, path) do
+    opts = %{
+      url: "https://example.test/styles/main.css",
+      content_type: "text/css",
+      assets: ["css", "images"]
+    }
+
+    assert {:ok, analysis} = Analysis.analyze(source, opts)
+    assert {:ok, collection} = Analysis.occurrences_result(analysis, opts)
+
+    assert {:ok, bound} =
+             Analysis.bind(collection, fn ref ->
+               if ref.source_role == :css and ref.context.html_tag == "link" and
+                    ref.value == value,
+                  do: %{fixture: :css_resource, path: path}
+             end)
+
+    assert {:ok, rendered} =
+             Analysis.render(analysis, bound, fn
+               %{target: %{fixture: :css_resource, path: path}} -> {:local, path}
+               _ref -> :keep
+             end)
+
+    rendered
   end
 end

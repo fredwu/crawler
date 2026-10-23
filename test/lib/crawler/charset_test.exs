@@ -13,11 +13,12 @@ defmodule Crawler.CharsetTest do
     little = :unicode.characters_to_binary(xml, :utf8, {:utf16, :little})
     big = :unicode.characters_to_binary(xml, :utf8, {:utf16, :big})
 
-    assert decode(little, "text/xml", "text/xml; charset=utf-16") == xml
-    assert decode(big, "text/xml", "text/xml; charset=UTF-16") == xml
-    assert decode(xml, "text/xml", "text/xml; charset=utf-16") == xml
-    assert decode(little, "text/xml", "text/xml; charset=utf-16le") == xml
-    assert decode(little, "application/xml", "application/xml; charset=utf-16") == little
+    utf8 = String.replace(xml, "UTF-16", "utf-8")
+    assert decode(little, "text/xml", "text/xml; charset=utf-16") == utf8
+    assert decode(big, "text/xml", "text/xml; charset=UTF-16") == utf8
+    assert decode(xml, "text/xml", "text/xml; charset=utf-16") == utf8
+    assert decode(little, "text/xml", "text/xml; charset=utf-16le") == utf8
+    assert decode(little, "application/xml", "application/xml; charset=utf-16") == utf8
     assert decode(<<0x61, 0x00>>, "text/html", "text/html; charset=utf-16") == "\u6100"
   end
 
@@ -248,11 +249,11 @@ defmodule Crawler.CharsetTest do
     assert decode(body, "text/html", "text/html") == ~s(<!-- <meta charset="latin1">�)
   end
 
-  test "XHTML uses and rewrites HTML meta declarations" do
+  test "XHTML does not use HTML meta declarations to select its encoding" do
     body = ~s(<meta charset="latin1">) <> <<0xE9>>
 
     assert decode(body, "application/xhtml+xml", "application/xhtml+xml") ==
-             ~s(<meta charset="utf-8">é)
+             ~s(<meta charset="latin1">�)
   end
 
   defp decode(body, content_type, header) do

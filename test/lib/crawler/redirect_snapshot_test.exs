@@ -6,16 +6,14 @@ defmodule Crawler.RedirectSnapshotTest do
   alias Crawler.Store
 
   import Crawler.RedirectHelpers
-  import Crawler.SnapshotHelpers
-  alias Crawler.Linker
-  alias Crawler.Linker.Snapshot
+  import Crawler.ManagedSnapshotHelpers
 
   test "a redirect is saved at the requested address and the landing address", %{
     site: site,
     url: url,
     req_options: req_options
   } do
-    root = tmp("page-identity-redirect")
+    root = Path.join(tmp("page-identity-redirect"), "archive")
     scope = "page-identity-redirect"
     hub = "#{url}/id/hub"
     old = "#{url}/id/old"
@@ -31,7 +29,17 @@ defmodule Crawler.RedirectSnapshotTest do
       |> Plug.Conn.resp(302, "")
     end)
 
-    html(site, "/id/dir/new", ~s(<p>LANDED</p><a href="next">next</a>))
+    landing_hits = :counters.new(1, [:atomics])
+
+    ReqTestSite.expect(site, "GET", "/id/dir/new", fn conn ->
+      :counters.add(landing_hits, 1, 1)
+      assert :counters.get(landing_hits, 1) <= 2
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/html")
+      |> Plug.Conn.resp(200, ~s(<p>LANDED</p><a href="next">next</a>))
+    end)
+
     text(site, "/id/dir/next", "NEXT")
     html(site, "/id/later", ~s(<a href="#{new}">landed</a>))
 
@@ -39,26 +47,51 @@ defmodule Crawler.RedirectSnapshotTest do
       crawl(hub,
         scope: scope,
         workers: 1,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
         max_depths: 3,
         save_to: root,
         req_options: req_options
       )
 
-    await_idle(opts)
+    export = ready_export(opts)
 
     assert Store.ops_count(scope) == 4
+    assert :counters.get(landing_hits, 1) == 2
     assert Store.find_processed({old, scope}).body =~ "LANDED"
     assert Store.find_processed({new, scope}).body =~ "LANDED"
     assert Store.find_processed({nxt, scope}).body == "NEXT"
 
-    old_href = Linker.offline_link(old, nxt)
-    new_href = Linker.offline_link(new, nxt)
-    refute old_href == new_href
-    assert File.read!(saved(root, old)) =~ "LANDED"
-    assert File.read!(saved(root, new)) =~ "LANDED"
-    assert_link_opens(root, old, nxt)
-    assert_link_opens(root, new, nxt)
-    assert_link_opens(root, later, new)
+    seed = resource_for_url(export, hub)
+    landed = reference_target(export, seed, old)
+    later_resource = reference_target(export, seed, later)
+
+    assert [old_href, later_href] =
+             Floki.attribute(Floki.parse_document!(read_resource(export, seed)), "a", "href")
+
+    assert_opens(export, seed, landed, old_href)
+    assert_opens(export, seed, later_resource, later_href)
+    assert read_resource(export, landed) =~ "LANDED"
+
+    assert [next_href] =
+             Floki.attribute(Floki.parse_document!(read_resource(export, landed)), "a", "href")
+
+    target = reference_target(export, landed, nxt)
+    assert_opens(export, landed, target, next_href)
+    assert read_resource(export, target) == "NEXT"
+
+    assert [landed_href] =
+             Floki.attribute(
+               Floki.parse_document!(read_resource(export, later_resource)),
+               "a",
+               "href"
+             )
+
+    later_target = reference_target(export, later_resource, new)
+    assert_opens(export, later_resource, later_target, landed_href)
+    assert read_resource(export, later_target) =~ "LANDED"
   end
 
   test "a relative location is saved at both addresses", %{
@@ -66,7 +99,7 @@ defmodule Crawler.RedirectSnapshotTest do
     url: url,
     req_options: req_options
   } do
-    root = tmp("page-identity-relative")
+    root = Path.join(tmp("page-identity-relative"), "archive")
     scope = "page-identity-relative"
     old = "#{url}/id/rel/old"
     new = "#{url}/id/rel/dir/new"
@@ -85,19 +118,28 @@ defmodule Crawler.RedirectSnapshotTest do
       crawl(old,
         scope: scope,
         workers: 1,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
         max_depths: 2,
         save_to: root,
         req_options: req_options
       )
 
-    await_idle(opts)
+    export = ready_export(opts)
 
     assert Store.ops_count(scope) == 2
     assert Store.find_processed({old, scope}).body =~ "LANDED"
     assert Store.find_processed({new, scope}).body =~ "LANDED"
-    refute File.read!(saved(root, old)) == File.read!(saved(root, new))
-    assert_link_opens(root, old, nxt)
-    assert_link_opens(root, new, nxt)
+    source = resource_for_url(export, new)
+    target = reference_target(export, source, nxt)
+
+    assert [href] =
+             Floki.attribute(Floki.parse_document!(read_resource(export, source)), "a", "href")
+
+    assert_opens(export, source, target, href)
+    assert read_resource(export, target) == "NEXT"
   end
 
   test "an absolute-path location is saved at both addresses", %{
@@ -105,7 +147,7 @@ defmodule Crawler.RedirectSnapshotTest do
     url: url,
     req_options: req_options
   } do
-    root = tmp("page-identity-abs-location")
+    root = Path.join(tmp("page-identity-abs-location"), "archive")
     scope = "page-identity-abs-location"
     old = "#{url}/id/abs/old"
     new = "#{url}/id/dir/nested/new"
@@ -124,19 +166,28 @@ defmodule Crawler.RedirectSnapshotTest do
       crawl(old,
         scope: scope,
         workers: 1,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
         max_depths: 2,
         save_to: root,
         req_options: req_options
       )
 
-    await_idle(opts)
+    export = ready_export(opts)
 
     assert Store.ops_count(scope) == 2
     assert Store.find_processed({old, scope}).body =~ "LANDED"
     assert Store.find_processed({new, scope}).body =~ "LANDED"
-    refute File.read!(saved(root, old)) == File.read!(saved(root, new))
-    assert_link_opens(root, old, nxt)
-    assert_link_opens(root, new, nxt)
+    source = resource_for_url(export, new)
+    target = reference_target(export, source, nxt)
+
+    assert [href] =
+             Floki.attribute(Floki.parse_document!(read_resource(export, source)), "a", "href")
+
+    assert_opens(export, source, target, href)
+    assert read_resource(export, target) == "NEXT"
   end
 
   test "a plain redirect writes the same bytes to both files", %{
@@ -144,7 +195,7 @@ defmodule Crawler.RedirectSnapshotTest do
     url: url,
     req_options: req_options
   } do
-    root = tmp("page-identity-plain")
+    root = Path.join(tmp("page-identity-plain"), "archive")
     scope = "page-identity-plain"
     old = "#{url}/id/plain/old"
     new = "#{url}/id/plain/dir/new"
@@ -161,12 +212,23 @@ defmodule Crawler.RedirectSnapshotTest do
       |> Plug.Conn.resp(200, "PLAIN")
     end)
 
-    opts = crawl(old, scope: scope, workers: 1, save_to: root, req_options: req_options)
-    await_idle(opts)
+    opts =
+      crawl(old,
+        scope: scope,
+        workers: 1,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
+        save_to: root,
+        req_options: req_options
+      )
 
-    assert File.read!(saved(root, old)) == "PLAIN"
-    assert File.read!(saved(root, new)) == "PLAIN"
-    assert Snapshot.path(old) != Snapshot.path(new)
+    export = ready_export(opts)
+
+    assert read_resource(export, resource_for_url(export, new)) == "PLAIN"
+    assert Store.find_processed({old, scope}).body == "PLAIN"
+    assert Store.find_processed({new, scope}).body == "PLAIN"
   end
 
   test "a trailing slash redirect writes one file", %{
@@ -174,7 +236,7 @@ defmodule Crawler.RedirectSnapshotTest do
     url: url,
     req_options: req_options
   } do
-    root = tmp("page-identity-slash")
+    root = Path.join(tmp("page-identity-slash"), "archive")
     scope = "page-identity-slash"
     page = "#{url}/id/slash"
     slashed = page <> "/"
@@ -191,11 +253,21 @@ defmodule Crawler.RedirectSnapshotTest do
       |> Plug.Conn.resp(200, "SLASH")
     end)
 
-    opts = crawl(page, scope: scope, workers: 1, save_to: root, req_options: req_options)
-    await_idle(opts)
+    opts =
+      crawl(page,
+        scope: scope,
+        workers: 1,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
+        save_to: root,
+        req_options: req_options
+      )
 
-    assert Snapshot.path(page) == Snapshot.path(slashed)
-    assert File.read!(saved(root, page)) == @utf8_bom <> "SLASH"
+    export = ready_export(opts)
+
+    assert read_resource(export, resource_for_url(export, slashed)) == @utf8_bom <> "SLASH"
     assert Store.find_processed({page, scope}).body == "SLASH"
     assert Store.find_processed({slashed, scope}).body == "SLASH"
     assert Store.ops_count(scope) == 1

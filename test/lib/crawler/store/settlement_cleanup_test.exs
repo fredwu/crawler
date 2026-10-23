@@ -2,6 +2,7 @@ defmodule Crawler.Store.SettlementCleanupTest do
   use Crawler.TestCase, async: false
 
   alias Crawler.Queue
+  alias Crawler.SettlementClaimHelpers
   alias Crawler.Store
 
   for resolution <- [:processed, :direct_registration] do
@@ -32,19 +33,17 @@ defmodule Crawler.Store.SettlementCleanupTest do
 
     target_opts = %{opts | queue: target_queue, url: landing}
     target = held_claim(target_opts, resolution)
-    source_claim = start_claim(opts)
-    assert {:ok, candidate} = Store.retain_alias({landing, scope}, "FALLBACK", opts)
+    source_claim = SettlementClaimHelpers.start_source(context, opts, landing)
+    candidate = source_claim.ref
     assert is_reference(candidate)
 
     failed_claim = start_claim(%{opts | url: failed})
-    assert :ok = Store.finish_claim(failed_claim)
+    finish_worker(failed_claim)
     assert Store.find({failed, scope})
-    assert :ok = Store.complete_page({source, scope}, generation, source_queue)
-    assert :ok = Store.finish_claim(source_claim)
+    SettlementClaimHelpers.finish_source(source_claim)
     assert Store.work_pending?(scope, generation, source_queue)
 
-    send(target, :finish)
-    assert_receive {:finished, ^target}, 2_000
+    finish_worker(target)
     refute Store.work_pending?(scope, generation, source_queue)
     refute Store.find({failed, scope})
     assert Store.find_processed({source, scope})
@@ -92,32 +91,52 @@ defmodule Crawler.Store.SettlementCleanupTest do
     queue
   end
 
-  defp start_claim(opts) do
-    assert :ok = Store.note_enqueued(opts.scope, opts.generation, opts.queue)
-    assert {:ok, token} = Store.start_work(opts)
-    assert {:ok, _} = Store.add({opts.url, opts.scope}, opts.generation, opts.queue)
-    token
-  end
+  defp start_claim(opts, resolution \\ nil) do
+    opts =
+      opts
+      |> Map.merge(%{max_body: 1_024, max_analysis_bytes: 2_097_152, respect_robots: false})
+      |> Crawler.Options.assign_defaults()
 
-  defp held_claim(opts, resolution) do
+    assert {:ok, prepared} = Crawler.Fetcher.Requester.prepare(opts)
+    assert {:ok, _admitted} = Store.admit_job(opts, prepared)
     observer = self()
 
     worker =
       spawn_link(fn ->
-        token = start_claim(opts)
+        {:ok, claim, :fetch, admitted} =
+          wait(fn -> assert {:ok, _, :fetch, _} = Store.checkout_job(opts.queue) end)
+
+        assert :ok =
+                 Crawler.Store.Execution.run(admitted, fn owned ->
+                   assert {:ok, _} =
+                            Store.add({owned.url, owned.scope}, owned.generation, owned.queue)
+
+                   :ok
+                 end)
+
         send(observer, {:claimed, self()})
 
         receive do
           :finish ->
-            finish_landing(opts, resolution)
-            Store.finish_claim(token)
-            send(observer, {:finished, self()})
+            if resolution, do: finish_landing(opts, resolution)
+            Store.complete_job(claim, Crawler.Job.Outcome.new(:failed, :fixture_finished))
+            send(observer, {:finished, self(), claim})
         end
       end)
 
     on_exit(fn -> Process.exit(worker, :kill) end)
     assert_receive {:claimed, ^worker}, 2_000
     worker
+  end
+
+  defp held_claim(opts, resolution), do: start_claim(opts, resolution)
+
+  defp finish_worker(worker) do
+    monitor = Process.monitor(worker)
+    send(worker, :finish)
+    assert_receive {:finished, ^worker, claim}, 2_000
+    assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 2_000
+    wait(fn -> refute Map.has_key?(:sys.get_state(Store).scheduler_workers, claim) end)
   end
 
   defp finish_landing(opts, :processed) do

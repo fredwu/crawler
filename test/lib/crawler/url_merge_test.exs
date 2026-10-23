@@ -1,6 +1,7 @@
 defmodule Crawler.URLMergeTest do
   use ExUnit.Case, async: true
 
+  alias Crawler.Analysis
   alias Crawler.HTTP
   alias Crawler.Linker
   alias Crawler.Parser.LinkParser
@@ -73,20 +74,45 @@ defmodule Crawler.URLMergeTest do
     end
   end
 
-  test "offline links use the resolved path and retain the source fragment" do
+  test "bound links use resolved identities and retain the source fragment" do
     base = "http://host/a/page"
     reference = "%2e%2e/../a%2Fb?x=%2F#part%2Ftwo"
     target = "http://host/a%2fb?x=%2f#part%2Ftwo"
+    fixture = %{id: :encoded_slash, path: "fixtures/encoded.html"}
 
-    assert Linker.offline_url(base, reference) == Linker.offline_url(base, target)
-    assert Linker.offline_link(base, reference) == Linker.offline_link(base, target)
-    assert URI.parse(Linker.offline_link(base, reference)).fragment == "part%2Ftwo"
+    assert Linker.url(base, reference) == "http://host/a%2fb?x=%2f"
+    assert Linker.url(base, reference) == Linker.url(base, target)
+    first = render_bound(base, reference, "http://host/a%2fb?x=%2f", fixture)
+    assert first == render_bound(base, target, "http://host/a%2fb?x=%2f", fixture)
+    assert first == ~s|<a href="fixtures/encoded.html#part%2Ftwo">next</a>|
 
-    refute Linker.offline_link(base, reference) ==
-             Linker.offline_link(base, "http://host/a/b?x=%2f#part%2Ftwo")
+    separate = "http://host/a/b?x=%2f#part%2Ftwo"
+    refute Linker.url(base, reference) == Linker.url(base, separate)
 
-    refute Linker.offline_link(base, "%2e%2e/../target?") ==
-             Linker.offline_link(base, "%2e%2e/../target")
+    other =
+      render_bound(base, separate, "http://host/a/b?x=%2f", %{
+        id: :separator,
+        path: "fixtures/separate.html"
+      })
+
+    assert other == ~s|<a href="fixtures/separate.html#part%2Ftwo">next</a>|
+    refute first == other
+
+    bare = "%2e%2e/../target?"
+    plain = "%2e%2e/../target"
+    refute Linker.url(base, bare) == Linker.url(base, plain)
+
+    assert render_bound(base, bare, "http://host/target?", %{
+             id: :bare_query,
+             path: "fixtures/bare.html"
+           }) ==
+             ~s|<a href="fixtures/bare.html">next</a>|
+
+    assert render_bound(base, plain, "http://host/target", %{
+             id: :no_query,
+             path: "fixtures/plain.html"
+           }) ==
+             ~s|<a href="fixtures/plain.html">next</a>|
   end
 
   test "redirect filters and requests receive the resolved encoded-dot target" do
@@ -123,5 +149,29 @@ defmodule Crawler.URLMergeTest do
       refute_received {:requested, _url}
       refute_received {:allowed, _url}
     end
+  end
+
+  defp render_bound(base, reference, expected_url, fixture) do
+    opts = %{url: base, content_type: "text/html", assets: []}
+    source = ~s|<a href="#{reference}">next</a>|
+    assert {:ok, analysis} = Analysis.analyze(source, opts)
+    assert {:ok, collection} = Analysis.occurrences_result(analysis, opts)
+
+    assert [
+             %{
+               value: ^reference,
+               url: ^expected_url,
+               source_mode: :html,
+               source_role: :attribute,
+               context: %{html_tag: "a"}
+             }
+           ] = collection.occurrences
+
+    assert {:ok, bound} = Analysis.bind(collection, fn _ref -> fixture end)
+
+    assert {:ok, rendered} =
+             Analysis.render(analysis, bound, fn ref -> {:local, ref.target.path} end)
+
+    rendered
   end
 end

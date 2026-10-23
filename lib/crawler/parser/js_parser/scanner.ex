@@ -1,6 +1,7 @@
 defmodule Crawler.Parser.JsParser.Scanner do
   @moduledoc false
 
+  alias Crawler.Analysis.Budget
   alias Crawler.Parser.JsParser.BodyContext
   alias Crawler.Parser.JsParser.ContextualKeywords
   alias Crawler.Parser.JsParser.ExpressionBoundary
@@ -23,7 +24,28 @@ defmodule Crawler.Parser.JsParser.Scanner do
   # identify specifiers. Unicode line terminators become an LF and two spaces
   # to keep original byte indexes. ECMAScript whitespace becomes equal-byte-length spaces.
   def scan(source, goal \\ :module) do
+    {:ok, scan, _budget} = scan_result(source, goal, Budget.unlimited())
+    scan
+  end
+
+  def scan_result(source, goal, budget) when is_binary(source) and goal in [:module, :script] do
+    size = byte_size(source)
+    # Mask chunks, their reverse, and scalar decoder buffers can overlap.
+    scratch =
+      size * (Budget.cost(:binary, 2) + Budget.cost(:list_cell, 4) + 2) +
+        Budget.cost(:context, 8)
+
+    with {:ok, budget} <-
+           Budget.charge(budget, size + Budget.cost(:binary) + Budget.cost(:token)),
+         {:ok, budget} <- Budget.reserve(budget, scratch) do
+      run(source, goal, budget, scratch)
+    end
+  end
+
+  defp run(source, goal, budget, scratch) do
     mask(source, [], %{
+      budget: budget,
+      scratch: scratch,
       state: :code,
       quote: nil,
       regex_allowed?: true,
@@ -41,11 +63,45 @@ defmodule Crawler.Parser.JsParser.Scanner do
       strings: [],
       comments: []
     })
+  catch
+    {:js_budget, error} -> error
   end
 
   defp mask(source, acc, context) do
+    context = reserve_transition(source, context)
     scan_token(source, acc, statement_context(source, context))
   end
+
+  defp reserve_transition(<<>>, context), do: context
+
+  defp reserve_transition(<<char::utf8, _rest::binary>>, %{state: :code} = context)
+       when char in @white_space or char in 0x2000..0x200A or char in [10, 13, 0x2028, 0x2029],
+       do: context
+
+  defp reserve_transition(_source, %{state: :code} = context) do
+    # Hold grammar capacity through flattening, including saved template grammar.
+    bytes = Budget.cost(:frame, 4)
+    budget = take(Budget.reserve(context.budget, bytes))
+    %{context | budget: budget, scratch: context.scratch + bytes}
+  end
+
+  defp reserve_transition(_source, context), do: context
+
+  defp reserve_fact(context) do
+    budget =
+      take(
+        Budget.charge(
+          context.budget,
+          Budget.cost(:token) + Budget.cost(:list_cell, 2),
+          facts: 1
+        )
+      )
+
+    %{context | budget: budget}
+  end
+
+  defp take({:ok, budget}), do: budget
+  defp take({:error, _reason} = error), do: throw({:js_budget, error})
 
   defp statement_context(
          source,
@@ -78,8 +134,12 @@ defmodule Crawler.Parser.JsParser.Scanner do
   end
 
   defp scan_token(<<>>, acc, context) do
-    {IO.iodata_to_binary(Enum.reverse(acc)), Enum.reverse(context.strings),
-     Enum.reverse(context.comments)}
+    scan =
+      {IO.iodata_to_binary(Enum.reverse(acc)), Enum.reverse(context.strings),
+       Enum.reverse(context.comments)}
+
+    {:ok, budget} = Budget.release(context.budget, context.scratch)
+    {:ok, scan, budget}
   end
 
   defp scan_token(<<char, rest::binary>>, acc, %{state: :code} = context)
@@ -98,6 +158,7 @@ defmodule Crawler.Parser.JsParser.Scanner do
   end
 
   defp scan_token(<<"//", rest::binary>>, acc, %{state: :code} = context) do
+    context = reserve_fact(context)
     {line, rest_after} = split_line(rest)
     at = context.size - byte_size(rest) - 2
     context = add_comment(context, {at, 2 + line_text_size(line)})
@@ -105,6 +166,7 @@ defmodule Crawler.Parser.JsParser.Scanner do
   end
 
   defp scan_token(<<"/*", rest::binary>>, acc, %{state: :code} = context) do
+    context = reserve_fact(context)
     {block, rest_after} = split_block(rest)
     at = context.size - byte_size(rest) - 2
     context = add_comment(context, {at, 2 + byte_size(block)})
@@ -562,6 +624,7 @@ defmodule Crawler.Parser.JsParser.Scanner do
 
   defp close_string(context, stop) do
     if context.string_start do
+      context = reserve_fact(context)
       %{context | strings: [{context.string_start, stop} | context.strings], string_start: nil}
     else
       context

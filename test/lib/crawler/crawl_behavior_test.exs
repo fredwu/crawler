@@ -35,7 +35,7 @@ defmodule Crawler.CrawlBehaviorTest do
     end)
 
     {:ok, again} =
-      start_crawl(page, scope: "stored", queue: opts[:queue], req_options: req_options)
+      start_crawl(page, opts)
 
     wait(fn ->
       refute Crawler.running?(again)

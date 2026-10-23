@@ -1,7 +1,7 @@
 defmodule Crawler.CrawlCssImportRulesTest do
   use Crawler.TestCase, async: false
 
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
   test "an import counts only in the stylesheet prelude", context do
     sheet = """
@@ -26,7 +26,9 @@ defmodule Crawler.CrawlCssImportRulesTest do
     serve(context, "/prelude/shown.png", "image/png", "shown")
 
     root = crawl(context, "/prelude/start")
-    saved = read(root, page(context, "/prelude/sheet.css"))
+    source = resource_for_url(root, page(context, "/prelude/start"))
+    selected = reference_target(root, source, page(context, "/prelude/sheet.css"))
+    saved = read_resource(root, selected)
 
     assert saved =~ ~s|@import "components.css";|
     assert saved =~ ~s|@import "after-namespace.css";|
@@ -91,7 +93,9 @@ defmodule Crawler.CrawlCssImportRulesTest do
     serve(context, "/broken/typed.css", "text/css", "typed")
 
     root = crawl(context, "/broken/start")
-    saved = read(root, page(context, "/broken/sheet.css"))
+    source = resource_for_url(root, page(context, "/broken/start"))
+    selected = reference_target(root, source, page(context, "/broken/sheet.css"))
+    saved = read_resource(root, selected)
 
     assert saved =~ ~s|@import "blocked.css"|
     assert saved =~ ~s|url("inner.png")|
@@ -149,8 +153,11 @@ defmodule Crawler.CrawlCssImportRulesTest do
     serve(context, "/css/plain.png", "image/png", "plain")
 
     root = crawl(context, "/cross/start")
-    saved_app = read(root, page(context, "/css/app.css"))
-    saved_tokens = read(root, page(context, "/tokens/tokens.css"))
+    source = resource_for_url(root, page(context, "/cross/start"))
+    app_resource = reference_target(root, source, page(context, "/css/app.css"))
+    tokens_resource = reference_target(root, app_resource, page(context, "/tokens/tokens.css"))
+    saved_app = read_resource(root, app_resource)
+    saved_tokens = read_resource(root, tokens_resource)
 
     assert saved_app =~ "var(--plain)"
     assert saved_app =~ "var(--icon)"
@@ -176,7 +183,9 @@ defmodule Crawler.CrawlCssImportRulesTest do
     serve(context, "/set/shown.png", "image/png", "shown")
 
     root = crawl(context, "/set/start")
-    saved = read(root, page(context, "/set/app.css"))
+    source = resource_for_url(root, page(context, "/set/start"))
+    selected = reference_target(root, source, page(context, "/set/app.css"))
+    saved = read_resource(root, selected)
 
     assert saved =~ ~s|url("fallback.png")|
     assert saved =~ "var(--bg"
@@ -194,9 +203,16 @@ defmodule Crawler.CrawlCssImportRulesTest do
     serve(context, "/defer/fallback.png", "image/png", "fallback")
 
     root = crawl(context, "/defer/start")
-    saved = read(root, page(context, "/defer/sheet.css"))
+    source = resource_for_url(root, page(context, "/defer/start"))
+    selected = reference_target(root, source, page(context, "/defer/sheet.css"))
+    saved = read_resource(root, selected)
 
-    assert saved =~ ~s|url("fallback.png")|
+    sheet = selected
+    fallback = reference_target(root, sheet, page(context, "/defer/fallback.png"))
+    assert saved =~ ~s|url("#{relative_reference(sheet, fallback)}")|
+    assert_link_opens(root, sheet, fallback)
+    assert read_resource(root, fallback) == "fallback"
+    assert saved =~ page(context, "/missing/tokens.css")
   end
 
   test "a style attribute is not a stylesheet", context do
@@ -211,7 +227,7 @@ defmodule Crawler.CrawlCssImportRulesTest do
     serve(context, "/attr/paint.png", "image/png", "paint")
 
     root = crawl(context, "/attr/start")
-    saved = read(root, page(context, "/attr/start"))
+    saved = read_resource(root, resource_for_url(root, page(context, "/attr/start")))
 
     assert saved =~ "@import 'idle.css'"
     assert saved =~ ~s|@import "idle.css"|
@@ -271,18 +287,21 @@ defmodule Crawler.CrawlCssImportRulesTest do
             assets: ["css", "images"],
             max_depths: 3,
             retries: 0,
-            workers: 2,
-            save_to: tmp(scope),
+            workers: 1,
+            max_body: 1_048_576,
+            max_analysis_bytes: 16_000_000,
+            max_manifest_bytes: 16 * 1024 * 1024,
+            max_css_work: 5_000,
+            max_css_pictures: 1_000,
+            save_to: tmp(scope, "archive"),
             req_options: context.req_options
           ],
           extra
         )
       )
 
-    await_idle(opts)
-    tmp(scope)
+    ready_export(opts)
   end
 
   defp page(%{url: url}, path), do: url <> path
-  defp read(root, url), do: File.read!(saved(root, url))
 end

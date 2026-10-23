@@ -3,7 +3,6 @@ defmodule Crawler.Parser.DocumentStylesTest do
 
   import Crawler.TestHelpers, only: [unique_scope: 1]
 
-  alias Crawler.Linker
   alias Crawler.Parser
   alias Crawler.Parser.CssParser.DocumentStyles
   alias Crawler.Parser.CssParser.Scanner
@@ -45,7 +44,7 @@ defmodule Crawler.Parser.DocumentStylesTest do
         assert_handler_options(found, opts)
 
         for file <- ["first.png", "second.png"] do
-          assert rewritten =~ Linker.offline_link(@url, "http://standalone.test/dir/" <> file)
+          assert rewritten =~ "http://standalone.test/dir/" <> file
           refute rewritten =~ ~s|url("#{file}")|
         end
 
@@ -78,10 +77,10 @@ defmodule Crawler.Parser.DocumentStylesTest do
 
     assert_handler_options(found, opts)
     assert {:ok, rewritten} = LinkReplacer.replace_links(html, opts)
-    assert rewritten =~ Linker.offline_link(@url, "http://standalone.test/dir/outer.png")
-    assert rewritten =~ Linker.offline_link(@url, "http://standalone.test/dir/inner.png")
+    assert rewritten =~ "http://standalone.test/dir/outer.png"
+    assert rewritten =~ "http://standalone.test/dir/inner.png"
     assert rewritten =~ ~s|url("leak.png")|
-    refute rewritten =~ Linker.offline_link(@url, "http://standalone.test/dir/leak.png")
+    refute rewritten =~ "http://standalone.test/dir/leak.png"
   end
 
   test "a reused standalone scope does not carry styles into another invocation" do

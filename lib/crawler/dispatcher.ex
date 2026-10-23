@@ -30,7 +30,12 @@ defmodule Crawler.Dispatcher do
         :referrer_url,
         :robots_nofollow,
         :before_publish,
-        :json_span
+        :json_span,
+        :analysis,
+        :interpretation,
+        :prepared_request,
+        :execution_lease,
+        :crawler_deadline
       ])
 
     case request do

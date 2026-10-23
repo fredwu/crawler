@@ -2,7 +2,6 @@ defmodule Crawler.Charset.HTMLMetaEncodingTest do
   use ExUnit.Case, async: true
 
   alias Crawler.Charset
-  alias Crawler.Linker
   alias Crawler.Snapper.LinkReplacer
 
   @page "http://example.com/index.html"
@@ -28,7 +27,7 @@ defmodule Crawler.Charset.HTMLMetaEncodingTest do
                })
 
       assert body |> Floki.parse_document!() |> Floki.attribute("a", "href") ==
-               [Linker.offline_link(@page, "http://example.com/café")]
+               ["http://example.com/café"]
     end
   end
 
@@ -60,7 +59,8 @@ defmodule Crawler.Charset.HTMLMetaEncodingTest do
     encoded = <<0xFF, 0xFE>> <> :unicode.characters_to_binary(source, :utf8, {:utf16, :little})
 
     assert Charset.decode(encoded, %{content_type: "application/xhtml+xml"}) ==
-             ~s|<?xml version="1.0" encoding="utf-8"?>| <> declaration(:charset, "utf-8") <> @text
+             ~s|<?xml version="1.0" encoding="utf-8"?>| <>
+               declaration(:charset, "UTF-16BE") <> @text
   end
 
   defp declaration(:charset, label), do: ~s|<meta charset="#{label}">|

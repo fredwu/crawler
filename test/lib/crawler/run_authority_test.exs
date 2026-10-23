@@ -119,8 +119,11 @@ defmodule Crawler.RunAuthorityTest do
       {:messages, messages} = Process.info(css, :messages)
 
       assert Enum.any?(messages, fn
-               {:"$gen_call", {caller, _}, {:authorized, ^scope, ^generation, nil, _}} ->
-                 caller == remembering.pid
+               {:"$gen_call", {caller, _},
+                {:describe,
+                 %{scope: ^scope, generation: ^generation, queue: nil, execution_lease: lease},
+                 {^scope, ^generation, _}}} ->
+                 Authority.execution_current?(lease, caller)
 
                _ ->
                  false

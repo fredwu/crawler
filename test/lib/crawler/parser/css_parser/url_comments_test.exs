@@ -1,9 +1,9 @@
 defmodule Crawler.Parser.CssParser.UrlCommentsTest do
   use ExUnit.Case, async: true
 
+  alias Crawler.Analysis
   alias Crawler.Parser.CssParser
   alias Crawler.Parser.CssParser.Scanner
-  alias Crawler.Snapper.LinkReplacer.Css
 
   test "unquoted URL tokens keep leading and trailing comment-looking payload bytes" do
     for {payload, value} <- [
@@ -18,10 +18,10 @@ defmodule Crawler.Parser.CssParser.UrlCommentsTest do
       assert binary_part(source, start, length) == payload
       assert Scanner.comment_spans(source) == []
 
-      assert Css.replace(source, value, "saved.png", entity_quotes: false) ==
+      assert render_css(source, value, "saved.png") ==
                "url(#{whitespace}saved.png#{whitespace})"
 
-      assert Css.replace(source, "image.png", "wrong.png", entity_quotes: false) == source
+      assert render_css(source, "image.png", "wrong.png") == source
     end
   end
 
@@ -40,10 +40,10 @@ defmodule Crawler.Parser.CssParser.UrlCommentsTest do
       assert Scanner.comment_spans(source) == []
 
       for target <- ["image.png", "hidden.png", "/*draft*/image.png"] do
-        assert Css.replace(source, target, "wrong.png", entity_quotes: false) == source
+        assert render_css(source, target, "wrong.png") == source
       end
 
-      assert Css.replace(source, "real.png", "saved.png", entity_quotes: false) ==
+      assert render_css(source, "real.png", "saved.png") ==
                invalid <> ";url(saved.png)"
     end
   end
@@ -61,7 +61,7 @@ defmodule Crawler.Parser.CssParser.UrlCommentsTest do
                binary_part(source, start, length)
              end) == ["/* second */", "/* first */"]
 
-      assert Css.replace(source, "image.png", "saved.png", entity_quotes: false) ==
+      assert render_css(source, "image.png", "saved.png") ==
                "url( \t#{quote}saved.png#{quote}/* first */ \n/* second */)"
     end
   end
@@ -74,9 +74,39 @@ defmodule Crawler.Parser.CssParser.UrlCommentsTest do
              CssParser.spans(source, entity_quotes: true)
 
     assert binary_part(source, start, length) == "&quot;real.png&quot;"
-    assert Css.replace(source, "image.png", "wrong.png") == source
 
-    assert Css.replace(source, "real.png", "saved.png") ==
-             invalid <> ~s|,url( &quot;saved.png&quot;/* after */)|
+    assert render_css(attribute(source), "image.png", "wrong.png", "text/html") ==
+             attribute(source)
+
+    assert render_css(attribute(source), "real.png", "saved.png", "text/html") ==
+             attribute(invalid <> ~s|,url( &quot;saved.png&quot;/* after */)|)
+  end
+
+  defp attribute(source), do: ~s|<div style="#{source}"></div>|
+
+  defp render_css(source, value, path, type \\ "text/css") do
+    opts = %{
+      url: "https://example.test/styles/main.css",
+      content_type: type,
+      assets: ["css", "images"]
+    }
+
+    assert {:ok, analysis} = Analysis.analyze(source, opts)
+    assert {:ok, collection} = Analysis.occurrences_result(analysis, opts)
+
+    assert {:ok, bound} =
+             Analysis.bind(collection, fn ref ->
+               if ref.source_role == :css and ref.context.html_tag == "link" and
+                    ref.value == value,
+                  do: %{fixture: :css_resource, path: path}
+             end)
+
+    assert {:ok, rendered} =
+             Analysis.render(analysis, bound, fn
+               %{target: %{fixture: :css_resource, path: path}} -> {:local, path}
+               _ref -> :keep
+             end)
+
+    rendered
   end
 end

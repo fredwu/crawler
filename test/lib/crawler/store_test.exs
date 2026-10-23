@@ -1,6 +1,9 @@
 defmodule Crawler.StoreTest do
   use ExUnit.Case, async: false
 
+  import Crawler.ManagedSnapshotHelpers
+  import Crawler.TestHelpers, only: [wait: 1]
+
   alias Crawler.Store
 
   test "a dropped scope keeps its new generation token" do
@@ -16,26 +19,45 @@ defmodule Crawler.StoreTest do
     assert Store.inflight_count(scope) == 0
   end
 
-  test "a stale publish leaves the newer file and removes the old temp" do
+  test "a stale export leaves the newer archive and removes private staging" do
     scope = scope("publish")
-    dir = Path.join(System.tmp_dir!(), unique_dir())
-    File.mkdir_p!(dir)
-    on_exit(fn -> File.rm_rf(dir) end)
+    root = Path.join([File.cwd!(), "test", "tmp", unique_dir()])
+    File.mkdir_p!(root)
+    on_exit(fn -> File.rm_rf(root) end)
+    old_options = copy_options(scope, "OLD", Path.join(root, "old"))
+    assert {:ok, old} = stage_copy(old_options)
+    parent = self()
 
-    dest = Path.join(dir, "page.html")
-    new_temp = Path.join(dir, "new.tmp")
-    old_temp = Path.join(dir, "old.tmp")
-    File.write!(new_temp, "NEW")
-    File.write!(old_temp, "OLD")
+    task =
+      Task.async(fn ->
+        finalize_copy(old, fn %{filesystem: %{receipt: receipt}} ->
+          send(parent, {:staged, self(), receipt})
 
-    stale = Store.generation(scope)
-    new_gen = Store.drop_scope(scope)
-    assert :ok = Store.publish_file(scope, new_gen, dest, new_temp)
-    assert {:error, :stale} = Store.publish_file(scope, stale, dest, old_temp)
+          receive do
+            :release_save -> :ok
+          after
+            5_000 -> flunk("publication gate was not released")
+          end
+        end)
+      end)
 
-    assert File.read!(dest) == "NEW"
-    refute File.exists?(old_temp)
-    refute File.exists?(new_temp)
+    assert_receive {:staged, holder, receipt}, 2_000
+    on_exit(fn -> send(holder, :release_save) end)
+    assert File.dir?(receipt.stage)
+    generation = Store.drop_scope(scope)
+    refute generation == old.generation
+    assert {:ok, fresh} = stage_copy(copy_options(scope, "NEW", Path.join(root, "new")))
+    assert {:ok, :committed} = finalize_copy(fresh)
+    export = ready_export(fresh)
+    resource = resource_for_url(export, fresh.url)
+    assert read_resource(export, resource) == "NEW"
+    send(holder, :release_save)
+    assert {:error, _} = Task.await(task, 5_000)
+
+    wait(fn -> refute File.exists?(receipt.stage) end)
+    refute File.exists?(old.save_to)
+    assert read_resource(export, resource) == "NEW"
+    assert ready_export(fresh) == export
   end
 
   test "an idle queue drops its failed pages and keeps processed pages" do
@@ -219,7 +241,7 @@ defmodule Crawler.StoreTest do
     refute Store.find(kept)
   end
 
-  test "a retired queue cannot replace a survivor's file in the same generation" do
+  test "a retired queue cannot commit an archive in the same generation" do
     scope = scope("queue-publication")
     generation = Store.generation(scope)
     queue = self()
@@ -232,25 +254,43 @@ defmodule Crawler.StoreTest do
       end)
 
     on_exit(fn -> Process.exit(survivor, :kill) end)
-    dir = Path.join(System.tmp_dir!(), unique_dir())
-    File.mkdir_p!(dir)
-    on_exit(fn -> File.rm_rf(dir) end)
-    dest = Path.join(dir, "page.html")
-    new_temp = Path.join(dir, "new.tmp")
-    old_temp = Path.join(dir, "old.tmp")
-    File.write!(new_temp, "NEW")
-    File.write!(old_temp, "OLD")
-
+    root = Path.join([File.cwd!(), "test", "tmp", unique_dir()])
+    File.mkdir_p!(root)
+    on_exit(fn -> File.rm_rf(root) end)
     assert :ok = Store.note_enqueued(scope, generation, queue)
     assert :ok = Store.note_enqueued(scope, generation, survivor)
-    assert :ok = Store.release_queue(queue)
-    assert Store.generation(scope) == generation
+    assert {:ok, opts} = stage_copy(copy_options(scope, "NEW", Path.join(root, "archive")))
 
-    assert :ok = Store.publish_file(scope, generation, dest, new_temp, survivor)
-    assert {:error, :stale} = Store.publish_file(scope, generation, dest, old_temp, queue)
-    assert File.read!(dest) == "NEW"
-    refute File.exists?(old_temp)
-    refute File.exists?(new_temp)
+    assert :ok = Store.finish_work(scope, generation, false, queue)
+    assert :ok = Store.finish_work(scope, generation, false, survivor)
+
+    assert {:ok, :committed} =
+             finalize_copy(opts, fn context ->
+               assert :ok = Store.release_queue(queue)
+               assert Store.generation(scope) == generation
+               refute Crawler.Store.Authority.current?(scope, generation, queue)
+               assert Crawler.Store.Authority.current?(scope, generation, survivor)
+               refute File.exists?(opts.save_to)
+
+               assert {:error, :stale} =
+                        Store.export_commit(
+                          Map.put(context.owned, :queue, queue),
+                          context.closed.epoch,
+                          context.closed.close_token,
+                          context.snapshot.seal_token,
+                          context.prepared,
+                          context.manifest_operation
+                        )
+
+               refute File.exists?(opts.save_to)
+               assert File.dir?(context.filesystem.receipt.stage)
+             end)
+
+    export = ready_export(opts)
+    resource = resource_for_url(export, opts.url)
+    assert read_resource(export, resource) == "NEW"
+    assert Store.generation(scope) == generation
+    assert :ok = Store.release_queue(survivor)
   end
 
   test "completion keeps page counts and owned aliases atomic across queue retirement" do
@@ -292,7 +332,7 @@ defmodule Crawler.StoreTest do
     assert Store.find_processed(alias_key)
 
     assert :ok = Store.release_queue(retired)
-    assert :stale = Store.complete_page(requested, generation, retired, alias_url)
+    assert {:error, :stale} = Store.complete_page(requested, generation, retired, alias_url)
     assert Store.generation(scope) == generation
     assert Store.ops_count(scope) == 1
     assert Store.find_processed(requested)
@@ -304,6 +344,31 @@ defmodule Crawler.StoreTest do
     assert Store.inflight_count(scope) == 0
     assert :ok = Store.try_claim(scope, 2, generation, live)
     assert :full = Store.try_claim(scope, 2, generation, live)
+  end
+
+  defp copy_options(scope, body, destination) do
+    [
+      url: "http://publication.example/resource",
+      scope: scope,
+      store: Store,
+      save_to: destination,
+      respect_robots: false,
+      retries: 0,
+      max_body: 1024,
+      max_analysis_bytes: 2_097_152,
+      max_manifest_bytes: 1_048_576,
+      req_options: [
+        retry: false,
+        adapter: fn request ->
+          {request,
+           Req.Response.new(
+             status: 200,
+             headers: [{"content-type", "application/octet-stream"}],
+             body: body
+           )}
+        end
+      ]
+    ]
   end
 
   defp unique_dir, do: "crawler-publish-#{System.unique_integer([:positive])}"

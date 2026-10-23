@@ -1,11 +1,14 @@
 defmodule Crawler.CrawlOfflinePathsTest do
   use Crawler.TestCase, async: false
 
+  import Crawler.ManagedSnapshotHelpers
+
+  alias Crawler.RequestLog
   alias Crawler.Store
 
   @utf8_bom <<0xEF, 0xBB, 0xBF>>
 
-  test "a trailing slash is the same url and offline file", %{
+  test "a trailing slash shares logical identity while preserving response artifacts", %{
     site: site,
     url: url,
     req_options: req_options
@@ -21,11 +24,11 @@ defmodule Crawler.CrawlOfflinePathsTest do
       """)
     end)
 
-    hits = :counters.new(1, [:atomics])
+    hits = RequestLog.new()
 
     for path <- ["/slash/foo", "/slash/foo/"] do
-      ReqTestSite.stub(site, "GET", path, fn conn ->
-        :counters.add(hits, 1, 1)
+      ReqTestSite.expect_once(site, "GET", path, fn conn ->
+        RequestLog.record(hits, conn.request_path)
 
         conn
         |> Plug.Conn.put_resp_header("content-type", "text/html")
@@ -37,20 +40,28 @@ defmodule Crawler.CrawlOfflinePathsTest do
       start_crawl("#{url}/slash/entry",
         scope: "slash",
         workers: 2,
-        save_to: tmp("behavior-slash"),
+        save_to: Path.join(tmp(unique_scope("behavior-slash")), "archive"),
         req_options: req_options
       )
 
-    wait(fn ->
-      refute Crawler.running?(opts)
-      assert :counters.get(hits, 1) == 1
+    export = ready_export(opts)
+    assert RequestLog.frequencies(hits) == %{"/slash/foo" => 1, "/slash/foo/" => 1}
+    assert Store.ops_count("slash") == 2
+    source = resource_for_url(export, "#{url}/slash/entry")
 
-      assert File.read!(tmp("behavior-slash/#{site.path}/slash/foo", "__index.html")) ==
-               @utf8_bom <> "FOO"
+    hrefs =
+      read_resource(export, source) |> Floki.parse_document!() |> Floki.attribute("a", "href")
 
-      assert Store.find_processed({"#{url}/slash/foo", "slash"})
-      assert Store.find_processed({"#{url}/slash/foo/", "slash"})
-    end)
+    assert length(hrefs) == 2
+
+    for {href, index} <- Enum.with_index(hrefs) do
+      target = edge_target(export, source, index)
+      assert read_resource(export, target) == @utf8_bom <> "FOO"
+      assert_opens(export, source, target, href)
+    end
+
+    assert leaf = Store.find_processed({"#{url}/slash/foo", "slash"})
+    assert Store.find_processed({"#{url}/slash/foo/", "slash"}) == leaf
   end
 
   test "a directory url keeps relative links inside that directory", %{
@@ -102,29 +113,29 @@ defmodule Crawler.CrawlOfflinePathsTest do
       |> Plug.Conn.resp(200, "CHILD")
     end)
 
+    key = make_ref()
+
     {:ok, parent} =
       start_crawl("#{url}/dot/about.me",
         scope: "dotted",
-        workers: 1,
-        save_to: tmp("behavior-dotted"),
-        req_options: req_options
+        workers: 2,
+        save_to: Path.join(tmp(unique_scope("behavior-dotted")), "archive"),
+        req_options: req_options,
+        parser: Crawler.ManagedSnapshotHelpers.GateParser,
+        managed_test_gates: [{"#{url}/dot/about.me", "a", self(), key}]
       )
 
-    {:ok, child} =
-      start_crawl("#{url}/dot/about.me/team",
-        scope: "dotted",
-        queue: parent[:queue],
-        save_to: tmp("behavior-dotted"),
-        req_options: req_options
-      )
+    assert_receive {:managed_parser_held, ^key, held, _, _, _}, 2_000
+    on_exit(fn -> send(held, {:managed_parser_release, key}) end)
+    {:ok, child} = start_crawl("#{url}/dot/about.me/team", parent)
+    send(held, {:managed_parser_release, key})
+    export = ready_export(child)
 
-    wait(fn ->
-      refute Crawler.running?(child)
+    assert read_resource(export, resource_for_url(export, "#{url}/dot/about.me")) ==
+             @utf8_bom <> "PARENT"
 
-      root = tmp("behavior-dotted/#{site.path}/dot")
-      assert File.read!(Path.join(root, "about.me/__index.html")) == @utf8_bom <> "PARENT"
-      assert File.read!(Path.join(root, "about.me/team/__index.html")) == @utf8_bom <> "CHILD"
-    end)
+    assert read_resource(export, resource_for_url(export, "#{url}/dot/about.me/team")) ==
+             @utf8_bom <> "CHILD"
   end
 
   test "saved xhtml resolves a directory base and drops the live tag", %{
@@ -153,19 +164,20 @@ defmodule Crawler.CrawlOfflinePathsTest do
       start_crawl(page,
         scope: "xhtml",
         workers: 2,
-        save_to: tmp("behavior-xhtml"),
+        save_to: Path.join(tmp(unique_scope("behavior-xhtml")), "archive"),
         req_options: req_options
       )
 
-    wait(fn ->
-      refute Crawler.running?(opts)
-      assert Store.find_processed({"#{url}/xhtml/dir/intro", "xhtml"})
-
-      html = File.read!(tmp("behavior-xhtml/#{site.path}/xhtml/page", "__index.html"))
-      refute html =~ ~r/<base[^>]+href=['"]https?:\/\//i
-      assert html =~ "intro"
-      refute html =~ ~s|href="intro"|
-    end)
+    export = ready_export(opts)
+    assert Store.find_processed({"#{url}/xhtml/dir/intro", opts.scope})
+    source = resource_for_url(export, page)
+    target = reference_target(export, source, "#{url}/xhtml/dir/intro")
+    html = read_resource(export, source)
+    refute html =~ ~r/<base[^>]+href=['"]https?:\/\//i
+    assert [href] = html |> Floki.parse_document!() |> Floki.attribute("a", "href")
+    assert_opens(export, source, target, href)
+    assert target["content_type"] == "application/xhtml+xml"
+    assert read_resource(export, target) == "INTRO"
   end
 
   test "saved html drops a live base href", %{site: site, url: url, req_options: req_options} do
@@ -190,19 +202,19 @@ defmodule Crawler.CrawlOfflinePathsTest do
       start_crawl(page,
         scope: "base",
         workers: 2,
-        save_to: tmp("behavior-base"),
+        save_to: Path.join(tmp(unique_scope("behavior-base")), "archive"),
         req_options: req_options
       )
 
-    wait(fn ->
-      refute Crawler.running?(opts)
-      assert Store.find_processed({"#{url}/base/dir/next", "base"})
-
-      html = File.read!(tmp("behavior-base/#{site.path}/base/page", "__index.html"))
-      refute html =~ ~r/<base[^>]+href=['"]https?:\/\//i
-      refute html =~ ~s|href="next"|
-      refute html =~ "#{url}/base/dir/next"
-      assert html =~ "next/__index.html"
-    end)
+    export = ready_export(opts)
+    assert Store.find_processed({"#{url}/base/dir/next", opts.scope})
+    source = resource_for_url(export, page)
+    target = reference_target(export, source, "#{url}/base/dir/next")
+    html = read_resource(export, source)
+    refute html =~ ~r/<base[^>]+href=['"]https?:\/\//i
+    assert [href] = html |> Floki.parse_document!() |> Floki.attribute("a", "href")
+    assert_opens(export, source, target, href)
+    assert target["content_type"] == "text/html"
+    assert read_resource(export, target) == @utf8_bom <> "NEXT"
   end
 end

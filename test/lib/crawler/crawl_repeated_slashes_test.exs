@@ -1,18 +1,17 @@
 defmodule Crawler.CrawlRepeatedSlashesTest do
   use Crawler.TestCase, async: false
 
-  alias Crawler.Linker.Snapshot
   alias Crawler.RequestLog
   alias Crawler.Store
 
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
   test "repeated trailing slashes keep their HTTP requests, stored pages, and files distinct", %{
     site: site,
     url: url,
     req_options: req_options
   } do
-    root = tmp("crawl-repeated-trailing-slashes")
+    root = Path.join(tmp(unique_scope("crawl-repeated-trailing-slashes")), "archive")
     scope = unique_scope("repeated-trailing-slashes")
     hub = url <> "/trail/entry"
     requests = RequestLog.new()
@@ -39,28 +38,34 @@ defmodule Crawler.CrawlRepeatedSlashesTest do
       )
 
     on_exit(fn -> Crawler.stop(opts) end)
-    await_idle(opts)
-    hits = RequestLog.entries(requests)
-    assert Enum.count(hits, &(&1 in ["/trail/a", "/trail/a/"])) == 1
-    assert length(hits) == 6
+    export = ready_export(opts)
+    source = resource_for_url(export, hub)
+    assert RequestLog.frequencies(requests) == Map.new(["/trail/entry" | paths], &{&1, 1})
     assert Store.ops_count(scope) == 6
 
-    leaves = paths -- ["/trail/a/"]
+    hrefs =
+      read_resource(export, source) |> Floki.parse_document!() |> Floki.attribute("a", "href")
 
-    for path <- leaves do
+    assert length(hrefs) == length(paths) + 1
+
+    for {path, index} <- Enum.with_index(paths ++ ["/trail/a//"]) do
       target = url <> path
-      assert Enum.count(hits, &(&1 == path)) == 1 or path == "/trail/a"
+      expected = if path == "/trail/a/", do: "BODY:/trail/a", else: "BODY:" <> path
       assert %{body: body} = Store.find_processed({target, scope})
-      assert body == "BODY:" <> path
-      assert File.read!(saved(root, target)) == body
-      assert_link_opens(root, hub, target)
+      assert body == expected
+      resource = edge_target(export, source, index)
+      assert read_resource(export, resource) == expected
+
+      assert_opens(export, source, resource, Enum.at(hrefs, index))
     end
 
     assert Store.find_processed({url <> "/trail/a", scope}) ==
              Store.find_processed({url <> "/trail/a/", scope})
 
-    saved_paths = Enum.map(leaves, &Snapshot.path(url <> &1))
-    assert length(Enum.uniq(saved_paths)) == length(leaves)
+    saved_paths =
+      for {_path, index} <- Enum.with_index(paths), do: edge_target(export, source, index)["path"]
+
+    assert length(Enum.uniq(saved_paths)) == length(paths)
   end
 
   defp serve_pages(site, requests, paths) do

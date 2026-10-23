@@ -81,6 +81,7 @@ defmodule Crawler.Options do
       },
       opts
     )
+    |> Crawler.Limits.validate!(Crawler.Cookies.limits())
   end
 
   @doc """

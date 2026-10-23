@@ -3,6 +3,7 @@ defmodule Crawler.Parser.LinkParser do
   Parses links and transforms them if necessary.
   """
 
+  alias Crawler.Analysis.Occurrence
   alias Crawler.HTMLReferences
   alias Crawler.HTMLRefresh
   alias Crawler.MediaType
@@ -33,6 +34,9 @@ defmodule Crawler.Parser.LinkParser do
       iex> )
       "{\\\"src\\\", \\\"http://hello.world\\\"}"
   """
+  def parse(%Occurrence{} = occurrence, opts, handler),
+    do: emit_occurrence(occurrence, opts, handler)
+
   def parse(
         %{name: tag, attributes: attrs, children: children, namespace: namespace},
         opts,
@@ -50,6 +54,11 @@ defmodule Crawler.Parser.LinkParser do
   end
 
   def parse({:ref, ref}, opts, handler), do: ref_result(ref, opts, handler)
+
+  @doc false
+  def emit_occurrence(%Occurrence{} = occurrence, opts, handler) do
+    handler.(Occurrence.handler_element(occurrence), Occurrence.handler_options(occurrence, opts))
+  end
 
   defp emit(tag, attrs, children, opts, handler, namespace) do
     {refs, plain} =

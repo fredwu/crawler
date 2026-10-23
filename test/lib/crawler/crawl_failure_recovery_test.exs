@@ -172,7 +172,7 @@ defmodule Crawler.CrawlFailureRecoveryTest do
     end)
   end
 
-  test "a crashed page can be fetched again without force", %{
+  test "a crashed parser can retry its retained response without force", %{
     site: site,
     url: url,
     req_options: req_options
@@ -189,23 +189,35 @@ defmodule Crawler.CrawlFailureRecoveryTest do
       |> Plug.Conn.resp(200, "boom")
     end)
 
-    ExUnit.CaptureLog.capture_log(fn ->
-      {:ok, failed} =
-        start_crawl(page,
-          scope: scope,
-          workers: 1,
-          retries: 0,
-          parser: __MODULE__.BoomParser,
-          store: Store,
-          req_options: req_options
-        )
+    {failed, _log} =
+      ExUnit.CaptureLog.with_log(fn ->
+        {:ok, failed} =
+          start_crawl(page,
+            scope: scope,
+            workers: 1,
+            retries: 0,
+            parser: __MODULE__.BoomParser,
+            store: Store,
+            req_options: req_options
+          )
 
-      wait(fn ->
-        refute Crawler.running?(failed)
-        refute Store.find({page, scope})
-        assert Agent.get(hits, & &1) == 1
+        wait(fn ->
+          refute Crawler.running?(failed)
+          refute Store.find({page, scope})
+          assert Agent.get(hits, & &1) == 1
+        end)
+
+        failed
       end)
-    end)
+
+    assert %{status: :failed} = failed_outcome = Store.target_outcome(failed.target_handle)
+    state = :sys.get_state(Store)
+    representation = state.scheduler.frontier.jobs[failed.target_handle].job.representation_id
+
+    assert %{status: :ready, source: %{receipt: receipt}} =
+             state.scheduler.representations[representation]
+
+    assert is_reference(receipt)
 
     {:ok, again} =
       start_crawl(page,
@@ -218,9 +230,25 @@ defmodule Crawler.CrawlFailureRecoveryTest do
 
     wait(fn ->
       refute Crawler.running?(again)
-      assert Agent.get(hits, & &1) == 2
+      assert Agent.get(hits, & &1) == 1
       assert %Store.Page{body: "boom"} = Store.find_processed({page, scope})
     end)
+
+    assert again.generation == failed.generation
+    assert again.target_handle != failed.target_handle
+    assert Store.target_outcome(failed.target_handle) == failed_outcome
+    assert %{status: :succeeded} = Store.target_outcome(again.target_handle)
+    state = :sys.get_state(Store)
+
+    assert state.scheduler.frontier.jobs[again.target_handle].job.representation_id ==
+             representation
+
+    assert %{status: :ready, source: %{receipt: ^receipt}} =
+             state.scheduler.representations[representation]
+
+    assert Store.ops_count(scope) == 1
+    assert Store.pending_count(scope) == 0
+    assert Store.inflight_count(scope) == 0
   end
 
   test "a linked page does not inherit the parent's redirect or headers", %{

@@ -22,19 +22,17 @@ defmodule Crawler.Snapper.HTMLTokenScopeTest do
 
       prefix = ~s|<a href="real">Real</a>|
       target = "http://example.com/blog/real"
-      href = Linker.offline_link(@page, target)
       assert discovered(prefix <> source) == [target]
-      assert rewrite(prefix <> source, @page) == ~s|<a href="#{href}">Real</a>| <> source
+      assert rewrite(prefix <> source, @page) == ~s|<a href="#{target}">Real</a>| <> source
     end
   end
 
   test "an unfinished base cannot change the preceding real anchor destination" do
     source = ~s|<a href="next">Real</a><base href="/wrong/"|
     target = "http://example.com/blog/next"
-    href = Linker.offline_link(@page, target)
     assert discovered(source) == [target]
     assert HTMLSpans.base_tags(source) == []
-    assert rewrite(source, @page) == ~s|<a href="#{href}">Real</a><base href="/wrong/"|
+    assert rewrite(source, @page) == ~s|<a href="#{target}">Real</a><base href="/wrong/"|
   end
 
   for prefix <- [
@@ -52,11 +50,10 @@ defmodule Crawler.Snapper.HTMLTokenScopeTest do
 
       source = inert <> ~s|</template><a href="next">Out</a>|
       target = "http://example.com/blog/next"
-      href = Linker.offline_link(@page, target)
 
       assert discovered(source) == [target]
       assert HTMLSpans.base_tags(source) == []
-      assert rewrite(source, @page) == inert <> ~s|</template><a href="#{href}">Out</a>|
+      assert rewrite(source, @page) == inert <> ~s|</template><a href="#{target}">Out</a>|
     end
   end
 
@@ -67,10 +64,9 @@ defmodule Crawler.Snapper.HTMLTokenScopeTest do
 
     source = inert <> ~s|</template><a href="next">Out</a>|
     target = "http://example.com/blog/next"
-    href = Linker.offline_link(@page, target)
 
     assert discovered(source) == [target]
-    assert rewrite(source, @page) == inert <> ~s|</template><a href="#{href}">Out</a>|
+    assert rewrite(source, @page) == inert <> ~s|</template><a href="#{target}">Out</a>|
   end
 
   test "a real matching foreign close after a template restores subsequent HTML references" do
@@ -79,10 +75,9 @@ defmodule Crawler.Snapper.HTMLTokenScopeTest do
 
     source = inert <> ~s|<a href="next">Out</a>|
     target = "http://example.com/blog/next"
-    href = Linker.offline_link(@page, target)
 
     assert discovered(source) == [target]
-    assert rewrite(source, @page) == inert <> ~s|<a href="#{href}">Out</a>|
+    assert rewrite(source, @page) == inert <> ~s|<a href="#{target}">Out</a>|
   end
 
   defp discovered(source) do

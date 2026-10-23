@@ -1,6 +1,7 @@
 defmodule Crawler.Parser.Srcset do
   @moduledoc false
 
+  alias Crawler.Analysis.Budget
   alias Crawler.HTMLSpans
 
   @candidate ~r/^[\t\n\f\r ,]*([^\t\n\f\r ]+)/
@@ -18,19 +19,29 @@ defmodule Crawler.Parser.Srcset do
     HTMLSpans.rewrite(value, edits)
   end
 
-  defp spans(value), do: collect(value, 0, [])
+  def spans(value) do
+    {:ok, spans, _budget} = spans_result(value, Budget.unlimited())
+    spans
+  end
 
-  defp collect(value, offset, acc) do
+  def spans_result(value, budget), do: collect(value, 0, [], budget)
+
+  defp collect(value, offset, acc, budget) do
     case Regex.run(@candidate, value, return: :index) do
       [{0, consumed}, {start, length}] ->
-        raw = binary_part(value, start, length)
-        url = String.trim_trailing(raw, ",")
-        {tail, consumed} = candidate_tail(value, consumed, raw)
-        acc = if url == "", do: acc, else: [{offset + start, byte_size(url), url} | acc]
-        collect(tail, offset + consumed, acc)
+        with {:ok, budget} <- Budget.charge(budget, Budget.cost(:token), facts: 1),
+             {:ok, budget} <- Budget.reserve(budget, length + Budget.cost(:binary)) do
+          raw = binary_part(value, start, length)
+          url = String.trim_trailing(raw, ",")
+          {tail, consumed} = candidate_tail(value, consumed, raw)
+          acc = if url == "", do: acc, else: [{offset + start, byte_size(url), url} | acc]
+
+          with {:ok, budget} <- Budget.release(budget, length + Budget.cost(:binary)),
+               do: collect(tail, offset + consumed, acc, budget)
+        end
 
       nil ->
-        Enum.reverse(acc)
+        {:ok, Enum.reverse(acc), budget}
     end
   end
 

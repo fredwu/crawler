@@ -26,6 +26,18 @@ defmodule Crawler.Fetcher.Policer do
     end
   end
 
+  @doc false
+  def admitted(opts) do
+    with {_, true} <- within_fetch_depth?(opts),
+         {_, true} <- acceptable_uri_scheme?(opts),
+         {:perform_url_filtering, true} <- perform_url_filtering(opts) do
+      {:ok, opts}
+    else
+      {:error, _} = error -> error
+      {failure, _} -> police_warn(failure, opts)
+    end
+  end
+
   defp within_max_pages?(%{max_pages: :infinity} = _opts), do: {:within_max_pages?, true}
 
   defp within_max_pages?(%{max_pages: max_pages} = opts) when is_integer(max_pages) do

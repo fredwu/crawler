@@ -19,6 +19,9 @@ defmodule Crawler.Queue do
 
   def feeder(pid) when is_pid(pid), do: GenServer.call(pid, :feeder)
 
+  @doc false
+  def admission_handoff(pid) when is_pid(pid), do: GenServer.call(pid, :admission_handoff)
+
   def stop(pid) when is_pid(pid) do
     if Process.alive?(pid) do
       try do
@@ -47,7 +50,14 @@ defmodule Crawler.Queue do
 
       :ok = Store.attach_owner(feeder, self(), opts[:scope])
       {:links, links} = Process.info(self(), :links)
-      {:ok, %{feeder: feeder, children: links -- existing}}
+
+      admission =
+        case opts[:queue_admission_caller] do
+          caller when is_pid(caller) -> {caller, Process.monitor(caller)}
+          _ -> nil
+        end
+
+      {:ok, %{feeder: feeder, children: links -- existing, admission: admission}}
     catch
       kind, reason ->
         shutdown_started(existing)
@@ -58,7 +68,18 @@ defmodule Crawler.Queue do
   @impl true
   def handle_call(:feeder, _from, state), do: {:reply, state.feeder, state}
 
+  def handle_call(:admission_handoff, {caller, _}, %{admission: {caller, monitor}} = state) do
+    Process.demonitor(monitor, [:flush])
+    {:reply, :ok, %{state | admission: nil}}
+  end
+
+  def handle_call(:admission_handoff, _from, state),
+    do: {:reply, {:error, :not_admission_owner}, state}
+
   @impl true
+  def handle_info({:DOWN, monitor, :process, caller, _}, %{admission: {caller, monitor}} = state),
+    do: {:stop, :shutdown, state}
+
   def handle_info({:EXIT, _pid, reason}, state), do: {:stop, reason, state}
   def handle_info(_message, state), do: {:noreply, state}
 

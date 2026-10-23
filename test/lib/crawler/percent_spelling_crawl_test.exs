@@ -103,7 +103,27 @@ defmodule Crawler.PercentSpellingCrawlTest do
           "http://user:a#b@example.com/a",
           "http://user:a/b@example.com/a"
         ] do
-      assert crawl_requests(seed) == []
+      observer = self()
+      scope = unique_scope("rejected-authority-seed")
+      on_exit(fn -> Store.dispose_scope(scope) end)
+
+      adapter = fn request ->
+        send(observer, {:unexpected_seed_request, URI.to_string(request.url)})
+        {request, Req.Response.new(status: 200, body: "UNEXPECTED")}
+      end
+
+      assert {:error, %Crawler.HTTP.InvalidURL{url: ^seed}} =
+               start_crawl(seed,
+                 scope: scope,
+                 respect_robots: false,
+                 req_options: [adapter: adapter, retry: false]
+               )
+
+      refute_receive {:unexpected_seed_request, _}
+      refute Store.find({seed, scope})
+      assert Store.ops_count(scope) == 0
+      assert Store.pending_count(scope) == 0
+      assert Store.inflight_count(scope) == 0
     end
   end
 

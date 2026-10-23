@@ -1,9 +1,9 @@
 defmodule Crawler.Store.State do
   @moduledoc false
 
-  alias Crawler.Cookies
   alias Crawler.Store.Budget
   alias Crawler.Store.Claims
+  alias Crawler.Store.CookieProof
   alias Crawler.Store.Scope
   alias Crawler.Store.Settlements
   alias Crawler.Store.Work
@@ -11,22 +11,110 @@ defmodule Crawler.Store.State do
   @enforce_keys [:incarnation]
   defstruct incarnation: nil,
             scopes: %{},
+            executions: %{},
+            exports: %{},
+            export_bytes: 0,
+            export_monitors: %{},
+            export_actors: %{},
+            export_waiters: %{},
+            export_waiter_leases: %{},
+            export_pending: Crawler.Frontier.Ring.new(),
+            export_scheduled?: false,
+            export_drivers: %{},
+            export_io: %{},
+            export_io_monitors: %{},
+            export_io_holders: %{},
+            export_io_runs: %{},
+            export_io_resources: %{},
+            source_caches: %{},
+            source_cache_bytes: 0,
+            source_cache_run_bytes: %{},
+            source_cache_run_refunds: %{},
+            source_cache_refund_runs: Crawler.Frontier.Ring.new(),
+            source_cache_workspace: 0,
+            source_cache_pending: Crawler.Frontier.Ring.new(),
+            source_cache_scheduled?: false,
+            source_cache_refund: 0,
+            source_cache_refund_scheduled?: false,
+            source_cache_releases: Crawler.Frontier.Ring.new(),
+            source_cache_resources: %{},
+            source_cache_workspaces: %{},
+            source_cache_leases: %{},
+            scheduler: nil,
+            resources: nil,
+            resource_monitors: %{},
+            resource_refs: %{},
+            resource_relays: %{},
+            resource_credit_scheduled?: false,
+            resource_waiters: Crawler.Frontier.Index.new(),
+            pending_executions: %{},
+            execution_returns: %{},
+            return_producers: %{},
+            return_callers: %{},
+            return_uses: %{},
+            return_owned: MapSet.new(),
+            direct_waiters: %{},
+            direct_targets: %{},
+            direct_owners: %{},
+            direct_runs: %{},
+            retired_direct_runs: Crawler.Frontier.Ring.new(),
+            direct_workers: %{},
+            direct_monitors: %{},
+            waiting_workers: %{},
+            waiting_refs: %{},
+            waiting_bytes: 0,
+            scheduler_scheduled?: false,
+            retiring_runs: Crawler.Frontier.Ring.new(),
+            retiring_queues: Crawler.Frontier.Ring.new(),
+            retiring_scheduled?: false,
+            scheduler_monitors: %{},
+            scheduler_workers: %{},
+            scope_runs: %{},
+            scope_disposals: %{},
+            disposal_order: Crawler.Frontier.Ring.new(),
+            disposal_scheduled?: false,
+            execution_monitors: %{},
+            execution_workers: %{},
+            execution_runs: %{},
+            execution_claims: %{},
+            cookie_outcomes: %{},
+            cookie_bytes: 0,
+            css_jobs: %{},
+            css_unsettled: %{},
+            css_runners: %{},
+            css_run_jobs: %{},
+            css_executions: %{},
+            css_pending: Crawler.Frontier.Ring.new(),
             owners: %{},
             closing: MapSet.new(),
             monitors: %{},
             claims: %Claims{},
             settlements: %Settlements{},
             cookies: %{},
-            robots: %{}
+            retained_pages: %{},
+            persistent_resources: MapSet.new(),
+            persistent_counts: %{},
+            source_resources: MapSet.new(),
+            robots: %{},
+            robots_receipts: %{}
 
-  def new, do: %__MODULE__{incarnation: make_ref()}
+  def new,
+    do: %__MODULE__{
+      incarnation: make_ref(),
+      scheduler: Crawler.Store.Scheduler.new(),
+      resources: Crawler.Store.Resources.new()
+    }
+
+  def register_queue(state, scope, queue), do: update_work(state, scope, queue, & &1)
 
   def generation(state, scope), do: {state.incarnation, scope, get_scope(state, scope).revision}
 
   def ensure_scope(state, scope), do: update_scope(state, scope, & &1)
 
   def current?(_state, _scope, nil), do: true
-  def current?(state, scope, generation), do: generation(state, scope) === generation
+
+  def current?(state, scope, generation),
+    do: generation(state, scope) === generation and get_scope(state, scope).outcome == :open
 
   def queue_active?(_state, _scope, nil), do: true
   def queue_active?(state, scope, queue), do: Map.has_key?(get_scope(state, scope).work, queue)
@@ -53,18 +141,6 @@ defmodule Crawler.Store.State do
     %{state | scopes: Map.new(state.scopes, fn {name, scope} -> {name, %{scope | ops: 0}} end)}
   end
 
-  def deferred_scopes(state) do
-    for {name, _scope} <- state.scopes, deferred?(state, name), do: name
-  end
-
-  def deferred?(state, scope) do
-    state
-    |> get_scope(scope)
-    |> Map.fetch!(:work)
-    |> Map.values()
-    |> Enum.any?(fn work -> not :queue.is_empty(work.deferred) end)
-  end
-
   def increment(state, :ops, scope, _queue) do
     update_scope(state, scope, &%{&1 | ops: &1.ops + 1})
   end
@@ -83,36 +159,6 @@ defmodule Crawler.Store.State do
     else
       {:full, state}
     end
-  end
-
-  def start_work(state, opts) do
-    scope = opts[:scope]
-    queue = opts[:queue]
-
-    case budget_status(state, scope, opts[:max_pages]) do
-      :ok ->
-        {:ok, increment(state, :inflight, scope, queue)}
-
-      :wait when is_pid(queue) ->
-        {:deferred, update_work(state, scope, queue, &Work.defer(&1, opts))}
-
-      _full ->
-        {:full, state}
-    end
-  end
-
-  def resume_deferred(state, scope_name) do
-    scope = get_scope(state, scope_name)
-    inflight = count(state, :inflight, scope_name)
-
-    {work, events, _count} =
-      Enum.reduce(scope.work, {%{}, [], 0}, fn {queue, work}, {work_by_queue, events, count} ->
-        {work, ready, count} = Work.resume(work, scope.ops, inflight, count)
-        {Map.put(work_by_queue, queue, work), [ready | events], count}
-      end)
-
-    state = %{state | scopes: Map.put(state.scopes, scope_name, %{scope | work: work})}
-    {events |> Enum.reverse() |> List.flatten(), state}
   end
 
   def note_enqueued(state, scope, queue), do: increment(state, :pending, scope, queue)
@@ -150,18 +196,30 @@ defmodule Crawler.Store.State do
 
   def take_idle_pages(state, name) do
     scope = get_scope(state, name)
+    run = {name, generation(state, name)}
 
     {work, pages} =
-      Enum.reduce(scope.work, {%{}, MapSet.new()}, fn
-        {queue, %Work{pending: 0, inflight: 0} = work}, {queues, pages} when is_pid(queue) ->
-          {Map.put(queues, queue, %{work | pages: MapSet.new()}), MapSet.union(pages, work.pages)}
-
-        {queue, work}, {queues, pages} ->
-          {Map.put(queues, queue, work), pages}
-      end)
+      Enum.reduce(scope.work, {%{}, MapSet.new()}, &take_idle_queue(state, run, &1, &2))
 
     {pages, %{state | scopes: Map.put(state.scopes, name, %{scope | work: work})}}
   end
+
+  defp take_idle_queue(
+         state,
+         run,
+         {queue, %Work{pending: 0, inflight: 0} = work},
+         {queues, pages}
+       )
+       when is_pid(queue) or is_nil(queue) do
+    if Crawler.Frontier.queue_pending(state.scheduler.frontier, run, queue) == 0 do
+      {Map.put(queues, queue, %{work | pages: MapSet.new()}), MapSet.union(pages, work.pages)}
+    else
+      {Map.put(queues, queue, work), pages}
+    end
+  end
+
+  defp take_idle_queue(_state, _run, {queue, work}, {queues, pages}),
+    do: {Map.put(queues, queue, work), pages}
 
   def drop_scope(state, scope) do
     {waiters, state} = clear_scope_caches(state, scope)
@@ -176,27 +234,27 @@ defmodule Crawler.Store.State do
       |> Enum.flat_map(&loading_waiters/1)
 
     {waiters,
-     %{state | cookies: Map.delete(state.cookies, scope), robots: Map.delete(state.robots, scope)}}
+     %{
+       state
+       | cookies: Map.delete(state.cookies, scope),
+         robots: Map.delete(state.robots, scope),
+         cookie_outcomes: Map.delete(state.cookie_outcomes, scope),
+         cookie_bytes:
+           state.cookie_bytes - Crawler.Cookies.Jar.retained_cost(state.cookies[scope])
+     }}
   end
 
-  def save_cookies(state, nil, _url, _headers, _generation, _context), do: state
-
   def save_cookies(state, scope, url, headers, generation, context) do
-    if current?(state, scope, generation) and queue_active?(state, scope, context[:queue]) do
-      jar = Cookies.store(Map.get(state.cookies, scope, []), url, headers, context)
-      %{state | cookies: Map.put(state.cookies, scope, jar)}
-    else
-      state
+    case CookieProof.save(state, scope, url, headers, generation, context, :unbound) do
+      {{:ok, _}, state} -> state
+      _ -> state
     end
   end
 
-  def cookie_header(_state, nil, _url, _generation, _context), do: nil
-
   def cookie_header(state, scope, url, generation, context) do
-    if current?(state, scope, generation) and queue_active?(state, scope, context[:queue]) do
-      state.cookies
-      |> Map.get(scope, [])
-      |> Cookies.header(url, context)
+    case CookieProof.snapshot(state, scope, url, generation, context, :unbound) do
+      {{:ok, header, _}, state} -> {header, state}
+      _ -> {nil, state}
     end
   end
 
@@ -235,6 +293,17 @@ defmodule Crawler.Store.State do
       _ ->
         {[], state}
     end
+  end
+
+  def forget_robots_owner(state, scope, pid, queue) do
+    Enum.reduce(Map.get(state.robots, scope, %{}), {[], state}, fn
+      {origin, {:loading, _ref, ^pid, ^queue, _waiters}}, {replies, state} ->
+        {waiters, state} = forget_robots(state, scope, origin, pid, queue)
+        {waiters ++ replies, state}
+
+      _, result ->
+        result
+    end)
   end
 
   def retire_robots_queue(state, queue) do
@@ -340,7 +409,8 @@ defmodule Crawler.Store.State do
 
       {removed, work} ->
         revision = if map_size(work) == 0, do: make_ref(), else: scope.revision
-        {%{scope | work: work, revision: revision}, removed.pages}
+        timer = if map_size(work) == 0, do: nil, else: scope.run_timer
+        {%{scope | work: work, revision: revision, run_timer: timer}, removed.pages}
     end
   end
 

@@ -1,7 +1,6 @@
 defmodule Crawler.URLHostTest do
   use ExUnit.Case, async: true
 
-  alias Crawler.Linker.Snapshot
   alias Crawler.URL
   alias Crawler.URL.Host
 
@@ -30,7 +29,6 @@ defmodule Crawler.URLHostTest do
       assert URL.canonical(url) == expected
       assert URL.resolve(url, "http://base.com/") == {:ok, expected}
       assert URL.resolve("//#{host}/page", "http://base.com/") == {:ok, expected}
-      assert Snapshot.path(url) == Snapshot.path(expected)
     end
 
     assert URL.normalize("http://foo。com./page") == "http://foo.com./page"
@@ -44,7 +42,6 @@ defmodule Crawler.URLHostTest do
           {"http://[::1]:81/page", "http://[::1]/page"}
         ] do
       refute URL.canonical(left) == URL.canonical(right)
-      refute Snapshot.path(left) == Snapshot.path(right)
     end
   end
 

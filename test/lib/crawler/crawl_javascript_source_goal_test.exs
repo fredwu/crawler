@@ -1,9 +1,8 @@
 defmodule Crawler.CrawlJavascriptSourceGoalTest do
   use Crawler.TestCase, async: false
 
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
-  alias Crawler.Linker
   alias Crawler.Store
   alias Crawler.URL
 
@@ -23,7 +22,7 @@ defmodule Crawler.CrawlJavascriptSourceGoalTest do
     req_options: req_options
   } do
     scope = unique_scope("javascript-source-goals")
-    root = tmp(scope)
+    root = tmp(scope, "archive")
     page = url <> "/index.html"
 
     external =
@@ -57,7 +56,10 @@ defmodule Crawler.CrawlJavascriptSourceGoalTest do
     {:ok, opts} =
       start_crawl(page,
         scope: scope,
-        workers: 2,
+        workers: 1,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16 * 1024 * 1024,
+        max_manifest_bytes: 16 * 1024 * 1024,
         max_depths: 4,
         retries: 0,
         assets: ["js"],
@@ -67,39 +69,77 @@ defmodule Crawler.CrawlJavascriptSourceGoalTest do
         req_options: req_options
       )
 
-    wait(2_000, fn -> refute Crawler.running?(opts) end)
+    export = ready_export(opts)
+    page_resource = resource_for_url(export, page)
+
+    saved_page = read_resource(export, page_resource)
+
+    [classic_source, module_source] =
+      List.flatten(
+        Regex.scan(~r/<script(?: type="module")?>(.*?)<\/script>/s, saved_page,
+          capture: :all_but_first
+        )
+      )
+
+    assert [classic_reference] =
+             Regex.run(~r/import\("([^"]+)"\);$/, classic_source, capture: :all_but_first)
+
+    assert [module_reference] =
+             Regex.run(~r/import\("([^"]+)"\);$/, module_source, capture: :all_but_first)
 
     inline =
-      ~s|<script>#{rewritten(@source, page, :script)}</script>| <>
-        ~s|<script type="module">#{rewritten(@source, page, :module)}</script>|
+      ~s|<script>#{rewritten(@source, export, page_resource, :script, "real", classic_reference)}</script>| <>
+        ~s|<script type="module">#{rewritten(@source, export, page_resource, :module, "real", module_reference)}</script>|
 
     expected_page =
       Enum.reduce(@apps, inline <> external, fn {directory, _goal}, body ->
         String.replace(
           body,
           ~s|"/#{directory}/app.js"|,
-          ~s|"#{Linker.offline_link(page, url <> "/#{directory}/app.js")}"|
+          ~s|"#{relative_reference(page_resource, reference_target(export, page_resource, url <> "/#{directory}/app.js"))}"|
         )
       end)
 
-    assert File.read!(saved(root, page)) == <<0xEF, 0xBB, 0xBF>> <> expected_page
+    assert read_resource(export, page_resource) == <<0xEF, 0xBB, 0xBF>> <> expected_page
     assert Store.find_processed({page, scope}).body == source
 
     for {directory, goal} <- @apps do
       app = url <> "/#{directory}/app.js"
       assert Store.find_processed({app, scope}).opts.javascript_goal == goal
-      assert File.read!(saved(root, app)) == rewritten(@source, app, goal)
-      assert_link_opens(root, page, app)
-      assert_link_opens(root, app, url <> "/#{directory}/real.js")
+      app_resource = reference_target(export, page_resource, app)
+      assert read_resource(export, app_resource) == rewritten(@source, export, app_resource, goal)
+      assert_link_opens(export, page_resource, app_resource)
+
+      assert_link_opens(
+        export,
+        app_resource,
+        reference_target(export, app_resource, url <> "/#{directory}/real.js")
+      )
     end
 
     for directory <- @directories do
       child = url <> directory <> "/real.js"
       leaf = url <> directory <> "/leaf.js"
       assert Store.find_processed({child, scope}).opts.javascript_goal == :module
-      assert File.read!(saved(root, child)) == rewritten(@child_source, child, :module, "leaf")
-      assert File.read!(saved(root, leaf)) == "export {};"
-      assert_link_opens(root, child, leaf)
+
+      child_edges = Enum.filter(export.manifest["references"], &(&1["url"] == child))
+      assert child_edges != []
+
+      child_resources =
+        child_edges
+        |> Enum.map(&edge_target(export, resource_by_id(export, &1["from"]), &1["edge"]))
+        |> Enum.uniq_by(& &1["id"])
+
+      for child_resource <- child_resources do
+        leaf_resource = reference_target(export, child_resource, leaf)
+
+        assert read_resource(export, child_resource) ==
+                 rewritten(@child_source, export, child_resource, :module, "leaf")
+
+        assert read_resource(export, leaf_resource) == "export {};"
+        assert_link_opens(export, child_resource, leaf_resource)
+      end
+
       refute Store.find({url <> directory <> "/child-hidden.js", scope})
     end
 
@@ -121,15 +161,34 @@ defmodule Crawler.CrawlJavascriptSourceGoalTest do
     end)
   end
 
-  defp rewritten(source, page, goal, child \\ "real") do
-    {:ok, target} = URL.resolve("./#{child}.js", page)
+  defp rewritten(source, export, resource, goal, child \\ "real", actual_reference \\ nil) do
+    {:ok, target_url} = URL.resolve("./#{child}.js", resource["url"])
 
-    source =
-      String.replace(source, ~s|"./#{child}.js"|, ~s|"#{Linker.offline_link(page, target)}"|)
+    targets =
+      export.manifest["references"]
+      |> Enum.filter(&(&1["from"] == resource["id"] and &1["url"] == target_url))
+      |> Enum.map(&edge_target(export, resource, &1["edge"]))
+
+    assert targets != []
+    references = targets |> Enum.map(&relative_reference(resource, &1)) |> Enum.uniq()
+
+    href =
+      case actual_reference do
+        nil ->
+          assert [only] = references
+          only
+
+        actual ->
+          assert actual in references
+          actual
+      end
+
+    source = String.replace(source, ~s|"./#{child}.js"|, ~s|"#{href}"|)
 
     if goal == :script do
-      {:ok, hidden} = URL.resolve("./hidden.js", page)
-      String.replace(source, ~S|".\/hidden.js"|, ~s|"#{Linker.offline_link(page, hidden)}"|)
+      {:ok, hidden_url} = URL.resolve("./hidden.js", resource["url"])
+      hidden = reference_target(export, resource, hidden_url)
+      String.replace(source, ~S|".\/hidden.js"|, ~s|"#{relative_reference(resource, hidden)}"|)
     else
       source
     end

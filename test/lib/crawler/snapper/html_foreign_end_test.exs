@@ -1,7 +1,7 @@
 defmodule Crawler.Snapper.HTMLForeignEndTest do
   use Crawler.OfflineLinkCase, async: true
 
-  import Crawler.SnapshotHelpers, only: [saved: 2]
+  import Crawler.SnapshotHelpers, only: [saved_artifact: 2]
   import Crawler.TestHelpers, only: [tmp: 1]
 
   alias Crawler.Parser
@@ -22,10 +22,11 @@ defmodule Crawler.Snapper.HTMLForeignEndTest do
       assert HtmlParser.parse(source, %{}) == []
       assert rewrite(source, @page) == source
 
-      assert {:ok, _opts} =
+      assert {:ok, artifact} =
                Snapper.snap(source, %{
                  url: @page,
                  save_to: root,
+                 public_id: "foreignend000000000000001",
                  content_type: "text/html",
                  html_tag: "a",
                  assets: [],
@@ -33,7 +34,7 @@ defmodule Crawler.Snapper.HTMLForeignEndTest do
                  max_depths: 3
                })
 
-      assert File.read!(saved(root, @page)) == <<0xEF, 0xBB, 0xBF>> <> source
+      assert File.read!(saved_artifact(root, artifact)) == <<0xEF, 0xBB, 0xBF>> <> source
     end
 
     test "#{foreign} </#{closing}> rewrites only real links after the script closes" do
@@ -43,10 +44,10 @@ defmodule Crawler.Snapper.HTMLForeignEndTest do
 
       source = literal <> ~s|<base href="/docs/"><a href="next">Out</a>|
       target = "http://example.com/docs/next"
-      href = Linker.offline_link(@page, target)
+      href = target
 
       assert discovered(source) == [target]
-      assert rewrite(source, @page) == literal <> ~s|<a href="#{href}">Out</a>|
+      assert rewrite(source, @page) == literal <> ~s|<base><a href="#{href}">Out</a>|
     end
 
     test "#{foreign} </#{closing}> recovery keeps template links inert" do
@@ -56,7 +57,7 @@ defmodule Crawler.Snapper.HTMLForeignEndTest do
 
       source = inert <> ~s|<a href="next">Out</a>|
       target = "http://example.com/blog/next"
-      href = Linker.offline_link(@page, target)
+      href = target
 
       assert discovered(source) == [target]
       assert rewrite(source, @page) == inert <> ~s|<a href="#{href}">Out</a>|

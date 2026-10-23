@@ -29,7 +29,7 @@ defmodule Crawler.URLAuthorityTest do
       assert URL.resolve(url, @base) == :skip
       assert URL.resolve("//#{authority}/target", @base) == :skip
       assert URL.normalize(url) == url
-      assert Linker.offline_link(@base, url) == url
+      assert Linker.url(@base, url) == url
     end
   end
 

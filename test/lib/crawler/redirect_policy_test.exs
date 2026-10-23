@@ -5,7 +5,7 @@ defmodule Crawler.RedirectPolicyTest do
   alias Crawler.Store
 
   import Crawler.RedirectHelpers
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
   alias Crawler.Fetcher.UrlFilter
   alias Crawler.RedirectHelpers.HostFilter
 
@@ -34,7 +34,9 @@ defmodule Crawler.RedirectPolicyTest do
     url: url,
     req_options: req_options
   } do
-    root = tmp("page-identity-reject")
+    parent = tmp("page-identity-reject-#{System.os_time(:nanosecond)}")
+    on_exit(fn -> File.rm_rf(parent) end)
+    root = Path.join(parent, "rejected")
     scope = "page-identity-reject"
     public = "#{url}/id/public"
     secret = "#{url}/id/secret"
@@ -66,14 +68,17 @@ defmodule Crawler.RedirectPolicyTest do
     assert Store.ops_count(scope) == 0
     refute Store.find({public, scope})
     refute Store.find({secret, scope})
-    refute File.exists?(saved(root, public))
-    refute File.exists?(saved(root, secret))
+    rejected = ready_export(opts)
+    assert rejected.manifest["resources"] == []
 
     html(site, "/id/secret", ~s(<p>SECRET</p><a href="next">next</a>))
     text(site, "/id/next", "NEXT")
 
+    root = Path.join(Path.dirname(root), "accepted")
+
     again =
       crawl(public,
+        force: true,
         scope: scope,
         workers: 1,
         max_depths: 2,
@@ -85,17 +90,24 @@ defmodule Crawler.RedirectPolicyTest do
     await_idle(again)
 
     assert count(hits) == 2
-    assert File.read!(saved(root, public)) =~ "SECRET"
-    assert File.read!(saved(root, secret)) =~ "SECRET"
-    assert_link_opens(root, public, nxt)
-    assert_link_opens(root, secret, nxt)
+    export = ready_export(again)
+    public_resource = resource_for_url(export, secret)
+    next_resource = reference_target(export, public_resource, nxt)
+    body = read_resource(export, public_resource)
+    assert body =~ "SECRET"
+    assert read_resource(export, next_resource) == "NEXT"
+    assert [href] = Regex.run(~r/<a href="([^"]+)">/, body, capture: :all_but_first)
+    assert_opens(export, public_resource, next_resource, href)
+    assert public_resource["url"] == secret
     assert Store.find_processed({public, scope})
     assert Store.find_processed({secret, scope})
     assert Store.find_processed({nxt, scope})
   end
 
   test "a redirect to a rejected host or scheme is not fetched" do
-    root = tmp("page-identity-foreign")
+    parent = tmp("page-identity-foreign-#{System.os_time(:nanosecond)}")
+    on_exit(fn -> File.rm_rf(parent) end)
+    root = Path.join(parent, "export")
     scope = "page-identity-foreign"
     hub = "http://ex.com/id/hub"
 
@@ -151,11 +163,17 @@ defmodule Crawler.RedirectPolicyTest do
            }
 
     assert Store.ops_count(scope) == 1
-    refute File.read!(saved(root, hub)) =~ "LEAKED"
+    export = ready_export(opts)
+    hub_resource = resource_for_url(export, hub)
+    body = read_resource(export, hub_resource)
+    refute body =~ "LEAKED"
+    assert length(export.manifest["resources"]) == 1
+
+    Enum.each(sources, fn {url, _} -> assert body =~ url end)
 
     Enum.each(sources, fn {url, _location} ->
       refute Store.find({url, scope})
-      refute File.exists?(saved(root, url))
+      refute Enum.any?(export.manifest["resources"], &(&1["url"] == url))
     end)
 
     refute Store.find({"http://evil.test/nope", scope})
@@ -163,7 +181,9 @@ defmodule Crawler.RedirectPolicyTest do
   end
 
   test "a relative location outside the crawl is not saved" do
-    root = tmp("page-identity-rel-reject")
+    parent = tmp("page-identity-rel-reject-#{System.os_time(:nanosecond)}")
+    on_exit(fn -> File.rm_rf(parent) end)
+    root = Path.join(parent, "export")
     scope = "page-identity-rel-reject"
     hub = "http://ex.com/id/hub"
 
@@ -218,16 +238,25 @@ defmodule Crawler.RedirectPolicyTest do
            }
 
     assert Store.ops_count(scope) == 1
-    refute File.read!(saved(root, hub)) =~ "LEAKED"
+    export = ready_export(opts)
+    hub_resource = resource_for_url(export, hub)
+    body = read_resource(export, hub_resource)
+    refute body =~ "LEAKED"
+    assert length(export.manifest["resources"]) == 1
+
+    Enum.each(sources, fn {url, _} -> assert body =~ url end)
 
     Enum.each(sources, fn {url, _location} ->
       refute Store.find({url, scope})
-      refute File.exists?(saved(root, url))
+      refute Enum.any?(export.manifest["resources"], &(&1["url"] == url))
     end)
 
     refute Store.find({"http://ex.com/id/secret", scope})
     refute Store.find({"http://evil.test/nope", scope})
-    refute File.exists?(saved(root, "http://ex.com/id/secret"))
-    refute File.exists?(saved(root, "http://evil.test/nope"))
+
+    refute Enum.any?(
+             export.manifest["resources"],
+             &(&1["url"] in ["http://ex.com/id/secret", "http://evil.test/nope"])
+           )
   end
 end

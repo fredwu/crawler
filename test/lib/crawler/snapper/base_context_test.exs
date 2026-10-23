@@ -10,16 +10,15 @@ defmodule Crawler.Snapper.BaseContextTest do
       source = inactive <> ~s|<a href="next">go</a>|
       target = "http://example.com/blog/next"
       assert discovered(source) == [target]
-      href = Linker.offline_link(@page, target)
-      assert rewrite(source, @page) == inactive <> ~s|<a href="#{href}">go</a>|
+      assert rewrite(source, @page) == inactive <> ~s|<a href="#{target}">go</a>|
     end
   end
 
   test "an inactive base matching a live link retains its href literally" do
     inactive = ~s|<template><base href="next"></template>|
     source = inactive <> ~s|<a href="next">go</a>|
-    href = Linker.offline_link(@page, "http://example.com/blog/next")
-    assert rewrite(source, @page) == inactive <> ~s|<a href="#{href}">go</a>|
+    target = "http://example.com/blog/next"
+    assert rewrite(source, @page) == inactive <> ~s|<a href="#{target}">go</a>|
   end
 
   test "the first active base with href wins after an inactive base and a target-only base" do
@@ -27,8 +26,7 @@ defmodule Crawler.Snapper.BaseContextTest do
     source = inactive <> ~s|<base href="/docs/"><base href="/other/"><a href="next">go</a>|
     target = "http://example.com/docs/next"
     assert discovered(source) == [target]
-    href = Linker.offline_link(@page, target)
-    assert rewrite(source, @page) == inactive <> ~s|<a href="#{href}">go</a>|
+    assert rewrite(source, @page) == inactive <> ~s|<base><base><a href="#{target}">go</a>|
   end
 
   for {opening, closing} <- [
@@ -41,8 +39,9 @@ defmodule Crawler.Snapper.BaseContextTest do
       source = opening <> ~s|<base href="/docs/">| <> closing <> ~s|<a href="next">go</a>|
       target = "http://example.com/docs/next"
       assert discovered(source) == [target]
-      href = Linker.offline_link(@page, target)
-      assert rewrite(source, @page) == opening <> closing <> ~s|<a href="#{href}">go</a>|
+
+      assert rewrite(source, @page) ==
+               opening <> "<base>" <> closing <> ~s|<a href="#{target}">go</a>|
     end
   end
 
@@ -53,8 +52,7 @@ defmodule Crawler.Snapper.BaseContextTest do
     source = inactive <> ~s|<a href="next">go</a>|
     target = "http://example.com/blog/next"
     assert discovered(source) == [target]
-    href = Linker.offline_link(@page, target)
-    assert rewrite(source, @page) == inactive <> ~s|<a href="#{href}">go</a>|
+    assert rewrite(source, @page) == inactive <> ~s|<a href="#{target}">go</a>|
   end
 
   defp discovered(source) do

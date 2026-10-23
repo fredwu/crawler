@@ -1,10 +1,10 @@
 defmodule Crawler.Snapper.EncodingTest do
   use Crawler.TestCase, async: false
 
-  import Crawler.SnapshotHelpers
+  import Crawler.SnapshotHelpers, only: [saved_artifact: 2]
 
   alias Crawler.Charset
-  alias Crawler.Linker
+  alias Crawler.ManagedSnapshotHelpers, as: Managed
   alias Crawler.Snapper
   alias Crawler.Store
 
@@ -22,8 +22,9 @@ defmodule Crawler.Snapper.EncodingTest do
   for encoding <- [:utf8_bom, :utf16_le_bom, :utf16_be_bom, :latin1_header] do
     test "saved HTML declares UTF-8 after decoding #{encoding}" do
       encoding = unquote(encoding)
-      scope = unique_scope("snapshot-#{encoding}")
+      scope = unique_scope("snapshot-#{encoding}-#{System.pid()}")
       root = tmp(scope)
+      File.rmdir!(root)
       page = "http://ex.com/#{encoding}/page"
       target = "http://ex.com/#{encoding}/café"
       wire_target = "http://ex.com/#{encoding}/caf%c3%a9"
@@ -58,20 +59,49 @@ defmodule Crawler.Snapper.EncodingTest do
       assert {:ok, opts} =
                Crawler.crawl(page,
                  scope: scope,
-                 store: Store,
+                 store: nil,
                  scraper: Scraper,
                  encoding_test_pid: self(),
                  workers: 1,
+                 max_body: 1_048_576,
+                 max_analysis_bytes: 16_777_216,
                  max_depths: 2,
                  save_to: root,
                  respect_robots: false,
                  req_options: [adapter: adapter, retry: false]
                )
 
-      on_exit(fn -> Crawler.stop(opts) end)
-      await_idle(opts)
+      on_exit(fn ->
+        Crawler.stop(opts)
+        File.rm_rf!(root)
+      end)
 
-      assert Store.find_processed({page, scope}).body == decoded
+      export = Managed.ready_export(opts)
+
+      stored = Store.find_processed({page, scope})
+
+      assert %Store.Page{url: ^page, processed: true, fetch_tag: "a", target_handle: handle} =
+               stored
+
+      assert not is_nil(handle)
+
+      assert Map.take(Map.from_struct(stored), [
+               :body,
+               :opts,
+               :analysis,
+               :interpretation,
+               :source_revision,
+               :credit
+             ]) ==
+               %{
+                 body: nil,
+                 opts: nil,
+                 analysis: nil,
+                 interpretation: nil,
+                 source_revision: nil,
+                 credit: nil
+               }
+
       assert_receive {:scraped, ^page, ^decoded}
       assert_received {:requested, ^page}
       assert_received {:requested, ^wire_target}
@@ -79,10 +109,13 @@ defmodule Crawler.Snapper.EncodingTest do
       assert Store.find_processed({target, scope}).url == target
       assert_receive {:scraped, ^target, "<p>TARGET</p>"}
 
-      expected = ~s(<p>café</p><a href="#{Linker.offline_link(page, target)}">café</a>)
-      assert File.read!(saved(root, page)) == @utf8_bom <> expected
-      assert File.read!(saved(root, target)) == @utf8_bom <> "<p>TARGET</p>"
-      assert_link_opens(root, page, target)
+      from = Managed.resource_for_url(export, page)
+      to = Managed.reference_target(export, from, target)
+      href = Managed.relative_reference(from, to)
+      expected = ~s(<p>café</p><a href="#{href}">café</a>)
+      assert Managed.read_resource(export, from) == @utf8_bom <> expected
+      assert Managed.read_resource(export, to) == @utf8_bom <> "<p>TARGET</p>"
+      Managed.assert_opens(export, from, to, href)
     end
   end
 
@@ -91,10 +124,15 @@ defmodule Crawler.Snapper.EncodingTest do
     page = "http://ex.com/page"
     body = @utf8_bom <> "<p>café</p>"
 
-    assert {:ok, _opts} =
-             Snapper.snap(body, %{url: page, save_to: root, content_type: "text/html"})
+    assert {:ok, artifact} =
+             Snapper.snap(body, %{
+               url: page,
+               save_to: root,
+               content_type: "text/html",
+               public_id: "encoding00000000000000001"
+             })
 
-    assert File.read!(saved(root, page)) == body
+    assert File.read!(saved_artifact(root, artifact)) == body
   end
 
   test "non-HTML snapshot bytes stay unchanged" do
@@ -111,8 +149,16 @@ defmodule Crawler.Snapper.EncodingTest do
           {"image.png", "image/png", <<0x89, 0xE9>>}
         ] do
       url = "http://ex.com/#{name}"
-      assert {:ok, _opts} = Snapper.snap(body, %{url: url, save_to: root, content_type: type})
-      assert File.read!(saved(root, url)) == body
+
+      assert {:ok, artifact} =
+               Snapper.snap(body, %{
+                 url: url,
+                 save_to: root,
+                 content_type: type,
+                 public_id: "encoding00000000000000002"
+               })
+
+      assert File.read!(saved_artifact(root, artifact)) == body
     end
   end
 

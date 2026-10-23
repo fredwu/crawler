@@ -124,7 +124,7 @@ defmodule Crawler.Snapper.JavascriptContextTest do
       expected =
         Enum.reduce(specifiers, body, fn specifier, result ->
           {:ok, target} = Crawler.URL.resolve(specifier, @page)
-          String.replace(result, ~s|"#{specifier}"|, ~s|"#{Linker.offline_link(@page, target)}"|)
+          String.replace(result, ~s|"#{specifier}"|, ~s|"#{target}"|)
         end)
 
       assert {:ok, rewritten} =

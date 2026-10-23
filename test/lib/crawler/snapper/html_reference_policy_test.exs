@@ -1,7 +1,6 @@
 defmodule Crawler.Snapper.HTMLReferencePolicyTest do
   use ExUnit.Case, async: true
 
-  alias Crawler.Linker
   alias Crawler.Snapper.LinkReplacer
 
   @page "http://example.com/dir/page"
@@ -14,11 +13,11 @@ defmodule Crawler.Snapper.HTMLReferencePolicyTest do
         ~s|<img src="app.js" srcset="app.js 1x">| <>
         ~s|<div style="background:url(app.js)"></div>|
 
-    anchor = ~s|<a href="#{offline("app.js")}">A</a>|
+    anchor = ~s|<a href="#{online("app.js")}">A</a>|
     assert rewrite(source, []) == String.replace(source, ~s|<a href="app.js">A</a>|, anchor)
     body = rewrite(source, ["js"])
     assert body =~ anchor
-    assert body =~ ~s|<script src="#{offline("app.js")}"></script>|
+    assert body =~ ~s|<script src="#{online("app.js")}" integrity="keep"></script>|
     assert body =~ ~s|<link rel="stylesheet" href="app.js" integrity="keep">|
     assert body =~ ~s|<img src="app.js" srcset="app.js 1x">|
     assert body =~ ~s|<div data="app.js" href="app.js">D</div>|
@@ -34,11 +33,11 @@ defmodule Crawler.Snapper.HTMLReferencePolicyTest do
 
     body = rewrite(source, ["css", "images"])
     assert body =~ ~s|<script src="shared.png" integrity="keep"></script>|
-    assert body =~ ~s|<link rel="stylesheet" href="#{offline("shared.png")}">|
-    assert body =~ ~s|srcset="#{offline("shared.png")} 1x, #{offline("other.png")} 2x"|
+    assert body =~ ~s|<link rel="stylesheet" href="#{online("shared.png")}" integrity="remove">|
+    assert body =~ ~s|srcset="#{online("shared.png")} 1x, #{online("other.png")} 2x"|
 
     assert body =~
-             ~s|<div srcset="shared.png 1x" style="background:url(#{offline("shared.png")})"></div>|
+             ~s|<div srcset="shared.png 1x" style="background:url(#{online("shared.png")})"></div>|
   end
 
   test "preserves data blocks and external inline bodies beside eligible imports" do
@@ -53,8 +52,8 @@ defmodule Crawler.Snapper.HTMLReferencePolicyTest do
 
     assert body ==
              ~s|<script type="application/ld+json" src="./shared.js">#{ignored}</script>| <>
-               ~s|<script type="module" src="#{offline("app.js")}">#{ignored}</script>| <>
-               ~s|<script type="module">import '#{offline("shared.js")}';</script>|
+               ~s|<script type="module" src="#{online("app.js")}">#{ignored}</script>| <>
+               ~s|<script type="module">import '#{online("shared.js")}';</script>|
   end
 
   test "rewrites style attributes on script and style while preserving excluded sources" do
@@ -62,7 +61,7 @@ defmodule Crawler.Snapper.HTMLReferencePolicyTest do
       ~s|<script src="app.js" style="background:url(shared.png)">import './shared.js';</script>| <>
         ~s|<style style="background:url(shared.png)">a{background:url(shared.png)}</style>|
 
-    expected = String.replace(source, "url(shared.png)", "url(#{offline("shared.png")})")
+    expected = String.replace(source, "url(shared.png)", "url(#{online("shared.png")})")
     assert rewrite(source, ["css"]) == expected
     assert rewrite(source, []) == source
   end
@@ -74,9 +73,9 @@ defmodule Crawler.Snapper.HTMLReferencePolicyTest do
         ~s|<math><a href="image.png">M</a></math><a href="image.png">A</a>|
 
     expected =
-      ~s|<svg><script src="image.png"/><image href="#{offline("image.png")}" data="image.png"/>| <>
+      ~s|<svg><script src="image.png"/><image href="#{online("image.png")}" data="image.png"/>| <>
         ~s|<![CDATA[<image href="image.png"/>]]></svg>| <>
-        ~s|<math><a href="#{offline("image.png")}">M</a></math><a href="#{offline("image.png")}">A</a>|
+        ~s|<math><a href="#{online("image.png")}">M</a></math><a href="#{online("image.png")}">A</a>|
 
     assert rewrite(source, ["images", "js"]) == expected
   end
@@ -86,8 +85,8 @@ defmodule Crawler.Snapper.HTMLReferencePolicyTest do
       ~s|<a href="other">A</a><a href="other">B</a><a href="./other">C</a>| <>
         ~s|<a href="other?x=1&amp;y=2">D</a><a href="other?x=1&#38;y=2">E</a>|
 
-    target = offline("other")
-    query = offline("other?x=1&y=2")
+    target = online("other")
+    query = "http://example.com/dir/other?x&#61;1&amp;y&#61;2"
 
     assert rewrite(source, []) ==
              ~s|<a href="#{target}">A</a><a href="#{target}">B</a><a href="#{target}">C</a>| <>
@@ -101,9 +100,9 @@ defmodule Crawler.Snapper.HTMLReferencePolicyTest do
         ~s|<script src="one" src="two" integrity="first" integrity="second"></script>|
 
     assert rewrite(source, ["css", "js"]) ==
-             ~s|<a href="#{offline("one")}" href="two">A</a><a href="#{offline("two")}">B</a>| <>
-               ~s|<div style="background:url(#{offline("one")})" style="background:url(two)"></div>| <>
-               ~s|<script src="#{offline("one")}" src="two"></script>|
+             ~s|<a href="#{online("one")}" href="two">A</a><a href="#{online("two")}">B</a>| <>
+               ~s|<div style="background:url(#{online("one")})" style="background:url(two)"></div>| <>
+               ~s|<script src="#{online("one")}" src="two" integrity="first" integrity="second"></script>|
   end
 
   test "removes all duplicate integrity fields only on rewritten eligible resources" do
@@ -112,12 +111,12 @@ defmodule Crawler.Snapper.HTMLReferencePolicyTest do
         ~s|<script src="app.js" integrity="first" integrity='second'></script>| <>
         ~s|<script src="data:text/javascript,void(0)" integrity="third" integrity=fourth></script>|
 
-    anchor = ~s|<a href="#{offline("app.js")}">A</a>|
-    assert rewrite(source, []) == String.replace(source, ~s|<a href="app.js">A</a>|, anchor)
+    anchor = ~s|<a href="fixtures/app.js">A</a>|
+    assert rewrite_local(source, []) == String.replace(source, ~s|<a href="app.js">A</a>|, anchor)
 
-    assert rewrite(source, ["js"]) ==
+    assert rewrite_local(source, ["js"]) ==
              anchor <>
-               ~s|<script src="#{offline("app.js")}"></script>| <>
+               ~s|<script src="fixtures/app.js"></script>| <>
                ~s|<script src="data:text/javascript,void(0)" integrity="third" integrity=fourth></script>|
   end
 
@@ -136,7 +135,7 @@ defmodule Crawler.Snapper.HTMLReferencePolicyTest do
         ~s|<script type="" language="json" src="shared.js" integrity="remove"></script>| <>
         ~s|<script type="" language="json">#{classic}</script>|
 
-    target = offline("shared.js")
+    target = online("shared.js")
 
     expected =
       ~s|<a href="#{target}">A</a>| <>
@@ -144,9 +143,9 @@ defmodule Crawler.Snapper.HTMLReferencePolicyTest do
         ~s|<script language="json">#{ignored}</script>| <>
         ~s|<script type="&#160;module&#160;" src="shared.js" integrity="keep">#{ignored}</script>| <>
         ~s|<script type="&#160;text/javascript&#160;">#{ignored}</script>| <>
-        ~s|<script language="JavaScript" src="#{target}"></script>| <>
+        ~s|<script language="JavaScript" src="#{target}" integrity="remove"></script>| <>
         ~s|<script language="JavaScript">import('#{target}');</script>| <>
-        ~s|<script type="" language="json" src="#{target}"></script>| <>
+        ~s|<script type="" language="json" src="#{target}" integrity="remove"></script>| <>
         ~s|<script type="" language="json">import('#{target}');</script>|
 
     assert rewrite(source, ["js"]) == expected
@@ -165,5 +164,19 @@ defmodule Crawler.Snapper.HTMLReferencePolicyTest do
     body
   end
 
-  defp offline(path), do: Linker.offline_link(@page, "http://example.com/dir/" <> path)
+  defp rewrite_local(source, assets) do
+    opts = %{url: @page, content_type: "text/html", html_tag: "a", assets: assets}
+
+    assert {:ok, body} =
+             Crawler.StandaloneRewriteHelpers.replace_bound(
+               source,
+               opts,
+               fn %{value: "app.js"} -> :script end,
+               %{script: {:ok, "fixtures/app.js"}}
+             )
+
+    body
+  end
+
+  defp online(path), do: "http://example.com/dir/" <> path
 end

@@ -248,7 +248,7 @@ defmodule Crawler.SharedScopeQueueTest do
       assert Store.inflight_count(shared_scope) == 1
     end)
 
-    start_crawl(url <> "/retire/live", shared_scope, req_options, queue: survivor[:queue])
+    live = start_crawl(url <> "/retire/live", shared_scope, req_options, queue: survivor[:queue])
     assert_receive {:blocked, :live, live_handler}, 2_000
     on_exit(fn -> send(live_handler, :release) end)
 
@@ -270,7 +270,19 @@ defmodule Crawler.SharedScopeQueueTest do
     assert Store.inflight_count(shared_scope) == 1
     assert Store.ops_count(shared_scope) == 1
     assert Store.find_processed({url <> "/retire/kept", shared_scope})
-    assert Store.find({url <> "/retire/live", shared_scope})
+    state = :sys.get_state(Store)
+    target = live.target_handle
+    generation = live.generation
+    queue = live.queue
+
+    assert %{
+             status: {:running, claim},
+             job: %{id: ^target, authority: {^shared_scope, ^generation, ^queue}}
+           } =
+             state.scheduler.frontier.jobs[target]
+
+    assert state.scheduler.claims[claim].job == target
+    assert state.scheduler.claims[claim].run == {shared_scope, generation}
     refute Store.find({url <> "/retire/lost", shared_scope})
     refute Crawler.running?(owner)
     refute Crawler.running?(lost)
@@ -331,7 +343,12 @@ defmodule Crawler.SharedScopeQueueTest do
     await_idle(retry)
 
     for path <- ["kept", "live", "live-queued", "lost"] do
-      assert Store.find_processed({url <> "/retire/" <> path, shared_scope})
+      assert Store.find_processed({url <> "/retire/" <> path, shared_scope}),
+             inspect(
+               for {_id, row} <- :sys.get_state(Store).scheduler.frontier.jobs,
+                   elem(row.job.authority, 0) == shared_scope,
+                   do: {row.job.logical_key, row.status, row.outcome}
+             )
     end
 
     assert Store.ops_count(shared_scope) == 4
@@ -364,6 +381,8 @@ defmodule Crawler.SharedScopeQueueTest do
     opts = [
       scope: scope,
       workers: 1,
+      max_body: 1_048_576,
+      max_analysis_bytes: 16_000_000,
       timeout: 10_000,
       retries: 0,
       store: Store,

@@ -1,6 +1,7 @@
 defmodule Crawler.Parser.CssParser.Scanner do
   @moduledoc false
 
+  alias Crawler.Analysis.Budget
   alias Crawler.Parser.CssParser.Identifier
   alias Crawler.Parser.CssParser.ImportRule
   alias Crawler.Parser.CssParser.Value
@@ -17,27 +18,49 @@ defmodule Crawler.Parser.CssParser.Scanner do
     marker marker-start marker-mid marker-end
   ))
 
-  def resources(body), do: body |> scan(:stylesheet) |> Map.fetch!(:resources) |> Enum.reverse()
-  def comment_spans(body), do: body |> scan(:stylesheet) |> Map.fetch!(:comments)
+  @scan_scratch 4_096
+
+  def resources(body), do: Map.fetch!(analyze(body), :resources)
+  def comment_spans(body), do: Map.fetch!(analyze(body), :comments)
 
   def analyze(body, opts \\ []) when is_binary(body) do
-    state = scan(body, Keyword.get(opts, :mode, :stylesheet))
+    {:ok, facts, _budget} = analyze_result(body, opts, Budget.unlimited())
+    facts
+  end
 
-    %{
+  def analyze_result(body, opts, budget) when is_binary(body) do
+    budget = take!(Budget.reserve(budget, @scan_scratch))
+    state = walk(body, 0, initial(Keyword.get(opts, :mode, :stylesheet), budget))
+
+    budget = take!(Budget.charge(state.budget, Budget.cost(:context)))
+
+    facts = %{
       resources: Enum.reverse(state.resources),
       comments: state.comments,
       bindings: Enum.reverse(state.bindings),
       uses: Enum.reverse(state.uses),
       registrations: Enum.reverse(state.registrations)
     }
+
+    budget =
+      take!(
+        Budget.release(
+          budget,
+          @scan_scratch + state.stack_bytes + state.rule_bytes + state.reverse_bytes
+        )
+      )
+
+    {:ok, facts, budget}
+  catch
+    {:css_budget, reason} -> {:error, reason}
   end
 
-  defp scan(body, mode) do
-    walk(body, 0, initial(mode))
-  end
-
-  defp initial(mode) do
+  defp initial(mode, budget) do
     %{
+      budget: budget,
+      stack_bytes: 0,
+      rule_bytes: 0,
+      reverse_bytes: 0,
       mode: mode,
       stack: [],
       resources: [],
@@ -67,14 +90,15 @@ defmodule Crawler.Parser.CssParser.Scanner do
   end
 
   defp walk(body, offset, state) do
-    {body, offset, comments} = Value.trivia(body, offset)
-    step(body, offset, %{state | comments: comments ++ state.comments})
+    {body, offset, comments, budget} = Value.trivia(body, offset, state.budget, state.comments)
+    step(body, offset, %{state | comments: comments, budget: budget})
   end
 
   defp step(<<>>, _offset, state), do: state |> finish_import() |> commit_value()
 
   defp step(<<"@", body::binary>>, offset, state) do
-    {word, tail} = Identifier.take(body)
+    {word, tail, budget} = Identifier.take(body, state.budget)
+    state = scalar_copy(%{state | budget: budget}, word)
     finish = offset + 1 + byte_size(body) - byte_size(tail)
     state = state |> drop_import() |> begin_at(String.downcase(word, :ascii))
     walk(tail, finish, %{state | src_pending?: false})
@@ -97,7 +121,8 @@ defmodule Crawler.Parser.CssParser.Scanner do
   end
 
   defp step(<<"#", body::binary>>, offset, state) do
-    {_name, tail} = Identifier.take(body)
+    {_name, tail, budget} = Identifier.take(body, state.budget)
+    state = %{state | budget: budget}
     finish = offset + 1 + byte_size(body) - byte_size(tail)
     state = hash_import(state)
     walk(tail, finish, finish_token(state, %{stack: consume_hash(state.stack)}))
@@ -114,7 +139,7 @@ defmodule Crawler.Parser.CssParser.Scanner do
 
   defp step(<<"(", tail::binary>>, offset, state) do
     state = open_import_paren(state)
-    walk(tail, offset + 1, finish_token(state, %{stack: [:other | state.stack]}))
+    walk(tail, offset + 1, finish_token(push_frame(state, fn -> :other end), %{}))
   end
 
   defp step(body, offset, state) do
@@ -123,20 +148,25 @@ defmodule Crawler.Parser.CssParser.Scanner do
         code(body, offset, state)
 
       _quote ->
-        {token, tail, finish, valid?} = Value.quoted(body, offset)
-        state = accept_quoted(state, token, valid?)
+        {token, tail, finish, valid?, budget} = Value.quoted(body, offset, state.budget)
+        state = accept_quoted(%{state | budget: budget}, token, valid?)
         walk(tail, finish, finish_token(state, %{stack: used_candidate(state.stack)}))
     end
   end
 
   defp code(<<byte, _rest::binary>> = body, offset, state)
        when Identifier.name_byte(byte) or byte == ?\\ do
-    {word, tail} = Identifier.take(body)
+    {word, tail, budget} = Identifier.take(body, state.budget)
+    state = %{state | budget: budget}
     finish = offset + byte_size(body) - byte_size(tail)
 
     case tail do
-      <<"(", inner::binary>> -> function(String.downcase(word, :ascii), inner, finish + 1, state)
-      _other -> atom(body, tail, offset, finish, state)
+      <<"(", inner::binary>> ->
+        state = scalar_copy(state, word)
+        function(String.downcase(word, :ascii), inner, finish + 1, state)
+
+      _other ->
+        atom(body, tail, offset, finish, state, word)
     end
   end
 
@@ -147,33 +177,37 @@ defmodule Crawler.Parser.CssParser.Scanner do
 
   defp code(body, offset, state) do
     <<_byte, tail::binary>> = body
-    atom(body, tail, offset, offset + 1, state)
+    atom(body, tail, offset, offset + 1, state, nil)
   end
 
   defp function("url", body, offset, state) do
     state = feed_url(state)
-    {token, tail, finish, comments} = Value.url(body, offset)
-    state = accept_url(state, token)
+
+    {token, tail, finish, comments, budget} =
+      Value.url(body, offset, state.budget, state.comments)
+
+    state = accept_url(%{state | budget: budget}, token)
 
     walk(
       tail,
       finish,
       finish_token(state, %{
         stack: used_candidate(state.stack),
-        comments: comments ++ state.comments
+        comments: comments
       })
     )
   end
 
   defp function("var", body, offset, state) do
+    state = fact(state, :context)
     state = import_call(state, "var")
-    state = %{state | stack: [{:var, :name, nil, empty_fallback()} | state.stack]}
+    state = push_frame(state, fn -> {:var, :name, nil, empty_fallback()} end)
     walk(body, offset, finish_token(state, %{}))
   end
 
   defp function(name, body, offset, state) do
     state = import_call(state, name)
-    walk(body, offset, finish_token(%{state | stack: [function_frame(name) | state.stack]}, %{}))
+    walk(body, offset, finish_token(push_frame(state, fn -> function_frame(name) end), %{}))
   end
 
   defp function_frame(name) when name in ["image-set", "-webkit-image-set"],
@@ -182,12 +216,14 @@ defmodule Crawler.Parser.CssParser.Scanner do
   defp function_frame("image"), do: {:image, true}
   defp function_frame(_name), do: :other
 
-  defp atom(body, tail, offset, finish, state) do
-    state = note_word(state, ident_word(body, tail, offset, finish))
+  defp atom(body, tail, offset, finish, state, word) do
+    state = note_word(state, word)
 
     if image_set_candidate?(state.stack) and is_nil(state.import_rule) do
-      {token, bare_tail, bare_finish} = Value.bare(body, offset)
-      state = if bare_url?(token.value), do: keep_resource(state, token), else: state
+      {token, bare_tail, bare_finish, budget} = Value.bare(body, offset, state.budget)
+      state = %{state | budget: budget}
+      {keep?, state} = token_test(state, token.value, &bare_url?/1)
+      state = if keep?, do: keep_resource(state, token), else: state
       walk(bare_tail, bare_finish, finish_ident(state, %{stack: used_candidate(state.stack)}))
     else
       walk(tail, finish, finish_ident(state))
@@ -199,10 +235,10 @@ defmodule Crawler.Parser.CssParser.Scanner do
   end
 
   defp accept_url(state, token) do
-    cond do
-      import?(state) -> feed_address(state, token)
-      not keep_url?(state, token) -> state
-      true -> keep_resource(state, token)
+    if import?(state) do
+      feed_address(state, token)
+    else
+      keep_picture(state, token)
     end
   end
 
@@ -223,8 +259,11 @@ defmodule Crawler.Parser.CssParser.Scanner do
     end
   end
 
+  defp keep_picture(%{at_rule: :namespace} = state, _token), do: state
+
   defp keep_picture(state, token) do
-    if keep_url?(state, token), do: keep_resource(state, token), else: state
+    {local?, state} = token_test(state, token.value, &local_fragment?/1)
+    if local?, do: state, else: keep_resource(state, token)
   end
 
   defp keep_resource(state, token) do
@@ -242,6 +281,7 @@ defmodule Crawler.Parser.CssParser.Scanner do
         put_var_url(state, token)
 
       :resource ->
+        state = record(state, :token)
         %{state | resources: [Map.put(token, :kind, resource_kind(state)) | state.resources]}
     end
   end
@@ -259,21 +299,26 @@ defmodule Crawler.Parser.CssParser.Scanner do
   end
 
   defp put_binding_url(state, token) do
+    state = record(state, :token)
     urls = [Map.put(token, :kind, :url) | state.binding.urls]
     %{state | binding: %{state.binding | urls: urls}}
   end
 
   defp put_initial(state, token) do
+    state = charge(state, Budget.cost(:token))
     %{state | property: %{state.property | initial: Map.put(token, :kind, :url)}}
   end
 
   defp put_var_url(state, token) do
+    state = record(state, :token)
+    state = reserve_stack_copy(state)
     token = Map.put(token, :kind, :url)
-    %{state | stack: add_fallback_url(state.stack, token)}
+    state = %{state | stack: add_fallback_url(state.stack, token)}
+    release_stack_copy(state)
   end
 
   defp add_fallback_url([{:var, :fallback, name, fallback} | tail], token) do
-    fallback = %{fallback | urls: fallback.urls ++ [token]}
+    fallback = %{fallback | urls: [token | fallback.urls]}
     [{:var, :fallback, name, fallback} | tail]
   end
 
@@ -282,9 +327,6 @@ defmodule Crawler.Parser.CssParser.Scanner do
 
   defp resource_kind(%{font_src?: true}), do: :font
   defp resource_kind(_state), do: :url
-
-  defp keep_url?(%{at_rule: :namespace}, _token), do: false
-  defp keep_url?(_state, %{value: value}), do: not local_fragment?(value)
 
   defp local_fragment?(value) do
     value |> String.trim() |> String.starts_with?("#")
@@ -338,6 +380,7 @@ defmodule Crawler.Parser.CssParser.Scanner do
   defp finish_import(state) do
     case ImportRule.finish(state.import_rule) do
       {:emit, token} ->
+        state = record(state, :token)
         prelude = if state.prelude == :closed, do: :closed, else: :imports
 
         %{
@@ -420,6 +463,8 @@ defmodule Crawler.Parser.CssParser.Scanner do
   end
 
   defp close_property(%{property: %{depth: depth} = property, depth: depth} = state) do
+    state = fact(state, :registration)
+
     %{
       state
       | property: nil,
@@ -433,6 +478,12 @@ defmodule Crawler.Parser.CssParser.Scanner do
   defp open_rule(%{mode: :declarations} = state), do: state
 
   defp open_rule(state) do
+    state = %{
+      state
+      | budget: take!(Budget.reserve(state.budget, Budget.cost(:frame))),
+        rule_bytes: state.rule_bytes + Budget.cost(:frame)
+    }
+
     next_rule = state.next_rule + 1
 
     %{
@@ -446,7 +497,13 @@ defmodule Crawler.Parser.CssParser.Scanner do
   defp close_rule(%{mode: :declarations} = state), do: state
 
   defp close_rule(%{rule_ids: [rule_id | rule_ids]} = state) do
-    %{state | rule_id: rule_id, rule_ids: rule_ids}
+    %{
+      state
+      | rule_id: rule_id,
+        rule_ids: rule_ids,
+        budget: take!(Budget.release(state.budget, Budget.cost(:frame))),
+        rule_bytes: state.rule_bytes - Budget.cost(:frame)
+    }
   end
 
   defp close_rule(state), do: state
@@ -492,7 +549,12 @@ defmodule Crawler.Parser.CssParser.Scanner do
   defp commit_value(%{binding: nil} = state), do: state
 
   defp commit_value(state) do
-    binding = %{state.binding | urls: Enum.reverse(state.binding.urls)}
+    binding = %{
+      state.binding
+      | urls: Enum.reverse(state.binding.urls),
+        aliases: Enum.reverse(state.binding.aliases)
+    }
+
     %{state | binding: nil, bindings: [binding | state.bindings]}
   end
 
@@ -510,6 +572,9 @@ defmodule Crawler.Parser.CssParser.Scanner do
   end
 
   defp open_value(state) do
+    state = %{state | budget: take!(Budget.count(state.budget, :facts))}
+    state = if match?("--" <> _, state.decl_name), do: record(state, :binding), else: state
+
     state
     |> Map.put(:value?, true)
     |> Map.put(:binding, new_binding(state.decl_name, state.rule_id))
@@ -554,6 +619,7 @@ defmodule Crawler.Parser.CssParser.Scanner do
   defp note_word(state, _word), do: %{state | src_pending?: false}
 
   defp put_src(state, word) do
+    state = scalar_copy(state, word)
     %{state | src_pending?: String.downcase(word, :ascii) == "src" and font_face?(state)}
   end
 
@@ -562,9 +628,12 @@ defmodule Crawler.Parser.CssParser.Scanner do
   end
 
   defp put_decl(state, word) do
-    if declaration_ready?(state),
-      do: %{state | decl_name: String.downcase(word, :ascii)},
-      else: state
+    if declaration_ready?(state) do
+      state = scalar_copy(state, word)
+      %{state | decl_name: String.downcase(word, :ascii)}
+    else
+      state
+    end
   end
 
   defp put_property_name(%{rule: :property, depth: 0, property: nil} = state, "--" <> _ = word) do
@@ -589,28 +658,20 @@ defmodule Crawler.Parser.CssParser.Scanner do
   defp feed_import_ident(%{import_rule: nil} = state, _word), do: state
 
   defp feed_import_ident(state, word) do
+    state = scalar_copy(state, word)
     %{state | import_rule: ImportRule.ident(state.import_rule, String.downcase(word, :ascii))}
-  end
-
-  defp ident_word(body, tail, offset, finish) do
-    taken = finish - offset
-
-    if taken > 0 and taken == byte_size(body) - byte_size(tail) do
-      case Identifier.take(body) do
-        {word, ^tail} when word != "" -> word
-        _other -> nil
-      end
-    end
   end
 
   defp close_top(%{stack: [{:var, _stage, name, fallback} | tail]} = state) do
     state = commit_var(%{state | stack: tail}, name, fallback)
-    close_import_paren(state)
+    state |> pop_frame_budget() |> close_import_paren()
   end
 
-  defp close_top(state) do
-    stack = state.stack |> Enum.drop(1) |> used_candidate()
-    close_import_paren(%{state | stack: stack})
+  defp close_top(%{stack: []} = state), do: close_import_paren(state)
+
+  defp close_top(%{stack: [_frame | tail]} = state) do
+    stack = used_candidate(tail)
+    state |> Map.put(:stack, stack) |> pop_frame_budget() |> close_import_paren()
   end
 
   defp commit_var(state, name, fallback) do
@@ -627,6 +688,7 @@ defmodule Crawler.Parser.CssParser.Scanner do
         add_alias(state, name, fallback)
 
       use?(state) ->
+        state = fact(state, :use)
         use = %{name: name, fallback: fallback, rule_id: state.rule_id}
         %{state | uses: [use | state.uses]}
 
@@ -636,12 +698,14 @@ defmodule Crawler.Parser.CssParser.Scanner do
   end
 
   defp attach_fallback_alias(state, name, fallback) do
-    %{state | stack: put_fallback_alias(state.stack, name, fallback)}
+    state = state |> fact(:use) |> reserve_stack_copy()
+    state = %{state | stack: put_fallback_alias(state.stack, name, fallback)}
+    release_stack_copy(state)
   end
 
   defp put_fallback_alias([{:var, :fallback, outer, acc} | tail], name, fallback) do
     nested = %{name: name, fallback: fallback}
-    acc = %{acc | aliases: acc.aliases ++ [nested]}
+    acc = %{acc | aliases: [nested | acc.aliases]}
     [{:var, :fallback, outer, acc} | tail]
   end
 
@@ -652,12 +716,16 @@ defmodule Crawler.Parser.CssParser.Scanner do
   defp put_fallback_alias([], _name, _fallback), do: []
 
   defp normalize_fallback(%{urls: [], aliases: []}), do: nil
-  defp normalize_fallback(fallback), do: fallback
+
+  defp normalize_fallback(fallback),
+    do: %{fallback | urls: Enum.reverse(fallback.urls), aliases: Enum.reverse(fallback.aliases)}
+
   defp empty_fallback, do: %{urls: [], aliases: []}
 
   defp add_alias(state, name, fallback) do
+    state = fact(state, :use)
     entry = %{name: name, fallback: fallback}
-    binding = %{state.binding | aliases: state.binding.aliases ++ [entry]}
+    binding = %{state.binding | aliases: [entry | state.binding.aliases]}
     %{state | binding: binding}
   end
 
@@ -753,7 +821,8 @@ defmodule Crawler.Parser.CssParser.Scanner do
 
   defp capture_syntax(state, token) do
     if syntax_value?(state) do
-      %{state | property: %{state.property | syntax_url?: String.trim(token.value) == "<url>"}}
+      {syntax_url?, state} = token_test(state, token.value, &(String.trim(&1) == "<url>"))
+      %{state | property: %{state.property | syntax_url?: syntax_url?}}
     else
       state
     end
@@ -803,4 +872,66 @@ defmodule Crawler.Parser.CssParser.Scanner do
     String.contains?(value, ["/", "."]) and
       not Regex.match?(~r/^\d+(\.\d+)?(x|dpi|dppx)$/i, value)
   end
+
+  defp fact(state, kind), do: record(state, kind, 1)
+
+  defp record(state, kind, facts \\ 0) do
+    state = %{
+      state
+      | budget:
+          take!(
+            Budget.charge(state.budget, Budget.cost(kind) + Budget.cost(:list_cell), facts: facts)
+          )
+    }
+
+    bytes = Budget.cost(:list_cell)
+
+    %{
+      state
+      | budget: take!(Budget.reserve(state.budget, bytes)),
+        reverse_bytes: state.reverse_bytes + bytes
+    }
+  end
+
+  defp charge(state, bytes), do: %{state | budget: take!(Budget.charge(state.budget, bytes))}
+  defp scalar_copy(state, word), do: charge(state, Budget.cost(:binary) + byte_size(word))
+
+  defp token_test(state, value, fun) do
+    bytes = 1_024 + Budget.cost(:binary) + byte_size(value) * 4
+    budget = take!(Budget.reserve(state.budget, bytes))
+    result = fun.(value)
+    {result, %{state | budget: take!(Budget.release(budget, bytes))}}
+  end
+
+  defp push_frame(state, build) do
+    bytes = Budget.cost(:frame)
+    budget = take!(Budget.reserve(state.budget, bytes))
+    frame = build.()
+
+    %{
+      state
+      | stack: [frame | state.stack],
+        stack_bytes: state.stack_bytes + bytes,
+        budget: budget
+    }
+  end
+
+  defp pop_frame_budget(state) do
+    bytes = Budget.cost(:frame)
+
+    %{
+      state
+      | budget: take!(Budget.release(state.budget, bytes)),
+        stack_bytes: state.stack_bytes - bytes
+    }
+  end
+
+  defp reserve_stack_copy(state),
+    do: %{state | budget: take!(Budget.reserve(state.budget, state.stack_bytes))}
+
+  defp release_stack_copy(state),
+    do: %{state | budget: take!(Budget.release(state.budget, state.stack_bytes))}
+
+  defp take!({:ok, budget}), do: budget
+  defp take!({:error, reason}), do: throw({:css_budget, reason})
 end

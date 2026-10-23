@@ -1,7 +1,6 @@
 defmodule Crawler.Snapper.HTMLAttributeEligibilityTest do
   use ExUnit.Case, async: true
 
-  alias Crawler.Linker
   alias Crawler.Snapper.LinkReplacer
 
   @page "http://example.com/index.html"
@@ -23,7 +22,7 @@ defmodule Crawler.Snapper.HTMLAttributeEligibilityTest do
         ~s|<source src="shared.png" srcset="shared.png 1x" imagesrcset="shared.png 1x">| <>
         ~s|<link rel="alternate&#9;PRELOAD" as="IM&#65;GE" imagesrcset="shared.png&#32;1x">|
 
-    target = offline("shared.png")
+    target = online("shared.png")
 
     assert rewrite(source) ==
              ignored <>
@@ -48,12 +47,12 @@ defmodule Crawler.Snapper.HTMLAttributeEligibilityTest do
         ~s|<link rel="preload" as="SCRIPT" href="shared" integrity="remove">| <>
         ~s|<meta http-equiv="ReFrEsH" content="0; shared">|
 
-    target = offline("shared")
+    target = online("shared")
 
     assert rewrite(source) ==
              ignored <>
-               ~s|<link rel="&#9;STYLESHEET&#10;" href="#{target}">| <>
-               ~s|<link rel="preload" as="SCRIPT" href="#{target}">| <>
+               ~s|<link rel="&#9;STYLESHEET&#10;" href="#{target}" integrity="remove">| <>
+               ~s|<link rel="preload" as="SCRIPT" href="#{target}" integrity="remove">| <>
                ~s|<meta http-equiv="ReFrEsH" content="0; #{target}">|
   end
 
@@ -62,5 +61,5 @@ defmodule Crawler.Snapper.HTMLAttributeEligibilityTest do
     body
   end
 
-  defp offline(path), do: Linker.offline_link(@page, "http://example.com/" <> path)
+  defp online(path), do: "http://example.com/" <> path
 end

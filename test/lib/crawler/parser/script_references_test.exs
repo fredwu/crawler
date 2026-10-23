@@ -2,7 +2,6 @@ defmodule Crawler.Parser.ScriptReferencesTest do
   use ExUnit.Case, async: true
 
   alias Crawler.ImportMap
-  alias Crawler.Linker
   alias Crawler.Parser
   alias Crawler.Snapper.LinkReplacer
 
@@ -77,10 +76,10 @@ defmodule Crawler.Parser.ScriptReferencesTest do
     assert {:ok, body} = rewrite(source)
     assert body =~ ~s|import "vue"|
     assert body =~ ~s|import "only"|
-    assert body =~ Linker.offline_link(@page, "http://example.com/inner.js")
-    assert body =~ Linker.offline_link(@page, "http://example.com/assets/vue.js")
-    refute body =~ Linker.offline_link(@page, "http://example.com/shadow.js")
-    refute body =~ Linker.offline_link(@page, "http://example.com/only.js")
+    assert body =~ "http://example.com/inner.js"
+    assert body =~ "http://example.com/assets/vue.js"
+    refute body =~ "http://example.com/shadow.js"
+    refute body =~ "http://example.com/only.js"
   end
 
   test "the same absolute address shares one map key" do
@@ -467,9 +466,9 @@ defmodule Crawler.Parser.ScriptReferencesTest do
                import_map: map
              })
 
-    vue = Linker.offline_link(@script, "http://example.com/vue.js")
-    relative = Linker.offline_link(@script, "http://example.com/js/vue")
-    pic = Linker.offline_link(@script, "http://example.com/js/pic.png")
+    vue = "http://example.com/vue.js"
+    relative = "http://example.com/js/vue"
+    pic = "http://example.com/js/pic.png"
 
     assert body ==
              ~s|import "#{vue}";\nnew URL("#{relative}", import.meta.url);\nnew URL("#{pic}", import.meta.url);|
@@ -484,9 +483,9 @@ defmodule Crawler.Parser.ScriptReferencesTest do
     """
 
     assert {:ok, body} = rewrite(source)
-    assert body =~ ~s|import "#{Linker.offline_link(@page, "http://example.com/assets/vue.js")}"|
-    assert body =~ Linker.offline_link(@page, "http://example.com/assets/pic.png")
-    assert body =~ Linker.offline_link(@page, "http://example.com/assets/app.js")
+    assert body =~ ~s|import "http://example.com/assets/vue.js"|
+    assert body =~ "http://example.com/assets/pic.png"
+    assert body =~ "http://example.com/assets/app.js"
     assert body =~ ~s|import "vue"|
   end
 
@@ -679,8 +678,8 @@ defmodule Crawler.Parser.ScriptReferencesTest do
     old = "https://example.com/old"
 
     assert {:ok, body} = rewrite(source, %{url: old, referrer_url: page})
-    assert body =~ Linker.offline_link(old, "https://example.com/assets/inline-base.js")
-    assert body =~ Linker.offline_link(old, "https://example.com/dir/inline-page.js")
+    assert body =~ "https://example.com/assets/inline-base.js"
+    assert body =~ "https://example.com/dir/inline-page.js"
   end
 
   test "a saved module points page and script addresses at different files" do
@@ -704,8 +703,8 @@ defmodule Crawler.Parser.ScriptReferencesTest do
                javascript_goal: :module
              })
 
-    from_script = Linker.offline_link(script, "https://example.com/js/from-script.js")
-    from_page = Linker.offline_link(script, "https://example.com/dir/from-page.js")
+    from_script = "https://example.com/js/from-script.js"
+    from_page = "https://example.com/dir/from-page.js"
     assert from_script != from_page
     assert body =~ from_script
     assert body =~ from_page

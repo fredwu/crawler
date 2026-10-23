@@ -1,9 +1,7 @@
 defmodule Crawler.Snapper.DeclarativeJsonTest do
   use ExUnit.Case, async: true
 
-  alias Crawler.Linker
   alias Crawler.Snapper.LinkReplacer
-  alias Crawler.URL
 
   test "a saved manifest rewrites only its url members" do
     manifest_url = "http://example.com/app.webmanifest"
@@ -14,7 +12,7 @@ defmodule Crawler.Snapper.DeclarativeJsonTest do
     assert {:ok, saved} =
              LinkReplacer.replace_links(body, manifest_opts(manifest_url, ["images"]))
 
-    page = offline(manifest_url, "/")
+    page = "http://example.com/"
     assert String.contains?(saved, ~s("name":"Demo"))
     assert String.contains?(saved, ~s("scope":"/"))
     assert String.contains?(saved, ~s("type":"image/png"))
@@ -30,7 +28,7 @@ defmodule Crawler.Snapper.DeclarativeJsonTest do
 
     assert {:ok, saved} = LinkReplacer.replace_links(body, manifest_opts(manifest_url, []))
 
-    page = offline(manifest_url, "/")
+    page = "http://example.com/"
     assert String.contains?(saved, ~s("scope":"/"))
     assert String.contains?(saved, ~s("src":"/"))
     assert String.contains?(saved, ~s("start_url":"#{page}"))
@@ -52,13 +50,12 @@ defmodule Crawler.Snapper.DeclarativeJsonTest do
 
     assert {:ok, saved} = LinkReplacer.replace_links(body, opts)
 
-    file_next = offline(file_url, "next")
-    {:ok, document_next} = URL.resolve("next", document_base)
-    document_offline = Linker.offline_link(file_url, document_next)
+    file_next = "http://example.com/rules/next"
+    document_online = "http://example.com/blog/next"
 
-    assert file_next != document_offline
+    assert file_next != document_online
     assert String.contains?(saved, ~s("#{file_next}"))
-    assert String.contains?(saved, ~s("#{document_offline}"))
+    assert String.contains?(saved, ~s("#{document_online}"))
     refute String.contains?(saved, ~s("next"))
   end
 
@@ -88,16 +85,14 @@ defmodule Crawler.Snapper.DeclarativeJsonTest do
                assets: []
              })
 
-    {:ok, next} = URL.resolve("next", "http://example.com/blog/")
-    next_offline = Linker.offline_link(page, next)
-    {:ok, skipped} = URL.resolve("skip-ruleset", "http://example.com/blog/")
-    skipped_offline = Linker.offline_link(page, skipped)
+    next_online = "http://example.com/blog/next"
+    skipped_online = "http://example.com/blog/skip-ruleset"
 
     assert String.contains?(saved, ~s("eagerness":"eager"))
     assert String.contains?(saved, ~s("source":"list"))
     assert String.contains?(saved, ~s("relative_to":"ruleset"))
-    assert String.contains?(saved, ~s("#{next_offline}"))
-    assert String.contains?(saved, ~s("#{skipped_offline}"))
+    assert String.contains?(saved, ~s("#{next_online}"))
+    assert String.contains?(saved, ~s("#{skipped_online}"))
     refute String.contains?(saved, ~s("next"))
     refute String.contains?(saved, ~s("skip-ruleset"))
   end
@@ -137,10 +132,5 @@ defmodule Crawler.Snapper.DeclarativeJsonTest do
       html_tag: "link",
       content_type: "application/manifest+json"
     }
-  end
-
-  defp offline(current, raw) do
-    {:ok, resolved} = URL.resolve(raw, current)
-    Linker.offline_link(current, resolved)
   end
 end

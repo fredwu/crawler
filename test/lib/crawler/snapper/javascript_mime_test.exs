@@ -1,7 +1,6 @@
 defmodule Crawler.Snapper.JavascriptMimeTest do
   use ExUnit.Case, async: true
 
-  alias Crawler.Linker
   alias Crawler.Snapper.LinkReplacer
 
   @page "http://example.com/dir/page"
@@ -13,8 +12,8 @@ defmodule Crawler.Snapper.JavascriptMimeTest do
   )
 
   test "all executable aliases rewrite external and inline sources for saving" do
-    external = Linker.offline_link(@page, "http://example.com/dir/external.js")
-    chunk = Linker.offline_link(@page, "http://example.com/dir/chunk.js")
+    external = "http://example.com/dir/external.js"
+    chunk = "http://example.com/dir/chunk.js"
 
     for type <- @javascript do
       source =
@@ -22,7 +21,7 @@ defmodule Crawler.Snapper.JavascriptMimeTest do
           ~s|<script type="#{type}">import('./chunk.js');</script>|
 
       expected =
-        ~s|<script type="#{type}" src="#{external}">import('./ignored.js');</script>| <>
+        ~s|<script type="#{type}" src="#{external}" integrity="remove">import('./ignored.js');</script>| <>
           ~s|<script type="#{type}">import('#{chunk}');</script>|
 
       assert rewrite(source, "text/html") == expected
@@ -30,8 +29,8 @@ defmodule Crawler.Snapper.JavascriptMimeTest do
   end
 
   test "JavaScript MIME parameters are rewritten with the other script sources" do
-    external = Linker.offline_link(@page, "http://example.com/dir/external.js")
-    chunk = Linker.offline_link(@page, "http://example.com/dir/chunk.js")
+    external = "http://example.com/dir/external.js"
+    chunk = "http://example.com/dir/chunk.js"
 
     for type <- @javascript do
       parameterized = type <> "; charset=utf-8"
@@ -41,7 +40,7 @@ defmodule Crawler.Snapper.JavascriptMimeTest do
           ~s|<script type="#{parameterized}">import('./chunk.js');</script>|
 
       expected =
-        ~s|<script type="#{parameterized}" src="#{external}">import('./ignored.js');</script>| <>
+        ~s|<script type="#{parameterized}" src="#{external}" integrity="remove">import('./ignored.js');</script>| <>
           ~s|<script type="#{parameterized}">import('#{chunk}');</script>|
 
       assert rewrite(source, "text/html") == expected
@@ -59,7 +58,7 @@ defmodule Crawler.Snapper.JavascriptMimeTest do
   end
 
   test "all JavaScript response aliases rewrite their dependency sources" do
-    chunk = Linker.offline_link(@page, "http://example.com/dir/chunk.js")
+    chunk = "http://example.com/dir/chunk.js"
 
     for type <- @javascript do
       assert rewrite(~s|import('./chunk.js');|, type <> "; charset=utf-8") ==

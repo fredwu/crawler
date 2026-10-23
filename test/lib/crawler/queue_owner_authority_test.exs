@@ -9,6 +9,75 @@ defmodule Crawler.QueueOwnerAuthorityTest do
     end
   end
 
+  test "stale stop preserves a held successor on the same owned queue", context do
+    scope = unique_scope("stale-owned-stop")
+    old_url = context.url <> "/authority/old-stop"
+    fresh_url = context.url <> "/authority/fresh-stop"
+
+    for {path, body} <- [{"/authority/old-stop", "OLD"}, {"/authority/fresh-stop", "FRESH"}] do
+      ReqTestSite.expect_once(context.site, "GET", path, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("content-type", "text/html")
+        |> Plug.Conn.resp(200, body)
+      end)
+    end
+
+    old = crawl(old_url, scope, context.req_options)
+    await_idle(old)
+    assert Store.find_processed({old_url, scope}).body == "OLD"
+
+    assert {:ok, fresh} =
+             start_crawl(
+               fresh_url,
+               Map.merge(old, %{
+                 force: true,
+                 parser: Crawler.HeldParser,
+                 hold_parser_url: fresh_url,
+                 parser_observer: self()
+               })
+             )
+
+    assert_receive {:parser_held, worker, _page}, 2_000
+    on_exit(fn -> send(worker, :release_parser) end)
+    assert fresh.queue == old.queue
+    assert fresh.queue_owner == old.queue_owner
+    refute fresh.generation == old.generation
+    page = Store.find({fresh_url, scope})
+    assert page.body == "FRESH"
+    assert :stale = Store.dispose_scope(scope, old.generation)
+    assert :stale = Store.dispose_scope(scope, nil)
+    assert :ok = Crawler.stop(old)
+    assert Store.current?(scope, fresh.generation, fresh.queue)
+    assert Store.find({fresh_url, scope}) == page
+    assert Process.alive?(worker)
+    assert Process.alive?(fresh.queue)
+    assert Process.alive?(fresh.queue_owner)
+    assert Store.target_outcome(fresh.target_handle) == nil
+    send(worker, :release_parser)
+    await_idle(fresh)
+    assert Store.find_processed({fresh_url, scope}).body == "FRESH"
+    assert Store.ops_count(scope) == 1
+    assert :ok = Crawler.stop(fresh)
+    refute Store.current?(scope, fresh.generation)
+    refute Store.find({fresh_url, scope})
+    refute Process.alive?(fresh.queue)
+    refute Process.alive?(fresh.queue_owner)
+  end
+
+  test "exact generation disposal removes a deadline-limited scope" do
+    scope = unique_scope("limited-scope-disposal")
+    on_exit(fn -> Store.dispose_scope(scope) end)
+    bound = Store.bind_run(scope: scope, run_timeout: 1)
+
+    wait(fn ->
+      assert :sys.get_state(Store).scopes[scope].outcome == {:limited, {:deadline, :run}}
+    end)
+
+    refute Store.current?(scope, bound.generation)
+    assert :ok = Store.dispose_scope(scope, bound.generation)
+    refute Map.has_key?(:sys.get_state(Store).scopes, scope)
+  end
+
   defp exercise_copied_options(target, %{site: site, url: url, req_options: req_options}) do
     parent = self()
     creator_scope = System.unique_integer([:positive])
@@ -38,6 +107,9 @@ defmodule Crawler.QueueOwnerAuthorityTest do
     on_exit(fn -> send(guest_handler, :release) end)
 
     assert :ok = Crawler.stop(copied)
+    assert Store.current?(guest_scope, guest.generation, guest.queue)
+    assert Store.find({url <> "/authority/guest", guest_scope})
+    assert :ok = Crawler.stop(guest)
     assert Process.alive?(creator[:queue])
     assert Process.alive?(creator[:queue_owner])
     assert Process.alive?(other[:queue])
@@ -85,6 +157,8 @@ defmodule Crawler.QueueOwnerAuthorityTest do
              start_crawl(page,
                scope: scope,
                workers: 2,
+               max_body: 1_024,
+               max_analysis_bytes: 2_097_152,
                store: Store,
                retries: 0,
                req_options: req_options

@@ -1,7 +1,6 @@
 defmodule Crawler.URLTest do
   use ExUnit.Case, async: true
 
-  alias Crawler.Linker.Snapshot
   alias Crawler.URL
 
   test "folds host case, default ports, and dot segments" do
@@ -32,7 +31,6 @@ defmodule Crawler.URLTest do
     end
 
     assert URL.canonical("http://host/a/") == URL.canonical("http://host/a")
-    assert Snapshot.path("http://host/a/") == Snapshot.path("http://host/a")
 
     identities = Enum.map(["/a", "/a//", "/a///"], &URL.canonical("http://host" <> &1))
     assert length(Enum.uniq(identities)) == 3
@@ -269,13 +267,9 @@ defmodule Crawler.URLTest do
     assert URL.normalize("http://ex.com/a?q=%7E") == "http://ex.com/a?q=~"
     assert URL.normalize("http://ex.com/a?q=%2E%2E") == "http://ex.com/a?q=%2e%2e"
     assert URL.normalize("http://ex.com/a?q=%41") == "http://ex.com/a?q=A"
-
-    assert Snapshot.path("http://ex.com/%7E") == "ex.com/~/__index.html"
-    refute Snapshot.path("http://ex.com/%7E") =~ "__u_"
-    refute Snapshot.path("http://ex.com/a%2Fb") =~ "__u_"
   end
 
-  test "keeps different pages on different files" do
+  test "keeps different page identities separate" do
     assert_different("http://ex.com/a", "https://ex.com/a")
     assert_different("http://a:b@ex.com/a", "http://A:B@ex.com/a")
     assert_different("http://a:b@ex.com/a", "http://ex.com/a")
@@ -289,11 +283,6 @@ defmodule Crawler.URLTest do
     assert_different("http://ex.com/a/...", "http://ex.com/a/..")
     assert URL.normalize("http://ex.com/a?q=foo/../bar") == "http://ex.com/a?q=foo/../bar"
     assert URL.normalize("http://ex.com/dir?q=%2e%2e") == "http://ex.com/dir?q=%2e%2e"
-
-    assert Snapshot.path("http://ex.com/search?") == "ex.com/search/__index__q_.html"
-    assert Snapshot.path("http://ex.com/search") == "ex.com/search/__index.html"
-    assert Snapshot.path("https://ex.com/a") =~ "__scheme_https"
-    assert Snapshot.path("http://ex.com/a//b") =~ "__e_"
   end
 
   test "resolves a path backslash and an encoded dot onto the fetched page" do
@@ -323,11 +312,10 @@ defmodule Crawler.URLTest do
   end
 
   defp page_identity(url) do
-    {URL.normalize(url), URL.canonical(url), Snapshot.path(url)}
+    {URL.normalize(url), URL.canonical(url)}
   end
 
   defp assert_different(left, right) do
     refute URL.normalize(left) == URL.normalize(right)
-    refute Snapshot.path(left) == Snapshot.path(right)
   end
 end

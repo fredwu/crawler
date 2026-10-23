@@ -1,11 +1,11 @@
 defmodule Crawler.Snapper.CssCommentsTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   import Crawler.TestHelpers, only: [tmp: 1]
-  import Crawler.SnapshotHelpers, only: [link_path: 1, saved: 2]
+  import Crawler.SnapshotHelpers, only: [saved_artifact: 2]
 
   alias Crawler.Linker
-  alias Crawler.Linker.Snapshot
+  alias Crawler.ManagedSnapshotHelpers, as: Managed
   alias Crawler.Parser.CssParser
   alias Crawler.Snapper
   alias Crawler.Snapper.LinkReplacer
@@ -32,7 +32,7 @@ defmodule Crawler.Snapper.CssCommentsTest do
                })
 
       assert body ==
-               ~s|<div style="background:image-set(#{normalized}#{offline("images/*draft.png")}#{normalized} 1x)"></div>|
+               ~s|<div style="background:image-set(#{normalized}http://example.com/css/images/*draft.png#{normalized} 1x)"></div>|
     end
   end
 
@@ -40,16 +40,6 @@ defmodule Crawler.Snapper.CssCommentsTest do
     root = tmp("snapshot-css-entity-groups")
     page = "http://example.com/index.html"
     names = ["a)b.png", "a(b.png", "caf)é.png"]
-
-    for name <- names do
-      assert {:ok, _opts} =
-               Snapper.snap("IMAGE #{name}", %{
-                 url: "http://example.com/" <> name,
-                 save_to: root,
-                 html_tag: "img",
-                 content_type: "image/png"
-               })
-    end
 
     for {opening, closing} <- [
           {"&quot;", "&quot;"},
@@ -62,34 +52,104 @@ defmodule Crawler.Snapper.CssCommentsTest do
       candidates = Enum.map_join(names, ",", &"#{opening}#{&1}#{closing} 1x")
       source = ~s|<div style="background:image-set(#{candidates})"></div>|
 
-      assert {:ok, _opts} =
+      destination = Path.join(root, Integer.to_string(System.unique_integer([:positive])))
+      File.mkdir_p!(destination)
+
+      targets =
+        for name <- names, do: {"http://example.com/" <> name, "IMAGE #{name}", "image/png"}
+
+      {export, opts} =
+        managed_export(destination, page, source, targets, assets: ["images", "css"])
+
+      try do
+        from = Managed.resource_for_url(export, page)
+
+        hrefs =
+          export
+          |> Managed.read_resource(from)
+          |> Floki.parse_document!()
+          |> Floki.attribute("div", "style")
+          |> hd()
+          |> CssParser.parse()
+          |> Enum.map(fn {"link", [{"href", href}], []} -> href end)
+
+        assert length(hrefs) == length(names)
+
+        for {href, name} <- Enum.zip(hrefs, names) do
+          target = "http://example.com/" <> name
+          to = Managed.reference_target(export, from, target)
+          Managed.assert_opens(export, from, to, href)
+          assert Managed.read_resource(export, to) == "IMAGE #{name}"
+        end
+      after
+        Crawler.stop(opts)
+        Crawler.Store.dispose_scope(opts.scope)
+      end
+    end
+  end
+
+  test "standalone public ID acknowledgements preserve entity-quoted image-set URLs and image bytes" do
+    root = tmp("standalone-css-image-set-ack-source")
+    page_url = "http://example.com/index.html"
+
+    targets = [
+      {"a)b.png", "standalone000000000010001"},
+      {"a(b.png", "standalone000000000010002"},
+      {"caf)é.png", "standalone000000000010003"}
+    ]
+
+    for {name, id} <- targets do
+      assert {:ok, %{public_id: ^id} = artifact} =
+               Snapper.snap("IMAGE #{name}", %{
+                 public_id: id,
+                 url: "http://example.com/" <> name,
+                 save_to: root,
+                 html_tag: "img",
+                 content_type: "image/png"
+               })
+
+      assert File.read!(saved_artifact(root, artifact)) == "IMAGE #{name}"
+    end
+
+    for {opening, closing, id} <- [
+          {"&quot;", "&quot;", "standalone000000000010004"},
+          {"&#034;", "&#34;", "standalone000000000010005"},
+          {"&#X0022;", "&#x22;", "standalone000000000010006"},
+          {"&apos;", "&apos;", "standalone000000000010007"},
+          {"&#039;", "&#39;", "standalone000000000010008"},
+          {"&#X0027;", "&#x27;", "standalone000000000010009"}
+        ] do
+      candidates =
+        Enum.map_join(targets, ",", fn {name, _id} -> "#{opening}#{name}#{closing} 1x" end)
+
+      source = ~s|<div style="background:image-set(#{candidates})"></div>|
+
+      assert {:ok, %{public_id: ^id} = artifact} =
                Snapper.snap(source, %{
-                 url: page,
+                 public_id: id,
+                 url: page_url,
                  save_to: root,
                  html_tag: "a",
                  content_type: "text/html",
                  assets: ["css"]
                })
 
+      expected =
+        Enum.map_join(targets, ",", fn {name, _id} ->
+          "#{closing}http://example.com/#{name}#{closing} 1x"
+        end)
+
+      body = File.read!(saved_artifact(root, artifact))
+
+      assert body ==
+               <<0xEF, 0xBB, 0xBF>> <> ~s|<div style="background:image-set(#{expected})"></div>|
+
+      [style] = body |> Floki.parse_document!() |> Floki.attribute("div", "style")
+
       hrefs =
-        root
-        |> saved(page)
-        |> File.read!()
-        |> Floki.parse_document!()
-        |> Floki.attribute("div", "style")
-        |> hd()
-        |> CssParser.parse()
-        |> Enum.map(fn {"link", [{"href", href}], []} -> href end)
+        style |> CssParser.parse() |> Enum.map(fn {"link", [{"href", href}], []} -> href end)
 
-      assert length(hrefs) == length(names)
-
-      for {href, name} <- Enum.zip(hrefs, names) do
-        target = "http://example.com/" <> name
-        assert href == Linker.offline_link(page, target)
-        opened = Path.expand(link_path(href), Path.dirname(saved(root, page)))
-        assert opened == Path.expand(saved(root, target))
-        assert File.read!(opened) == "IMAGE #{name}"
-      end
+      assert hrefs == Enum.map(targets, fn {name, _id} -> "http://example.com/" <> name end)
     end
   end
 
@@ -99,7 +159,7 @@ defmodule Crawler.Snapper.CssCommentsTest do
 
     expected =
       comment <>
-        ~s| .x { background:url("#{offline("real.png")}") } @import "theme.css";|
+        ~s| .x { background:url("#{online("real.png")}") } @import "theme.css";|
 
     assert snapshot(source, "snapshot-css-comment-bytes") == expected
   end
@@ -109,7 +169,7 @@ defmodule Crawler.Snapper.CssCommentsTest do
       ~s|@import/* keep */"theme.css"; .x { background: image-set(/* first */"images/*draft.png" 1x,/* next */narrow.png 2x); }|
 
     expected =
-      ~s|@import/* keep */"#{offline("theme.css")}"; .x { background: image-set(/* first */"#{offline("images/*draft.png")}" 1x,/* next */#{offline("narrow.png")} 2x); }|
+      ~s|@import/* keep */"#{online("theme.css")}"; .x { background: image-set(/* first */"#{online("images/*draft.png")}" 1x,/* next */#{online("narrow.png")} 2x); }|
 
     assert snapshot(source, "snapshot-css-comment-separators") == expected
   end
@@ -119,7 +179,7 @@ defmodule Crawler.Snapper.CssCommentsTest do
       ~s|@import/* before import */"theme.css"/* after import */; .x { background:url(/* before URL */"real.png"/* after URL */),url(/* before bare */bare.png),image-set(/* before set */"wide.png"/* after set */ 1x); }|
 
     expected =
-      ~s|@import/* before import */"#{offline("theme.css")}"/* after import */; .x { background:url(/* before URL */"real.png"/* after URL */),url(/* before bare */bare.png),image-set(/* before set */"#{offline("wide.png")}"/* after set */ 1x); }|
+      ~s|@import/* before import */"#{online("theme.css")}"/* after import */; .x { background:url(/* before URL */"real.png"/* after URL */),url(/* before bare */bare.png),image-set(/* before set */"#{online("wide.png")}"/* after set */ 1x); }|
 
     assert snapshot(source, "snapshot-css-comments-within-values") == expected
   end
@@ -129,19 +189,19 @@ defmodule Crawler.Snapper.CssCommentsTest do
     source = ~s|.x{background:url(/*draft*/image.png),url("real.png"/* after */),#{invalid}}|
 
     expected =
-      ~s|.x{background:url(#{offline("/*draft*/image.png")}),url("#{offline("real.png")}"/* after */),#{invalid}}|
+      ~s|.x{background:url(#{online("/*draft*/image.png")}),url("#{online("real.png")}"/* after */),#{invalid}}|
 
     assert snapshot(source, "snapshot-css-url-comment-payloads") == expected
   end
 
   test "saved CSS rewrites valid URLs at EOF while retaining omitted source delimiters" do
     for {source, expected} <- [
-          {".a{background:url(image.png", ".a{background:url(#{offline("image.png")}"},
-          {"@import url(theme.css \n", "@import url(#{offline("theme.css")} \n"},
-          {~s|@import "theme.css|, ~s|@import "#{offline("theme.css")}|},
-          {~s|.a{background:url("image.png|, ~s|.a{background:url("#{offline("image.png")}|},
+          {".a{background:url(image.png", ".a{background:url(#{online("image.png")}"},
+          {"@import url(theme.css \n", "@import url(#{online("theme.css")} \n"},
+          {~s|@import "theme.css|, ~s|@import "#{online("theme.css")}|},
+          {~s|.a{background:url("image.png|, ~s|.a{background:url("#{online("image.png")}|},
           {~s|.a{background:url("image.png"/* after */|,
-           ~s|.a{background:url("#{offline("image.png")}"/* after */|}
+           ~s|.a{background:url("#{online("image.png")}"/* after */|}
         ] do
       assert snapshot(source, "snapshot-css-url-eof") == expected
     end
@@ -154,7 +214,7 @@ defmodule Crawler.Snapper.CssCommentsTest do
     source = escaped <> whitespace <> ~s| .x { background:url("real.png") } | <> comment
 
     expected =
-      escaped <> whitespace <> ~s| .x { background:url("#{offline("real.png")}") } | <> comment
+      escaped <> whitespace <> ~s| .x { background:url("#{online("real.png")}") } | <> comment
 
     assert snapshot(source, "snapshot-css-unfinished-comment") == expected
   end
@@ -165,8 +225,8 @@ defmodule Crawler.Snapper.CssCommentsTest do
       source = escaped <> ~s|.b{background:url("real.png") }|
 
       expected =
-        ".a{background:#{identifier}(#{offline("raw/*draft.png")})} " <>
-          ~s|.b{background:url("#{offline("real.png")}") }|
+        ".a{background:#{identifier}(#{online("raw/*draft.png")})} " <>
+          ~s|.b{background:url("#{online("real.png")}") }|
 
       assert snapshot(source, "snapshot-css-escaped-identifiers") == expected
     end
@@ -175,7 +235,7 @@ defmodule Crawler.Snapper.CssCommentsTest do
   test "saved CSS preserves an ordinary string containing a live resource spelling" do
     literal = ~s|.label{content:"url(real.png) @import 'theme.css'; image-set('wide.png' 1x)"}|
     source = literal <> ~s|.live{background:url(real.png)}|
-    expected = literal <> ~s|.live{background:url(#{offline("real.png")})}|
+    expected = literal <> ~s|.live{background:url(#{online("real.png")})}|
     assert snapshot(source, "snapshot-css-ordinary-strings") == expected
   end
 
@@ -184,7 +244,7 @@ defmodule Crawler.Snapper.CssCommentsTest do
       ~S|.x{--opaque:#url(real.png);--escaped:#\75rl(hidden.png);--set:#image-set("hidden-set.png" 1x);}|
 
     source = opaque <> ~S|.live{background:u\72l(real.png)}|
-    expected = opaque <> ~s|.live{background:u\\72l(#{offline("real.png")})}|
+    expected = opaque <> ~s|.live{background:u\\72l(#{online("real.png")})}|
     assert snapshot(source, "snapshot-css-hash-tokens") == expected
   end
 
@@ -198,27 +258,85 @@ defmodule Crawler.Snapper.CssCommentsTest do
         ~S|.live{background:-WEB\4B IT-IMAGE-SET("real.png" 1x),U\52L(real.png)}|
 
     expected =
-      ~s|@\\49 MPORT "#{offline("theme.css")}";| <>
+      ~s|@\\49 MPORT "#{online("theme.css")}";| <>
         unknown <>
-        ~s|.live{background:-WEB\\4B IT-IMAGE-SET("#{offline("real.png")}" 1x),U\\52L(#{offline("real.png")})}|
+        ~s|.live{background:-WEB\\4B IT-IMAGE-SET("#{online("real.png")}" 1x),U\\52L(#{online("real.png")})}|
 
     assert snapshot(source, "snapshot-css-ascii-function-names") == expected
   end
 
-  defp offline(link), do: Linker.offline_link(@page, link)
+  defp online(link), do: Linker.url(@page, link)
 
   defp snapshot(source, directory) do
     root = tmp(directory)
 
-    assert {:ok, _opts} =
+    assert {:ok, artifact} =
              Snapper.snap(source, %{
                url: @page,
                referrer_url: @page,
                save_to: root,
+               public_id: "csscomments000000000000001",
                html_tag: "link",
                content_type: "text/css"
              })
 
-    File.read!(Path.join(root, Snapshot.path(@page)))
+    File.read!(saved_artifact(root, artifact))
+  end
+
+  defp managed_export(root, page, source, targets, options) do
+    File.rmdir!(root)
+    root = root <> "-#{System.pid()}-#{System.unique_integer([:positive])}"
+    requests = Crawler.RequestLog.new()
+
+    route_key = fn url ->
+      uri = url |> Crawler.URL.canonical() |> URI.parse()
+      URI.to_string(%{uri | query: uri.query || ""})
+    end
+
+    routes =
+      Map.new([{page, source, "text/html"} | targets], fn {url, body, type} ->
+        {route_key.(url), {body, type}}
+      end)
+
+    plug = fn conn ->
+      key = conn |> Plug.Conn.request_url() |> route_key.()
+      Crawler.RequestLog.record(requests, key)
+      {body, type} = Map.fetch!(routes, key)
+      conn |> Plug.Conn.put_resp_header("content-type", type) |> Plug.Conn.resp(200, body)
+    end
+
+    assert {:ok, opts} =
+             Crawler.crawl(
+               page,
+               Keyword.merge(
+                 [
+                   scope: Crawler.TestHelpers.unique_scope("managed-snapshot"),
+                   save_to: root,
+                   store: nil,
+                   workers: 1,
+                   max_body: 1_048_576,
+                   max_analysis_bytes: 16_777_216,
+                   max_css_work: 5_000,
+                   max_css_pictures: 1_000,
+                   max_depths: 3,
+                   respect_robots: false,
+                   req_options: [plug: plug, retry: false]
+                 ],
+                 options
+               )
+             )
+
+    on_exit(fn ->
+      Crawler.stop(opts)
+      Crawler.Store.dispose_scope(opts.scope)
+      File.rm_rf!(root)
+    end)
+
+    export = Managed.ready_export(opts)
+
+    assert Crawler.RequestLog.frequencies(requests) ==
+             Map.new(routes, fn {url, _} -> {url, 1} end)
+
+    {export, opts}
   end
 end

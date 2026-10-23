@@ -97,7 +97,7 @@ defmodule Crawler.QueueFailureTest do
 
     assert Process.alive?(supervisor)
     assert Store.queue_record(owner[:queue]) == nil
-    refute Process.whereis(:"opq-#{inspect(owner[:queue])}")
+    wait(fn -> assert Registry.lookup(OPQ.Registry, owner[:queue]) == [] end)
     assert Store.inflight_count(owner_scope) == 0
     assert Store.inflight_count(guest_scope) == 0
     assert Store.pending_count(owner_scope) == 0

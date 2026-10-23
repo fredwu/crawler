@@ -1,7 +1,7 @@
 defmodule Crawler.CrawlHTMLReferencePolicyTest do
   use Crawler.TestCase, async: false
 
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
   alias Crawler.Store
 
@@ -11,7 +11,8 @@ defmodule Crawler.CrawlHTMLReferencePolicyTest do
     req_options: req_options
   } do
     scope = unique_scope("html-reference-depth")
-    root = tmp(scope)
+    root = Path.join(tmp(), scope <> "-#{Base.encode16(:crypto.strong_rand_bytes(6))}")
+    on_exit(fn -> File.rm_rf(root) end)
     page = url <> "/page"
     asset = url <> "/asset.png"
 
@@ -35,6 +36,10 @@ defmodule Crawler.CrawlHTMLReferencePolicyTest do
       start_crawl(page,
         scope: scope,
         workers: 2,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
         retries: 0,
         store: Store,
         save_to: root,
@@ -50,14 +55,17 @@ defmodule Crawler.CrawlHTMLReferencePolicyTest do
       assert Store.find_processed({asset, scope})
     end)
 
-    assert File.read!(saved(root, asset)) == "IMAGE"
-    assert_link_opens(root, page, asset)
-    target = Crawler.Linker.offline_link(page, asset)
+    export = ready_export(opts)
+    source_resource = resource_for_url(export, page)
+    image = edge_target(export, source_resource, 1)
+    assert read_resource(export, image) == "IMAGE"
+    target = relative_reference(source_resource, image)
+    assert_opens(export, source_resource, image, target)
 
-    assert File.read!(saved(root, page)) ==
+    assert read_resource(export, source_resource) ==
              <<0xEF, 0xBB, 0xBF>> <>
-               ~s|<a href="#{target}" style="background:url(#{target})">A</a>| <>
-               ~s|<a href="#{target}">B</a><a href="#{target}">C</a>|
+               ~s|<a href="#{asset}" style="background:url(#{target})">A</a>| <>
+               ~s|<a href="#{asset}">B</a><a href="#{asset}">C</a>|
   end
 
   test "browser ignored script sources do not make requests", %{
@@ -88,6 +96,10 @@ defmodule Crawler.CrawlHTMLReferencePolicyTest do
       start_crawl(page,
         scope: scope,
         workers: 2,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
         retries: 0,
         store: Store,
         assets: ["js"],

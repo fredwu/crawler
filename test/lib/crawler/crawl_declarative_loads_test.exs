@@ -2,9 +2,8 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
   use Crawler.TestCase, async: false
 
   import Plug.Conn
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
-  alias Crawler.Snapper
   alias Crawler.Store
   alias Crawler.Store.Page
 
@@ -34,7 +33,7 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
     end
 
     {opts, root} = run(page, context)
-    saved = File.read!(saved(root, page))
+    saved = read_resource(root, resource_for_url(root, page))
 
     for path <- ["/blog/next-chunk", "/app", "/blog/page/2", "/blog", "/blog/old"] do
       assert Store.find_processed({context.url <> path, opts.scope})
@@ -49,7 +48,8 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
       refute Store.find({url, opts.scope})
     end
 
-    assert_points(saved, page, context.url <> "/blog/next-chunk", root)
+    target = assert_points(saved, page, context.url <> "/blog/next-chunk", root)
+    assert read_resource(root, target) == <<0xEF, 0xBB, 0xBF>> <> "page"
   end
 
   test "nofollow skips next and still fetches prefetch and stylesheets", context do
@@ -66,12 +66,13 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
     expect_css(context, "/stay.css")
 
     {opts, root} = run(page, context, assets: ["css"])
-    saved = File.read!(saved(root, page))
+    saved = read_resource(root, resource_for_url(root, page))
 
     refute Store.find({context.url <> "/secret", opts.scope})
     assert Store.find_processed({context.url <> "/still", opts.scope})
     assert Store.find_processed({context.url <> "/stay.css", opts.scope})
-    assert_points(saved, page, context.url <> "/still", root)
+    target = assert_points(saved, page, context.url <> "/still", root)
+    assert read_resource(root, target) == <<0xEF, 0xBB, 0xBF>> <> "still"
   end
 
   test "nofollow on a next link skips that link only", context do
@@ -141,7 +142,7 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
     expect_bytes(context, "/preload-audio.mp3", "audio/mpeg", "audio")
 
     {opts, root} = run(page, context, assets: ["css", "images"])
-    saved = File.read!(saved(root, page))
+    saved = read_resource(root, resource_for_url(root, page))
 
     for path <- [
           "/data.json",
@@ -159,8 +160,10 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
       refute Store.find({context.url <> path, opts.scope})
     end
 
-    assert_points(saved, page, context.url <> "/data.json", root)
-    assert_points(saved, page, context.url <> "/preload-audio.mp3", root)
+    target = assert_points(saved, page, context.url <> "/data.json", root)
+    assert read_resource(root, target) == "{}"
+    target = assert_points(saved, page, context.url <> "/preload-audio.mp3", root)
+    assert read_resource(root, target) == "audio"
     assert saved =~ ~s|href="/spaced.json"|
     assert saved =~ ~s|href="/c.vtt"|
   end
@@ -178,7 +181,7 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
     end
 
     {opts, root} = run(page, context, assets: ["css"])
-    saved = File.read!(saved(root, page))
+    saved = read_resource(root, resource_for_url(root, page))
 
     assert Store.find_processed({context.url <> "/data.json", opts.scope})
     assert Store.find_processed({context.url <> "/header.json", opts.scope})
@@ -209,7 +212,7 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
     expect_bytes(context, "/notes.js", "application/javascript", ~s|import("./dep.js");|)
 
     {opts, root} = run(page, context, assets: ["css"])
-    saved = File.read!(saved(root, notes))
+    saved = read_resource(root, resource_for_url(root, notes))
 
     for path <- ["/notes.html", "/notes.js"] do
       assert Store.find_processed({context.url <> path, opts.scope})
@@ -225,7 +228,7 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
     assert saved =~ ~s|"/soon"|
   end
 
-  test "a page link crawls a document that a fetch preload already recorded", context do
+  test "an iframe crawls a document that a fetch preload already recorded", context do
     page = context.url <> "/fetch-shared"
     article = context.url <> "/shared-article"
     nxt = context.url <> "/shared-next"
@@ -234,8 +237,8 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
       context,
       "/fetch-shared",
       """
-      <a href="/shared-article">Article</a>
-      <link rel="next" href="/shared-next">
+      <iframe title="Article" src="/shared-article"></iframe>
+      <iframe title="Next" src="/shared-next"></iframe>
       """,
       [
         {"link",
@@ -271,13 +274,20 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
       assert Store.find_processed({context.url <> path, opts.scope})
     end
 
-    assert_link_opens(root, article, context.url <> "/shared-section")
-    assert_link_opens(root, article, context.url <> "/shared-article.css")
-    assert_link_opens(root, article, context.url <> "/shared-soon")
-    assert_link_opens(root, nxt, context.url <> "/shared-after")
+    seed = resource_for_url(root, page)
+    source = linked_resource(root, seed, "iframe[title=Article]", "src", article)
+    target = reference_target(root, source, context.url <> "/shared-section")
+    assert_link_opens(root, source, target)
+    target = reference_target(root, source, context.url <> "/shared-article.css")
+    assert_link_opens(root, source, target)
+    target = reference_target(root, source, context.url <> "/shared-soon")
+    assert_link_opens(root, source, target)
+    source = linked_resource(root, seed, "iframe[title=Next]", "src", nxt)
+    target = reference_target(root, source, context.url <> "/shared-after")
+    assert_link_opens(root, source, target)
   end
 
-  test "a page link crawls a script that a fetch preload already recorded", context do
+  test "a script tag crawls a script that a fetch preload already recorded", context do
     page = context.url <> "/fetch-script"
     script = context.url <> "/shared-app.js"
 
@@ -285,7 +295,7 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
       context,
       "/fetch-script",
       """
-      <a href="/shared-app.js">App</a>
+      <script src="/shared-app.js"></script>
       """,
       [
         {"link", ~s|</shared-app.js>; rel="preload"; as="fetch"|}
@@ -305,10 +315,16 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
 
     assert Store.find_processed({script, opts.scope})
     assert Store.find_processed({context.url <> "/shared-dep.js", opts.scope})
-    assert_link_opens(root, script, context.url <> "/shared-dep.js")
+    seed = resource_for_url(root, page)
+    source = linked_resource(root, seed, "script", "src", script)
+    target = reference_target(root, source, context.url <> "/shared-dep.js")
+    assert_link_opens(root, source, target)
+    assert [_, href] = Regex.run(~r/import\("([^"]+)"\)/, read_resource(root, source))
+    assert_opens(root, source, target, href)
+    assert read_resource(root, target) == "export default 1\n"
   end
 
-  test "a page link opens a fetch document when page storage is off", context do
+  test "an iframe opens a fetch document when page storage is off", context do
     page = context.url <> "/fetch-unstored"
     article = context.url <> "/unstored-article"
     script = context.url <> "/unstored-app.js"
@@ -318,9 +334,9 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
       context,
       "/fetch-unstored",
       """
-      <a href="/unstored-article">Article</a>
-      <a href="/unstored-app.js">App</a>
-      <a href="/unstored-data.json">Data</a>
+      <iframe title="Article" src="/unstored-article"></iframe>
+      <script src="/unstored-app.js"></script>
+      <iframe title="Data" src="/unstored-data.json"></iframe>
       """,
       [
         {"link",
@@ -360,29 +376,44 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
     assert Store.find_processed({data, opts.scope})
     refute Store.find({context.url <> "/from-unstored-json", opts.scope})
 
-    assert %Page{body: body, opts: stored} = Store.find({article, opts.scope})
-    assert is_binary(body)
-    assert stored[:html_tag] == "a"
+    for url <- [article, script, data] do
+      assert %Page{
+               url: ^url,
+               processed: true,
+               body: nil,
+               opts: nil,
+               analysis: nil,
+               interpretation: nil,
+               source_revision: nil,
+               credit: nil,
+               target_handle: target
+             } =
+               Store.find({url, opts.scope})
 
-    assert %Page{body: script_body, opts: script_opts} = Store.find({script, opts.scope})
-    assert is_binary(script_body)
-    assert script_opts[:html_tag] == "a"
-    assert %Page{body: nil} = Store.find({data, opts.scope})
+      assert is_reference(target)
+    end
 
-    assert_link_opens(root, article, context.url <> "/unstored/child")
-    assert_link_opens(root, script, context.url <> "/unstored-dep.js")
-    assert File.read!(saved(root, data)) =~ "from-unstored-json"
+    seed = resource_for_url(root, page)
+    source = linked_resource(root, seed, "iframe[title=Article]", "src", article)
+    target = reference_target(root, source, context.url <> "/unstored/child")
+    assert_link_opens(root, source, target)
+    seed = resource_for_url(root, page)
+    source = linked_resource(root, seed, "script", "src", script)
+    target = reference_target(root, source, context.url <> "/unstored-dep.js")
+    assert_link_opens(root, source, target)
+    target = linked_resource(root, seed, "iframe[title=Data]", "src", data)
+    assert read_resource(root, target) =~ "from-unstored-json"
   end
 
-  test "a page link leaves a non-document fetch preload closed", context do
+  test "an iframe leaves a non-document fetch preload closed", context do
     page = context.url <> "/fetch-closed"
 
     expect_html(
       context,
       "/fetch-closed",
       """
-      <a href="/closed-clip.vtt">Captions</a>
-      <a href="/closed-data.json">Data</a>
+      <iframe title="Captions" src="/closed-clip.vtt"></iframe>
+      <iframe title="Data" src="/closed-data.json"></iframe>
       """,
       [
         {"link",
@@ -411,103 +442,113 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
     refute Store.find({context.url <> "/from-closed-track", opts.scope})
     refute Store.find({context.url <> "/from-closed-json", opts.scope})
 
-    assert File.read!(saved(root, context.url <> "/closed-clip.vtt")) =~
-             ~s|href="/from-closed-track"|
+    seed = resource_for_url(root, page)
 
-    assert File.read!(saved(root, context.url <> "/closed-data.json")) =~
-             ~s|href='/from-closed-json'|
+    captions =
+      linked_resource(
+        root,
+        seed,
+        "iframe[title=Captions]",
+        "src",
+        context.url <> "/closed-clip.vtt"
+      )
+
+    data =
+      linked_resource(root, seed, "iframe[title=Data]", "src", context.url <> "/closed-data.json")
+
+    assert read_resource(root, captions) =~ ~s|href="/from-closed-track"|
+    assert read_resource(root, data) =~ ~s|href='/from-closed-json'|
   end
 
-  test "a page link waits for an in-flight fetch preload of a document", context do
+  test "an iframe waits for an in-flight fetch preload of a document", context do
     page = context.url <> "/fetch-wait"
     article = context.url <> "/wait-article"
     scope = unique_scope("fetch-wait")
-    root = tmp(scope)
-    on_exit(fn -> File.rm_rf(root) end)
+    parent_root = tmp(scope)
+    root = Path.join(parent_root, "archive")
+    on_exit(fn -> File.rm_rf(parent_root) end)
+    seed_key = make_ref()
+    fetch_key = make_ref()
+    document_key = make_ref()
 
     expect_html(context, "/fetch-wait", "<p>seed</p>")
     expect_html(context, "/from-fetch-wait", "child")
-
     body = ~s|<a href="/from-fetch-wait">Child</a>|
+    expect_html(context, "/wait-article", body)
 
-    {:ok, opts} =
-      start_crawl(
-        page,
-        scope: scope,
-        workers: 1,
-        retries: 0,
-        max_depths: 4,
-        assets: ["css"],
-        store: Store,
-        save_to: root,
-        req_options: context.req_options
-      )
-
-    on_exit(fn -> Crawler.stop(opts) end)
-    wait(5_000, fn -> refute Crawler.running?(opts) end)
-
-    assert {:ok, _} = Store.add({article, scope}, opts.generation, opts.queue, "fetch")
-
-    # finish_claim releases one pending slot. Count this in-flight fetch.
-    assert :ok = Store.note_enqueued(scope, opts.generation, opts.queue)
-
-    assert :ok ==
-             Store.note_picture_type(
-               {article, scope},
-               "text/html",
-               opts.generation,
-               opts.queue
+    assert {:ok, opts} =
+             start_crawl(page,
+               scope: scope,
+               workers: 3,
+               max_body: 1_048_576,
+               max_analysis_bytes: 16_777_216,
+               max_manifest_bytes: 16_777_216,
+               retries: 0,
+               max_depths: 4,
+               assets: ["css"],
+               store: Store,
+               save_to: root,
+               req_options: context.req_options,
+               parser: Crawler.ManagedSnapshotHelpers.GateParser,
+               managed_test_gates: [
+                 {page, "a", self(), seed_key},
+                 {article, "fetch", self(), fetch_key},
+                 {article, "a", self(), document_key}
+               ]
              )
 
-    {:ok, claim} =
-      Store.start_work(%{
-        url: article,
-        scope: scope,
-        generation: opts.generation,
-        queue: opts.queue,
-        max_pages: :infinity
-      })
-
-    on_exit(fn -> Store.finish_claim(claim) end)
-
-    stored = %{
-      url: article,
-      scope: scope,
-      generation: opts.generation,
-      queue: opts.queue,
-      html_tag: "fetch",
-      content_type: "text/html",
-      referrer_url: article,
-      headers: [],
-      depth: 1,
-      store: Store,
-      save_to: root
-    }
-
-    assert {_new, %Page{}} = Store.add_page_data({article, scope}, body, stored)
+    on_exit(fn -> Crawler.stop(opts) end)
+    assert_receive {:managed_parser_held, ^seed_key, seed, _, _, _}, 2_000
+    on_exit(fn -> send(seed, {:managed_parser_release, seed_key}) end)
 
     assert {:ok, _} =
              Crawler.crawl(
                article,
-               Map.merge(opts, %{html_tag: "a", reference_tag: "a", depth: 1})
+               Map.merge(opts, %{html_tag: "fetch", reference_tag: "fetch", depth: 1})
              )
 
-    wait(1_000, fn -> assert Store.inflight_count(scope) >= 2 end)
-    held = System.monotonic_time(:millisecond)
+    assert_receive {:managed_parser_held, ^fetch_key, fetch, "text/html", revision, fetch_target},
+                   2_000
 
-    wait(1_000, fn ->
-      assert Store.inflight_count(scope) >= 2
-      assert System.monotonic_time(:millisecond) - held >= 200
-    end)
+    assert is_reference(revision) and is_reference(fetch_target)
+    on_exit(fn -> send(fetch, {:managed_parser_release, fetch_key}) end)
 
-    assert {:ok, _} = Snapper.snap(body, stored)
-    assert :ok = Store.complete_page({article, scope}, opts.generation, opts.queue)
-    Store.finish_claim(claim)
+    assert {:ok, _} =
+             Crawler.crawl(
+               article,
+               Map.merge(opts, %{
+                 html_tag: "a",
+                 reference_tag: "iframe",
+                 page_open: false,
+                 depth: 1
+               })
+             )
 
-    wait(5_000, fn -> refute Crawler.running?(opts) end)
+    refute_receive {:managed_parser_held, ^document_key, _, _, _, _}, 200
+    refute Store.find_processed({context.url <> "/from-fetch-wait", scope})
+    assert {:ok, %{ready?: false}} = Crawler.export_status(opts)
+    send(fetch, {:managed_parser_release, fetch_key})
 
+    assert_receive {:managed_parser_held, ^document_key, document, "text/html", ^revision,
+                    document_target},
+                   2_000
+
+    refute document_target == fetch_target
+    send(document, {:managed_parser_release, document_key})
+    send(seed, {:managed_parser_release, seed_key})
+    export = ready_root(opts)
     assert Store.find_processed({context.url <> "/from-fetch-wait", scope})
-    assert_link_opens(root, article, context.url <> "/from-fetch-wait")
+    resources = Enum.filter(export.manifest["resources"], &(&1["url"] == article))
+
+    assert [source] =
+             Enum.filter(resources, fn resource ->
+               Enum.any?(export.manifest["references"], &(&1["from"] == resource["id"]))
+             end)
+
+    assert source
+    target = reference_target(export, source, context.url <> "/from-fetch-wait")
+    assert_link_opens(export, source, target)
+    assert read_resource(export, target) == <<0xEF, 0xBB, 0xBF>> <> "child"
   end
 
   test "preload fetch and track are skipped when no asset channel is on", context do
@@ -558,7 +599,7 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
     expect_html(context, "/next", "next")
 
     {opts, root} = run(page, context, assets: ["css"])
-    saved = File.read!(saved(root, page))
+    saved = read_resource(root, resource_for_url(root, page))
 
     for path <- ["/on.css", "/dark.css", "/header.css", "/next"] do
       assert Store.find_processed({context.url <> path, opts.scope})
@@ -568,7 +609,8 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
       refute Store.find({context.url <> path, opts.scope})
     end
 
-    assert_points(saved, page, context.url <> "/on.css", root)
+    target = assert_points(saved, page, context.url <> "/on.css", root)
+    assert read_resource(root, target) == "body{}"
     assert saved =~ ~s|href="/off.css"|
     assert saved =~ ~s|href="/blank.css"|
     assert saved =~ ~s|href="/dim.css"|
@@ -591,8 +633,8 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
     expect_foreign(context, "cdn.test", "/cdn.png", &png/1)
 
     {opts, root} = run(page, context, assets: ["images"])
-    saved = File.read!(saved(root, page))
-    manifest_body = File.read!(saved(root, manifest))
+    saved = read_resource(root, resource_for_url(root, page))
+    manifest_body = read_resource(root, resource_for_url(root, manifest))
 
     for url <- [manifest, context.url <> "/blog/home", context.url <> "/new"] do
       assert Store.find_processed({url, opts.scope})
@@ -675,9 +717,9 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
     end
 
     {opts, root} = run(page, context, assets: [])
-    saved = File.read!(saved(root, page))
-    rules_body = File.read!(saved(root, rules))
-    ext_body = File.read!(saved(root, ext))
+    saved = read_resource(root, resource_for_url(root, page))
+    rules_body = read_resource(root, resource_for_url(root, rules))
+    ext_body = read_resource(root, resource_for_url(root, ext))
 
     for path <- [
           "/blog/inline-next",
@@ -828,7 +870,7 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
     expect_html(context, "/closed-in", "closed")
 
     {opts, root} = run(page, context)
-    saved = File.read!(saved(root, page))
+    saved = read_resource(root, resource_for_url(root, page))
 
     assert Store.find_processed({context.url <> "/inside", opts.scope})
     assert Store.find_processed({context.url <> "/closed-in", opts.scope})
@@ -843,10 +885,38 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
       refute Store.find({url, opts.scope})
     end
 
-    assert_points(saved, page, context.url <> "/inside", root)
+    target = assert_points(saved, page, context.url <> "/inside", root)
+    assert read_resource(root, target) == <<0xEF, 0xBB, 0xBF>> <> "inside"
     assert saved =~ ~s|href="/hidden"|
     assert saved =~ ~s|href="/canon"|
     assert saved =~ ~s|href="https://cdn.test/dns"|
+  end
+
+  defp linked_resource(export, source, selector, attribute, expected_url) do
+    assert [href] =
+             export
+             |> read_resource(source)
+             |> Floki.parse_document!()
+             |> Floki.attribute(selector, attribute)
+
+    uri = URI.parse(href)
+    path = Path.expand(URI.decode(uri.path), Path.dirname(artifact_path(export, source)))
+
+    assert [target] =
+             Enum.filter(
+               export.manifest["resources"],
+               &(Path.expand(&1["path"], export.root) == path)
+             )
+
+    assert target["url"] == expected_url
+
+    assert Enum.any?(
+             export.manifest["references"],
+             &(&1["from"] == source["id"] and &1["target"] == target["id"] and
+                 &1["outcome"] == "succeeded")
+           )
+
+    assert_opens(export, source, target, href)
   end
 
   defp preload_document do
@@ -928,8 +998,9 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
 
   defp run(page, context, extra \\ []) do
     scope = extra[:scope] || unique_scope("declarative")
-    root = tmp(scope)
-    on_exit(fn -> File.rm_rf(root) end)
+    parent_root = tmp(scope)
+    root = Path.join(parent_root, "archive")
+    on_exit(fn -> File.rm_rf(parent_root) end)
 
     {:ok, opts} =
       start_crawl(
@@ -938,6 +1009,9 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
           [
             scope: scope,
             workers: 1,
+            max_body: 1_048_576,
+            max_analysis_bytes: 16_777_216,
+            max_manifest_bytes: 16_777_216,
             retries: 0,
             max_depths: 4,
             store: Store,
@@ -949,8 +1023,22 @@ defmodule Crawler.CrawlDeclarativeLoadsTest do
       )
 
     on_exit(fn -> Crawler.stop(opts) end)
-    wait(5_000, fn -> refute Crawler.running?(opts) end)
-    {opts, root}
+    export = ready_root(opts)
+    {opts, export}
+  end
+
+  defp ready_root(opts) do
+    result = Store.await_direct(opts.target_handle, Crawler.Deadline.after_ms(5_000))
+
+    assert {:terminal, %Crawler.Job.Outcome{status: :succeeded}, _} = result,
+           "root canonical outcome: #{inspect(result)}"
+
+    export = ready_export(opts)
+
+    assert Enum.any?(export.manifest["resources"], &(&1["url"] == opts.url)),
+           "ready export omitted its root; canonical outcome: #{inspect(result)}"
+
+    export
   end
 
   defp expect_html(context, path, body, headers \\ []) do

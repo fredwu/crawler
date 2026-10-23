@@ -1,26 +1,15 @@
 defmodule Crawler.Linker.SnapshotComponentTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
-  import Crawler.SnapshotHelpers
+  import Crawler.SnapshotHelpers, only: [saved_artifact: 2]
   import Crawler.TestHelpers
 
-  alias Crawler.Linker.Snapshot
+  alias Crawler.ManagedSnapshotHelpers, as: Managed
   alias Crawler.Snapper
 
-  test "filesystem component boundaries keep usable MIME suffixes" do
-    for size <- [254, 255, 256] do
-      filename = String.duplicate("a", size - 4) <> ".bin"
-      path = Snapshot.path("http://ex.com/#{filename}")
-
-      assert_components_fit(path)
-      assert Path.extname(path) == ".bin"
-
-      if size <= 255 do
-        assert Path.basename(path) == filename
-      else
-        assert String.starts_with?(Path.basename(path), "__sha256_")
-      end
-    end
+  setup do
+    Req.Test.set_req_test_to_shared()
+    on_exit(fn -> Req.Test.set_req_test_to_private() end)
   end
 
   test "long queries, directory names, case and Unicode retain distinct identities" do
@@ -42,46 +31,52 @@ defmodule Crawler.Linker.SnapshotComponentTest do
       "http://#{String.duplicate("U", 60)}@ex.com/one.bin"
     ]
 
-    paths = Enum.map(urls, &Snapshot.path/1)
-    Enum.each(paths, &assert_components_fit/1)
-    assert length(Enum.uniq(Enum.map(paths, &String.downcase/1))) == length(paths)
-
-    [one, two] = Enum.map(Enum.slice(urls, 4, 2), &Snapshot.path/1)
-    assert Path.dirname(one) == Path.dirname(two)
-
-    for url <- urls do
-      assert link_path(Snapshot.url_path(url)) == Snapshot.path(url)
-    end
+    identities = Enum.map(urls, &Crawler.URL.canonical/1)
+    assert length(Enum.uniq(identities)) == length(urls)
   end
 
   test "literal digest names cannot collide with bounded file or directory identities" do
     directory_url = "http://ex.com/#{String.duplicate("A", 100)}"
-    directory_path = Snapshot.path(directory_url)
-    digest_directory = directory_path |> Path.dirname() |> Path.basename()
-    literal_directory_url = "http://ex.com/#{digest_directory}"
+
+    literal_directory_url =
+      "http://ex.com/__sha256_dc07f38ea9c801dd1c61a4a09e489286e55bb100a44e04d825ab5d91d185c3ff"
 
     file_url = "http://ex.com/#{String.duplicate("A", 100)}.CSS"
-    file_path = Snapshot.path(file_url)
-    literal_file_url = "http://ex.com/#{Path.basename(file_path)}"
 
-    assert digest_directory =~ "__sha256_"
-    assert Path.extname(file_path) == ".css"
-    refute Snapshot.path(literal_directory_url) == directory_path
-    refute Snapshot.path(literal_file_url) == file_path
+    literal_file_url =
+      "http://ex.com/__sha256_59665af2a8606fe27add8038b837464a10b6de3a282a99cf659fca8a24ca3ab0.css"
 
     root = tmp("snapshot-digest-names")
     urls = [directory_url, literal_directory_url, file_url, literal_file_url]
 
-    for {url, index} <- Enum.with_index(urls) do
-      body = "BODY-#{index}"
+    public_ids = [
+      "component0000000000000001",
+      "component0000000000000002",
+      "component0000000000000003",
+      "component0000000000000004"
+    ]
 
-      assert {:ok, _opts} =
-               Snapper.snap(body, %{url: url, save_to: root, content_type: "text/plain"})
-    end
+    artifacts =
+      for {{url, public_id}, index} <- Enum.with_index(Enum.zip(urls, public_ids)) do
+        body = "BODY-#{index}"
 
-    for {url, index} <- Enum.with_index(urls) do
+        assert {:ok, artifact} =
+                 Snapper.snap(body, %{
+                   url: url,
+                   save_to: root,
+                   content_type: "text/plain",
+                   public_id: public_id
+                 })
+
+        {artifact, index}
+      end
+
+    paths = Enum.map(artifacts, fn {artifact, _index} -> artifact.path end)
+    assert length(Enum.uniq(paths)) == length(paths)
+
+    for {artifact, index} <- artifacts do
       body = "BODY-#{index}"
-      assert File.read!(saved(root, url)) == body
+      assert File.read!(saved_artifact(root, artifact)) == body
     end
   end
 
@@ -99,27 +94,76 @@ defmodule Crawler.Linker.SnapshotComponentTest do
        <<0x89, 0xE9>>}
     ]
 
-    for {url, type, body} <- targets do
-      assert {:ok, _opts} = Snapper.snap(body, %{url: url, save_to: root, content_type: type})
-    end
-
     html = Enum.map_join(targets, "", fn {url, _type, _body} -> ~s(<a href="#{url}">open</a>) end)
 
-    assert {:ok, _opts} =
-             Snapper.snap(html, %{
-               url: page,
-               save_to: root,
-               content_type: "text/html",
-               depth: 1,
-               max_depths: 2,
-               html_tag: "a"
-             })
+    export =
+      managed_export(
+        root,
+        page,
+        html,
+        Enum.map(targets, fn {url, type, body} -> {url, body, type} end)
+      )
 
+    source = Managed.resource_for_url(export, page)
+
+    hrefs =
+      export
+      |> Managed.read_resource(source)
+      |> Floki.parse_document!()
+      |> Floki.attribute("a", "href")
+
+    assert length(hrefs) == length(targets)
+
+    static = Plug.Static.init(at: "/", from: export.root)
+
+    for {{href, {url, type, body}}, index} <- Enum.with_index(Enum.zip(hrefs, targets)) do
+      target = Managed.edge_target(export, source, index)
+      assert target["url"] == Crawler.URL.normalize(url)
+      Managed.assert_opens(export, source, target, href)
+      assert_components_fit(target["path"])
+      assert Managed.read_resource(export, target) == body
+      response = :get |> Plug.Test.conn("/" <> target["path"]) |> Plug.Static.call(static)
+      assert response.status == 200
+      assert Plug.Conn.get_resp_header(response, "content-type") == [type]
+      assert response.resp_body == body
+    end
+  end
+
+  test "standalone public ID acknowledgements contain long URL artifacts and serve exact bytes" do
+    root = tmp("standalone-long-url-ack-serving")
     static = Plug.Static.init(at: "/", from: root)
 
-    for {url, type, body} <- targets do
-      assert_link_opens(root, page, url)
-      response = :get |> Plug.Test.conn("/" <> Snapshot.url_path(url)) |> Plug.Static.call(static)
+    targets = [
+      {"standalone000000000003001", "http://ex.com/app.css?q=#{String.duplicate("A", 50)}",
+       "text/css", ".css", ".upper { color: red }"},
+      {"standalone000000000003002", "http://ex.com/#{String.duplicate("A", 80)}.CSS", "text/css",
+       ".css", ".case { color: blue }"},
+      {"standalone000000000003003", "http://ex.com/#{String.duplicate("é", 150)}/file.bin",
+       "application/octet-stream", ".bin", <<0xFF, 0xE9>>},
+      {"standalone000000000003004", "http://ex.com/#{String.duplicate("a%2F", 80)}.bin",
+       "application/octet-stream", ".bin", <<0x89, 0xE9>>}
+    ]
+
+    for {id, url, type, suffix, body} <- targets do
+      assert {:ok, %{public_id: ^id, path: path} = artifact} =
+               Snapper.snap(body, %{
+                 public_id: id,
+                 url: url,
+                 save_to: root,
+                 content_type: type
+               })
+
+      assert path == "resources/" <> id <> suffix
+      assert byte_size(path) <= 240
+      assert Enum.all?(String.split(path, "/"), &(byte_size(&1) <= 128))
+
+      assert String.starts_with?(
+               Path.expand(saved_artifact(root, artifact)),
+               Path.expand(root) <> "/"
+             )
+
+      assert File.read!(saved_artifact(root, artifact)) == body
+      response = :get |> Plug.Test.conn("/" <> path) |> Plug.Static.call(static)
       assert response.status == 200
       assert Plug.Conn.get_resp_header(response, "content-type") == [type]
       assert response.resp_body == body
@@ -143,39 +187,89 @@ defmodule Crawler.Linker.SnapshotComponentTest do
       "http://ex.com/#{long}/child"
     ]
 
-    for {url, index} <- Enum.with_index(urls) do
-      assert {:ok, _opts} =
-               Snapper.snap("BODY-#{index}", %{
-                 url: url,
-                 save_to: root,
-                 content_type: "text/plain"
-               })
-    end
-
+    targets = for {url, index} <- Enum.with_index(urls), do: {url, "BODY-#{index}", "text/plain"}
     html = Enum.map_join(urls, "", &~s(<a href="#{&1}">open</a>))
+    export = managed_export(root, page, html, targets)
+    source = Managed.resource_for_url(export, page)
 
-    assert {:ok, _opts} =
-             Snapper.snap(html, %{
-               url: page,
-               save_to: root,
-               content_type: "text/html",
-               depth: 1,
-               max_depths: 2,
-               html_tag: "a"
-             })
+    hrefs =
+      export
+      |> Managed.read_resource(source)
+      |> Floki.parse_document!()
+      |> Floki.attribute("a", "href")
 
-    for {url, index} <- Enum.with_index(urls) do
-      assert_components_fit(Snapshot.path(url))
-      assert File.read!(saved(root, url)) == "BODY-#{index}"
-      assert_link_opens(root, page, url)
-    end
+    assert length(hrefs) == length(urls)
 
-    assert Snapshot.path("http://ex.com/app.js/") == Snapshot.path("http://ex.com/app.js")
-    paths = Enum.map(urls, &Snapshot.path/1)
-    assert length(Enum.uniq(Enum.map(paths, &String.downcase/1))) == length(paths)
+    resources =
+      for {{href, url}, index} <- Enum.with_index(Enum.zip(hrefs, urls)) do
+        target = Managed.edge_target(export, source, index)
+        assert target["url"] == Crawler.URL.normalize(url)
+        Managed.assert_opens(export, source, target, href)
+        assert_components_fit(target["path"])
+        assert Managed.read_resource(export, target) == "BODY-#{index}"
+        target["path"]
+      end
+
+    assert length(Enum.uniq(resources)) == length(urls)
+
+    assert Crawler.URL.canonical("http://ex.com/app.js/") ==
+             Crawler.URL.canonical("http://ex.com/app.js")
   end
 
   defp assert_components_fit(path) do
     assert Enum.all?(String.split(path, "/"), &(byte_size(&1) <= 255))
+  end
+
+  defp managed_export(root, page, source, targets) do
+    File.rmdir!(root)
+    root = root <> "-#{System.pid()}-#{System.unique_integer([:positive])}"
+    requests = Crawler.RequestLog.new()
+
+    route_key = fn url ->
+      uri = url |> Crawler.URL.canonical() |> URI.parse()
+      URI.to_string(%{uri | query: uri.query || ""})
+    end
+
+    routes =
+      Map.new([{page, source, "text/html"} | targets], fn {url, body, type} ->
+        {route_key.(url), {body, type}}
+      end)
+
+    name = {__MODULE__, make_ref()}
+
+    Req.Test.stub(name, fn conn ->
+      key = conn |> Plug.Conn.request_url() |> route_key.()
+      Crawler.RequestLog.record(requests, key)
+      {body, type} = Map.fetch!(routes, key)
+      conn |> Plug.Conn.put_resp_header("content-type", type) |> Plug.Conn.resp(200, body)
+    end)
+
+    assert {:ok, opts} =
+             Crawler.crawl(page,
+               scope: Crawler.TestHelpers.unique_scope("managed-snapshot"),
+               save_to: root,
+               store: nil,
+               workers: 1,
+               max_body: 1_048_576,
+               max_analysis_bytes: 16_777_216,
+               max_css_work: 5_000,
+               max_css_pictures: 1_000,
+               max_manifest_bytes: 16 * 1024 * 1024,
+               max_depths: 3,
+               respect_robots: false,
+               req_options: [plug: {Req.Test, name}, retry: false]
+             )
+
+    on_exit(fn ->
+      Crawler.stop(opts)
+      File.rm_rf!(root)
+    end)
+
+    export = Managed.ready_export(opts)
+
+    assert Crawler.RequestLog.frequencies(requests) ==
+             Map.new(routes, fn {url, _} -> {url, 1} end)
+
+    export
   end
 end

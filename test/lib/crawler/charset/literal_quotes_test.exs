@@ -20,7 +20,7 @@ defmodule Crawler.Charset.LiteralQuotesTest do
     end
   end
 
-  test "literal quotes in an XML label allow a supported XHTML meta declaration" do
+  test "literal quotes in an XML label use the XML UTF-8 default" do
     for label <- ["'latin1", "latin1'", "'latin1'"] do
       source =
         ~s|<?xml version="1.0" encoding="#{label}"?><meta charset="utf-8">café|

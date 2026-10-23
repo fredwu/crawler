@@ -9,5 +9,19 @@ defmodule Crawler.Store.Page do
   empty until that response identifies itself. Document fetches leave it empty.
   """
 
-  defstruct [:url, :body, :opts, :processed, fetch_tag: nil, picture_type: nil]
+  defstruct [
+    :url,
+    :body,
+    :opts,
+    :processed,
+    :analysis,
+    :interpretation,
+    :source_revision,
+    :target_handle,
+    :alias_owner,
+    :storage_revision,
+    :credit,
+    fetch_tag: nil,
+    picture_type: nil
+  ]
 end

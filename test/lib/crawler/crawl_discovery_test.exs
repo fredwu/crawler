@@ -1,13 +1,13 @@
 defmodule Crawler.CrawlDiscoveryTest do
   use Crawler.TestCase, async: false
 
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
   alias Crawler.Store
 
   @utf8_bom <<0xEF, 0xBB, 0xBF>>
 
-  test "discovers ordinary links and assets once", %{
+  test "discovers ordinary links and assets with distinct redirect requests", %{
     site: site,
     url: url,
     req_options: req_options
@@ -37,7 +37,12 @@ defmodule Crawler.CrawlDiscoveryTest do
     </html>
     """
 
-    ReqTestSite.expect_once(site, "GET", "/behavior/dir/page", fn conn ->
+    landing_hits = :counters.new(1, [:atomics])
+
+    ReqTestSite.expect(site, "GET", "/behavior/dir/page", fn conn ->
+      :counters.add(landing_hits, 1, 1)
+      assert :counters.get(landing_hits, 1) <= 2
+
       conn
       |> Plug.Conn.put_resp_header("content-type", "text/html")
       |> Plug.Conn.resp(200, body)
@@ -63,23 +68,88 @@ defmodule Crawler.CrawlDiscoveryTest do
         assets: ["js"],
         max_depths: 2,
         workers: 2,
-        save_to: tmp("behavior-links"),
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
+        save_to:
+          Path.join(tmp(), "behavior-links" <> "-#{Base.encode16(:crypto.strong_rand_bytes(6))}"),
         req_options: req_options
       )
 
-    wait(fn ->
-      refute Crawler.running?(opts)
-      assert Store.ops_count("links") == 6
-      root = tmp("behavior-links")
-      page = "#{url}/behavior/old"
-      search = "#{url}/behavior/search?q=1"
-      assert File.read!(saved(root, page)) =~ "__q_q%3D1.html"
-      assert_link_opens(root, page, search)
-      assert File.read!(saved(root, search)) == @utf8_bom <> "/behavior/search"
-    end)
+    on_exit(fn -> File.rm_rf(opts.save_to) end)
+    export = ready_export(opts)
+    assert :counters.get(landing_hits, 1) == 2
+    page = root_resource(export, opts)
+    search = reference_target(export, page, "#{url}/behavior/search?q=1")
+    resources = export.manifest["resources"]
+
+    assert Enum.frequencies_by(resources, & &1["url"]) == %{
+             "#{url}/behavior/dir/page" => 2,
+             "#{url}/behavior/app.js" => 2,
+             "#{url}/behavior/mod.js" => 2,
+             "#{url}/behavior/lib.js" => 2,
+             "#{url}/behavior/other/next" => 1,
+             "#{url}/behavior/search?q=1" => 1
+           }
+
+    landing = reference_target(export, page, "#{url}/behavior/dir/page")
+    refute landing["id"] == page["id"]
+
+    for script <- ["app.js", "mod.js", "lib.js"] do
+      script_url = "#{url}/behavior/#{script}"
+
+      variants =
+        for document_resource <- [page, landing] do
+          target = reference_target(export, document_resource, script_url)
+          assert target["content_type"] == "text/html"
+          assert read_resource(export, target) == "/behavior/#{script}"
+          assert_link_opens(export, document_resource, target)
+          target["id"]
+        end
+
+      assert length(Enum.uniq(variants)) == 2
+
+      artifact_ids =
+        resources
+        |> Enum.filter(&(&1["url"] == script_url))
+        |> Enum.map(& &1["id"])
+        |> Enum.sort()
+
+      assert Enum.sort(variants) == artifact_ids
+    end
+
+    assert Store.ops_count("links") == 6
+
+    assert %Store.Page{
+             processed: true,
+             url: stored_url,
+             body: nil,
+             opts: nil,
+             analysis: nil,
+             interpretation: nil,
+             source_revision: nil,
+             credit: nil,
+             picture_type: nil,
+             target_handle: handle,
+             fetch_tag: "a"
+           } = Store.find_processed({"#{url}/behavior/old", "links"})
+
+    assert stored_url == "#{url}/behavior/old"
+    refute is_nil(handle)
+    {:ok, document} = Floki.parse_document(read_resource(export, page))
+
+    [href] =
+      Enum.filter(
+        Floki.attribute(document, "a", "href"),
+        &(&1 == relative_reference(page, search))
+      )
+
+    assert_opens(export, page, search, href)
+    assert read_resource(export, search) == @utf8_bom <> "/behavior/search"
   end
 
-  test "a redirect fragment does not fetch the landing page again", %{
+  test "redirect fragments share one direct landing request and one logical page", %{
     site: site,
     url: url,
     req_options: req_options
@@ -92,7 +162,12 @@ defmodule Crawler.CrawlDiscoveryTest do
       |> Plug.Conn.resp(302, "")
     end)
 
-    ReqTestSite.expect_once(site, "GET", "/behavior/frag/page", fn conn ->
+    landing_hits = :counters.new(1, [:atomics])
+
+    ReqTestSite.expect(site, "GET", "/behavior/frag/page", fn conn ->
+      :counters.add(landing_hits, 1, 1)
+      assert :counters.get(landing_hits, 1) <= 2
+
       conn
       |> Plug.Conn.put_resp_header("content-type", "text/html")
       |> Plug.Conn.resp(200, ~s(<a href="#{page}#b">b</a>))
@@ -103,6 +178,10 @@ defmodule Crawler.CrawlDiscoveryTest do
         scope: "frag",
         store: Store,
         workers: 2,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
         req_options: req_options
       )
 
@@ -112,6 +191,7 @@ defmodule Crawler.CrawlDiscoveryTest do
       assert %Store.Page{body: body} = Store.find_processed({page, "frag"})
       assert body =~ "#{page}#b"
       assert Store.ops_count("frag") == 1
+      assert :counters.get(landing_hits, 1) == 2
       assert Store.find({"#{page}#a", "frag"}).body == body
       assert Store.find({"#{page}#b", "frag"}).body == body
     end)
@@ -198,51 +278,114 @@ defmodule Crawler.CrawlDiscoveryTest do
         scope: "archive",
         assets: ["images", "css"],
         max_depths: 3,
-        workers: 4,
-        save_to: tmp("behavior-archive"),
+        workers: 1,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
+        max_manifest_bytes: 16_777_216,
+        save_to:
+          Path.join(
+            tmp(),
+            "behavior-archive" <> "-#{Base.encode16(:crypto.strong_rand_bytes(6))}"
+          ),
         req_options: req_options
       )
 
-    wait(fn ->
-      refute Crawler.running?(opts)
+    on_exit(fn -> File.rm_rf(opts.save_to) end)
+    export = ready_export(opts)
+    source = root_resource(export, opts)
+    stylesheet = reference_target(export, source, "#{url}/archive/sheet.css")
 
-      root = tmp("behavior-archive/#{site.path}/archive")
-      page = File.read!(Path.join(root, "entry/__index.html"))
-      css = File.read!(Path.join(root, "sheet.css"))
-      paths = Path.wildcard(Path.join(tmp("behavior-archive"), "**/*"))
+    for {target_url, body} <- [
+          {"#{url}/archive/bare", "PAGE"},
+          {"#{url}/archive/bare/index.html", "INDEX"},
+          {"#{url}/archive/search?q=1&x=2", "results for 1"},
+          {"#{url}/archive/search?q=2", "results for 2"}
+        ] do
+      target = reference_target(export, source, target_url)
+      assert_link_opens(export, source, target)
+      assert read_resource(export, target) == @utf8_bom <> body
+    end
 
-      assert @utf8_bom <> "PAGE" == File.read!(Path.join(root, "bare/__index.html"))
-      assert @utf8_bom <> "INDEX" == File.read!(Path.join(root, "bare/index.html"))
+    replacements =
+      Map.new(
+        [
+          {"a.jpg", "a.jpg"},
+          {"b.jpg", "b.jpg"},
+          {"c.webp", "c.webp"},
+          {"c.jpg", "c.jpg"},
+          {"d.mp4", "d.mp4"},
+          {"d.jpg", "d.jpg"},
+          {"e.mp3", "e.mp3"},
+          {"pre.css", "pre.css"},
+          {"alt.css", "alt.css"},
+          {"sheet.css", "sheet.css"},
+          {"bg.png", "bg.png"},
+          {"bg2.png", "bg2.png"},
+          {"/archive/search?q=1&amp;x=2", "search?q=1&x=2"},
+          {"/archive/search?q=2", "search?q=2"},
+          {"/archive/bare/index.html", "bare/index.html"},
+          {"/archive/bare", "bare"}
+        ],
+        fn {raw, path} ->
+          target = reference_target(export, source, "#{url}/archive/#{path}")
+          {raw, relative_reference(source, target)}
+        end
+      )
 
-      for {query, body} <- [{"q=1&x=2", "results for 1"}, {"q=2", "results for 2"}] do
-        target = "#{url}/archive/search?#{query}"
-        assert_link_opens(tmp("behavior-archive"), "#{url}/archive/entry", target)
-        assert File.read!(saved(tmp("behavior-archive"), target)) == @utf8_bom <> body
-      end
+    pattern =
+      replacements
+      |> Map.keys()
+      |> Enum.sort_by(&byte_size/1, :desc)
+      |> Enum.map_join("|", &Regex.escape/1)
+      |> Regex.compile!()
 
-      Enum.each(paths, fn path ->
-        refute path =~ "?"
-        refute path =~ "&"
+    expected_page = Regex.replace(pattern, entry, &Map.fetch!(replacements, &1))
+
+    assert read_resource(export, source) == @utf8_bom <> expected_page
+
+    expected_css =
+      Enum.reduce(["other.css", "nested.css", "spaced.png", "font.woff2"], sheet, fn path, body ->
+        target = reference_target(export, stylesheet, "#{url}/archive/#{path}")
+        String.replace(body, path, relative_reference(stylesheet, target))
       end)
 
-      refute page =~ ~s|srcset="a.jpg 1x, b.jpg 2x"|
-      refute page =~ ~s|src="d.mp4"|
-      refute page =~ ~s|href="pre.css"|
-      refute page =~ "url('bg2.png')"
-      refute page =~ ~s|href="/archive/search?q=1&amp;x=2"|
-      assert page =~ "b.jpg"
-      assert page =~ "c.webp"
-      assert page =~ "e.mp3"
-      assert page =~ "__q_q%3D1%2526x%3D2.html"
+    assert read_resource(export, stylesheet) == expected_css
 
-      refute css =~ ~s|@import "other.css"|
-      refute css =~ ~s|url( "spaced.png" )|
-      refute css =~ "url( 'font.woff2' )"
-      assert css =~ "other.css"
-      assert css =~ "nested.css"
-      assert css =~ "spaced.png"
-      assert css =~ "font.woff2"
-    end)
+    for {from, targets} <- [
+          {source,
+           [
+             {"a.jpg", "a"},
+             {"b.jpg", "b"},
+             {"c.webp", "c"},
+             {"c.jpg", "c-jpg"},
+             {"d.mp4", "d"},
+             {"d.jpg", "poster"},
+             {"e.mp3", "e"},
+             {"pre.css", "/* pre */"},
+             {"alt.css", "/* alt */"},
+             {"bg.png", "bg"},
+             {"bg2.png", "bg2"}
+           ]},
+          {stylesheet,
+           [
+             {"other.css", "/* other */"},
+             {"nested.css", "/* nested */"},
+             {"spaced.png", "spaced"},
+             {"font.woff2", "font"}
+           ]}
+        ],
+        {path, bytes} <- targets do
+      target = reference_target(export, from, "#{url}/archive/#{path}")
+      assert_link_opens(export, from, target)
+      assert read_resource(export, target) == bytes
+    end
+
+    for resource <- export.manifest["resources"] do
+      refute resource["path"] =~ "?"
+      refute resource["path"] =~ "&"
+    end
   end
 
   test "crawls embedded resources and skips them when assets are empty", %{
@@ -299,48 +442,53 @@ defmodule Crawler.CrawlDiscoveryTest do
         scope: "embed",
         assets: ["images", "css", "js"],
         max_depths: 2,
-        workers: 4,
-        save_to: tmp("behavior-embed"),
+        workers: 1,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
+        max_manifest_bytes: 16_777_216,
+        save_to:
+          Path.join(tmp(), "behavior-embed" <> "-#{Base.encode16(:crypto.strong_rand_bytes(6))}"),
         req_options: req_options
       )
 
-    wait(fn ->
-      refute Crawler.running?(opts)
+    on_exit(fn -> File.rm_rf(opts.save_to) end)
+    export = ready_export(opts)
+    source = resource_for_url(export, page)
 
-      for path <- ~w(
-        /embed/area.html
-        /embed/frame.html
-        /embed/icon.png
-        /embed/shortcut.png
-        /embed/pre.png
-        /embed/pre.js
-        /embed/pre.woff2
-        /embed/cap.vtt
-        /embed/svg.png
-        /embed/icons.svg
-      ) do
-        assert Store.find_processed({"#{url}#{path}", "embed"})
-      end
+    assert %Store.Page{
+             picture_type: "application/octet-stream",
+             body: nil,
+             opts: nil,
+             analysis: nil,
+             interpretation: nil,
+             source_revision: nil,
+             credit: nil
+           } =
+             Store.find_processed({"#{url}/embed/icons.svg", "embed"})
 
-      saved = File.read!(tmp("behavior-embed/#{site.path}/embed/page", "__index.html"))
+    expected =
+      Enum.reduce(
+        ~w(area.html frame.html icon.png shortcut.png pre.png pre.js pre.woff2 cap.vtt svg.png icons.svg),
+        html,
+        fn name, body ->
+          target = reference_target(export, source, "#{url}/embed/#{name}")
+          assert Store.find_processed({"#{url}/embed/#{name}", "embed"})
+          fragment = if name == "icons.svg", do: "#a", else: ""
+          href = relative_reference(source, target, fragment)
+          assert_opens(export, source, target, href, fragment)
+          bytes = "/embed/" <> name
 
-      for raw <- ~w(
-        area.html
-        frame.html
-        icon.png
-        shortcut.png
-        pre.png
-        pre.js
-        pre.woff2
-        cap.vtt
-        svg.png
-      ) do
-        refute saved =~ ~s|="#{raw}"|
-      end
+          expected_bytes =
+            if String.ends_with?(name, ".html"), do: @utf8_bom <> bytes, else: bytes
 
-      refute saved =~ ~s|href="icons.svg#a"|
-      assert saved =~ "icons.svg#a"
-    end)
+          assert read_resource(export, target) == expected_bytes
+          String.replace(body, name <> fragment, href)
+        end
+      )
+
+    assert read_resource(export, source) == @utf8_bom <> expected
 
     bare = "#{url}/embed/bare"
 
@@ -357,6 +505,10 @@ defmodule Crawler.CrawlDiscoveryTest do
         scope: "embed-empty",
         assets: [],
         workers: 1,
+        max_body: 1_048_576,
+        max_analysis_bytes: 16_000_000,
+        max_css_work: 5_000,
+        max_css_pictures: 1_000,
         req_options: req_options
       )
 
@@ -366,5 +518,10 @@ defmodule Crawler.CrawlDiscoveryTest do
       refute Store.find({"#{url}/embed/icon.png", "embed-empty"})
       refute Store.find({"#{url}/embed/pre.js", "embed-empty"})
     end)
+  end
+
+  defp root_resource(export, opts) do
+    record = :sys.get_state(Store).exports[{opts.scope, opts.generation}]
+    resource_by_id(export, record.target_contexts[opts.target_handle].public_id)
   end
 end

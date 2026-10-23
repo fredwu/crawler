@@ -1,12 +1,17 @@
 defmodule Crawler.Parser.SourceMap do
-  @moduledoc false
+  @moduledoc """
+  Discovers and interprets source-map references and located source entries.
 
+  The former rewrite_css/2 and rewrite_text/5 APIs have been removed. Bind
+  occurrences and render through Crawler.Analysis to preserve source contexts.
+  """
+
+  alias Crawler.Analysis.Budget
+  alias Crawler.HTTP.DocumentHeaders
   alias Crawler.ImportMap.JSON
-  alias Crawler.Linker
   alias Crawler.MediaType
   alias Crawler.Parser.CssParser
   alias Crawler.Parser.JsParser
-  alias Crawler.Snapper.LinkReplacer.Json
   alias Crawler.URL
 
   @mapping ~r/\A[@#]\s*sourceMappingURL=(\S*?)\s*\z/
@@ -16,8 +21,26 @@ defmodule Crawler.Parser.SourceMap do
   def javascript(body, opts) when is_binary(body), do: choose(body, opts, :javascript)
   def javascript(_body, _opts), do: nil
 
+  def javascript(body, opts, {_masked, _strings, comments}) when is_binary(body),
+    do:
+      from_notes(
+        body,
+        opts,
+        :javascript,
+        Map.get_lazy(opts, :source_map_notes, fn -> annotations(comments, body) end)
+      )
+
   def css(body, opts) when is_binary(body), do: choose(body, opts, :css)
   def css(_body, _opts), do: nil
+
+  def css(body, opts, %{comments: comments}) when is_binary(body),
+    do:
+      from_notes(
+        body,
+        opts,
+        :css,
+        Map.get_lazy(opts, :source_map_notes, fn -> annotations(comments, body) end)
+      )
 
   def annotation_ref(%{url: url} = note, source) when is_binary(source) do
     {at, len} = placed_span(note, source)
@@ -27,13 +50,12 @@ defmodule Crawler.Parser.SourceMap do
     |> Map.merge(%{at: at, len: len, map_note: note})
   end
 
-  def data_source_refs(%{url: url, base: base}, _opts) when is_binary(base) do
-    Enum.map(decoded_entries(url, base), fn entry ->
-      bare_ref(entry.raw, entry.url, entry.fetch_kind)
-    end)
+  def data_source_refs(note, opts) do
+    case data_source_refs_result(note, opts, Budget.unlimited()) do
+      {:ok, refs, _budget} -> refs
+      {:error, _reason} -> []
+    end
   end
-
-  def data_source_refs(_note, _opts), do: []
 
   def link_refs(body, opts, kind) when is_binary(body) and kind in [:javascript, :css] do
     case choose(body, opts, kind) do
@@ -55,7 +77,7 @@ defmodule Crawler.Parser.SourceMap do
 
   def entries(body, opts) when is_binary(body) do
     case JSON.decode_located(body) do
-      {:ok, decoded} -> map_entries(decoded, file_base(opts))
+      {:ok, decoded} -> entries_located(decoded, opts)
       :error -> []
     end
   end
@@ -68,7 +90,7 @@ defmodule Crawler.Parser.SourceMap do
   def root_clear_spans(body, opts) when is_binary(body) do
     case JSON.decode_located(body) do
       {:ok, decoded} ->
-        if source_rewritten?(decoded, file_base(opts)), do: root_clears(decoded), else: []
+        root_clear_spans_located(decoded, opts)
 
       :error ->
         []
@@ -77,58 +99,91 @@ defmodule Crawler.Parser.SourceMap do
 
   def root_clear_spans(_body, _opts), do: []
 
-  def rewrite_css(body, opts) when is_binary(body) do
-    case css(body, opts) do
-      nil -> body
-      note -> apply_css(body, note, opts)
-    end
-  end
+  def entries_located(decoded, opts), do: map_entries(decoded, file_base(opts))
 
-  def rewrite_css(body, _opts), do: body
-
-  def rewrite_text(note, page, _opts, kind, newline?) do
-    text = shown_url(note, page)
-
-    if is_integer(note.at) do
-      text
-    else
-      prefix(newline?) <> directive(text, kind)
-    end
-  end
-
-  defp apply_css(body, note, opts) do
-    page = opts[:url] || opts[:referrer_url]
-    text = rewrite_text(note, page, opts, :css, String.ends_with?(body, "\n"))
-
-    if is_integer(note.at) do
-      splice(body, note.at, note.len, text)
-    else
-      body <> text
-    end
+  def root_clear_spans_located(decoded, opts) do
+    if source_rewritten?(decoded, file_base(opts)), do: root_clears(decoded), else: []
   end
 
   defp choose(body, opts, kind) do
-    notes = body |> comment_spans(kind, opts) |> annotations(body)
-    mapping = last_note(notes, :mapping)
-    base = chosen_base(notes, opts, kind)
+    from_comments(body, opts, kind, comment_spans(body, kind, opts))
+  end
 
-    case header_map(opts) do
-      raw when is_binary(raw) -> finish(raw, base, mapping)
-      _none -> finish_comment(mapping, base)
+  defp from_comments(body, opts, kind, comments) do
+    from_notes(body, opts, kind, annotations(comments, body))
+  end
+
+  defp from_notes(body, opts, kind, notes) do
+    {:ok, note, _budget} = from_notes_result(body, opts, kind, notes, Budget.unlimited())
+    note
+  end
+
+  def javascript_result(body, opts, scan, budget),
+    do: note_result(body, opts, :javascript, scan, budget)
+
+  def css_result(body, opts, facts, budget), do: note_result(body, opts, :css, facts, budget)
+
+  defp note_result(body, opts, kind, scan, budget) do
+    result =
+      case Map.fetch(opts, :source_map_notes) do
+        {:ok, notes} -> {:ok, notes, budget}
+        :error -> lexical_notes_result(body, scan, budget)
+      end
+
+    with {:ok, notes, budget} <- result, do: from_notes_result(body, opts, kind, notes, budget)
+  end
+
+  defp from_notes_result(_body, opts, kind, notes, budget) do
+    mapping = last_note(notes, :mapping)
+
+    with {:ok, header, budget} <- header_reference_result(opts, budget) do
+      raw = header || if(mapping, do: mapping.raw)
+      from_reference_result(raw, mapping, notes, opts, kind, budget)
     end
   end
 
-  defp finish_comment(nil, _base), do: nil
-  defp finish_comment(mapping, base), do: finish(mapping.raw, base, mapping)
+  defp from_reference_result(raw, mapping, notes, opts, kind, budget) do
+    capacity = if is_binary(raw), do: Budget.count(budget, :occurrences), else: {:ok, budget}
 
-  defp finish(raw, base, mapping) do
-    case resolve_map(raw, base) do
+    with {:ok, _hypothetical} <- capacity,
+         {:ok, base, budget} <- chosen_base_result(notes, opts, kind, budget) do
+      if is_binary(raw) do
+        result =
+          if data_url?(raw), do: {:ok, raw, budget}, else: URL.resolve_result(raw, base, budget)
+
+        case result do
+          {:ok, url, budget} ->
+            with {:ok, budget} <- Budget.charge(budget, Budget.cost(:token)) do
+              {at, len} = note_span(mapping)
+              {:ok, %{url: url, at: at, len: len, base: base}, budget}
+            end
+
+          {:skip, budget} ->
+            {:ok, nil, budget}
+
+          error ->
+            error
+        end
+      else
+        {:ok, nil, budget}
+      end
+    end
+  end
+
+  defp chosen_base_result(notes, opts, kind, budget) do
+    base = if external?(opts), do: file_base(opts), else: page_base(opts)
+    source = if kind == :javascript and not external?(opts), do: last_note(notes, :source)
+
+    case source do
       nil ->
-        nil
+        {:ok, base, budget}
 
-      url ->
-        {at, len} = note_span(mapping)
-        %{url: url, at: at, len: len, base: base}
+      %{raw: raw} ->
+        case URL.resolve_result(raw, base, budget) do
+          {:ok, url, budget} -> {:ok, url, budget}
+          {:skip, budget} -> {:ok, base, budget}
+          error -> error
+        end
     end
   end
 
@@ -210,55 +265,57 @@ defmodule Crawler.Parser.SourceMap do
     |> List.last()
   end
 
-  defp header_map(opts) do
+  def header_reference_result(opts, budget) do
     headers = opts[:headers]
 
     if external?(opts) and is_list(headers) do
-      first_header(headers, "sourcemap") || first_header(headers, "x-sourcemap")
+      with {:ok, value, budget} <- first_header_result(headers, "sourcemap", budget) do
+        if value,
+          do: {:ok, value, budget},
+          else: first_header_result(headers, "x-sourcemap", budget)
+      end
+    else
+      {:ok, nil, budget}
     end
   end
 
-  defp first_header(headers, name) do
-    Enum.find_value(headers, fn
-      {key, value} when is_binary(value) ->
-        if header_name?(key, name) and String.trim(value) != "", do: String.trim(value)
+  defp first_header_result(headers, name, budget) do
+    Enum.reduce_while(headers, {:ok, nil, budget}, fn
+      {key, value}, {:ok, nil, budget} when is_binary(value) ->
+        with {:ok, matches?, budget} <- DocumentHeaders.name_matches_result(key, name, budget),
+             {:ok, value, budget} <-
+               if(matches?, do: header_value_result(value, budget), else: {:ok, nil, budget}) do
+          if value, do: {:halt, {:ok, value, budget}}, else: {:cont, {:ok, nil, budget}}
+        else
+          error -> {:halt, error}
+        end
 
-      _header ->
-        nil
+      _header, result ->
+        {:cont, result}
     end)
   end
 
-  defp header_name?(key, name), do: key |> to_string() |> String.downcase() == name
+  defp header_value_result(value, budget) do
+    hold = 2 * byte_size(value) + Budget.cost(:binary, 2)
+
+    with {:ok, budget} <- Budget.reserve(budget, hold) do
+      value = String.trim(value)
+
+      if value == "" do
+        with {:ok, budget} <- Budget.release(budget, hold), do: {:ok, nil, budget}
+      else
+        value = :binary.copy(value)
+
+        with {:ok, budget} <-
+               Budget.settle(budget, hold, byte_size(value) + Budget.cost(:binary)),
+             do: {:ok, value, budget}
+      end
+    end
+  end
 
   defp external?(opts) do
     opts[:inline_source] != true and
       (MediaType.javascript?(opts[:content_type]) or MediaType.css?(opts[:content_type]))
-  end
-
-  defp chosen_base(notes, opts, :javascript) do
-    if external?(opts) do
-      file_base(opts)
-    else
-      source_url_base(notes, page_base(opts))
-    end
-  end
-
-  defp chosen_base(_notes, opts, :css) do
-    if external?(opts), do: file_base(opts), else: page_base(opts)
-  end
-
-  defp source_url_base(notes, base) do
-    case last_note(notes, :source) do
-      nil -> base
-      %{raw: raw} -> resolved_base(raw, base)
-    end
-  end
-
-  defp resolved_base(raw, base) do
-    case URL.resolve(raw, base) do
-      {:ok, url} -> url
-      :skip -> base
-    end
   end
 
   defp file_base(opts) do
@@ -281,21 +338,6 @@ defmodule Crawler.Parser.SourceMap do
   defp present?(value) when is_binary(value) and value != "", do: true
   defp present?(_value), do: false
 
-  defp resolve_map(raw, base) do
-    cond do
-      not is_binary(raw) or raw == "" -> nil
-      data_url?(raw) -> raw
-      true -> http_url(raw, base)
-    end
-  end
-
-  defp http_url(raw, base) do
-    case URL.resolve(raw, base) do
-      {:ok, url} -> url
-      :skip -> nil
-    end
-  end
-
   defp network_url(url) do
     if data_url?(url), do: nil, else: url
   end
@@ -314,110 +356,192 @@ defmodule Crawler.Parser.SourceMap do
 
   defp data_url?(_url), do: false
 
-  defp decoded_entries(url, base) do
-    if data_url?(url) do
-      case decode_data(url) do
-        {:ok, payload, _meta, _encoding} -> located_entries(payload, base)
-        _error -> []
-      end
-    else
-      []
-    end
-  end
-
-  defp located_entries(payload, base) do
-    case JSON.decode_located(payload) do
-      {:ok, decoded} -> map_entries(decoded, base)
-      :error -> []
-    end
-  end
-
   defp map_entries(decoded, base) do
+    {:ok, entries, _budget} =
+      reduce_located(decoded, %{url: base}, Budget.unlimited(), [], fn entry, acc, budget ->
+        {:ok, [entry | acc], budget}
+      end)
+
+    Enum.reverse(entries)
+  end
+
+  def reduce_located(decoded, opts, budget, acc, emit) do
+    reduce_map(decoded, file_base(opts), budget, acc, emit)
+  end
+
+  defp reduce_map(decoded, base, budget, acc, emit) do
+    reduce_maps(
+      decoded,
+      budget,
+      acc,
+      fn object, _parents, acc, budget -> reduce_sources(object, base, budget, acc, emit) end,
+      fn object, acc, budget ->
+        resolve_entry(field(object, "url"), "", base, :source_map, budget, acc, emit)
+      end,
+      nil
+    )
+  end
+
+  defp reduce_maps(decoded, budget, acc, leaf, external, parents) do
     case pairs(decoded) do
-      nil -> []
-      object -> object_entries(object, base)
+      nil ->
+        {:ok, acc, budget}
+
+      object ->
+        if version3?(object) do
+          reduce_sections(object, budget, acc, leaf, external, parents)
+        else
+          {:ok, acc, budget}
+        end
     end
   end
 
-  defp object_entries(object, base) do
-    if version3?(object) do
-      case fetch_field(object, "sections") do
-        :missing -> source_entries(object, base)
-        {:ok, sections} when is_list(sections) -> Enum.flat_map(sections, &section(&1, base))
-        {:ok, _sections} -> []
+  defp reduce_sections(object, budget, acc, leaf, external, parents) do
+    case fetch_field(object, "sections") do
+      :missing ->
+        leaf.(object, parents, acc, budget)
+
+      {:ok, sections} when is_list(sections) ->
+        with {:ok, parents, budget} <- root_parent(object, parents, budget) do
+          each(sections, budget, acc, fn section, acc, budget ->
+            reduce_section(pairs(section), budget, acc, leaf, external, parents)
+          end)
+        end
+
+      {:ok, _sections} ->
+        {:ok, acc, budget}
+    end
+  end
+
+  defp reduce_section(nil, budget, acc, _leaf, _external, _parents), do: {:ok, acc, budget}
+
+  defp reduce_section(object, budget, acc, leaf, external, parents) do
+    with {:ok, budget} <- Budget.reserve(budget, Budget.cost(:frame)) do
+      result =
+        case field(object, "map") do
+          {:object, _pairs} = embedded ->
+            reduce_maps(embedded, budget, acc, leaf, external, parents)
+
+          _other ->
+            external.(object, acc, budget)
+        end
+
+      with {:ok, acc, budget} <- result,
+           {:ok, budget} <- Budget.release(budget, Budget.cost(:frame)),
+           do: {:ok, acc, budget}
+    end
+  end
+
+  defp reduce_sources(object, base, budget, acc, emit) do
+    root = string_field(object, "sourceRoot") || ""
+    scratch = byte_size(root) + 1 + Budget.cost(:binary)
+
+    with {:ok, budget} <- Budget.reserve(budget, scratch) do
+      prefix = if root == "", do: "", else: append_slash(root)
+      contents = list_field(object, "sourcesContent")
+
+      result =
+        list_field(object, "sources")
+        |> Enum.reduce_while({:ok, acc, budget, 0}, fn value, {:ok, acc, budget, index} ->
+          if match?({:str, _value, _at, _len}, Enum.at(contents, index)) do
+            {:cont, {:ok, acc, budget, index + 1}}
+          else
+            source_result(resolve_entry(value, prefix, base, nil, budget, acc, emit), index)
+          end
+        end)
+
+      with {:ok, acc, budget, _index} <- result,
+           {:ok, budget} <- Budget.release(budget, scratch),
+           do: {:ok, acc, budget}
+    end
+  end
+
+  defp source_result({:ok, acc, budget}, index), do: {:cont, {:ok, acc, budget, index + 1}}
+  defp source_result(error, _index), do: {:halt, error}
+
+  defp resolve_entry({:str, raw, at, len}, prefix, base, kind, budget, acc, emit) do
+    scratch = byte_size(prefix) + byte_size(raw) + Budget.cost(:binary)
+
+    with {:ok, _hypothetical} <- Budget.count(budget, :occurrences),
+         {:ok, budget} <- Budget.reserve(budget, scratch) do
+      joined =
+        if Regex.match?(@scheme, raw) or String.starts_with?(raw, "/"),
+          do: raw,
+          else: prefix <> raw
+
+      case URL.resolve_result(joined, base, budget) do
+        {:ok, url, budget} ->
+          with {:ok, budget} <- Budget.release(budget, scratch),
+               {:ok, budget} <- Budget.charge(budget, Budget.cost(:token)),
+               do: emit.(entry(raw, url, kind, {at, len}), acc, budget)
+
+        {:skip, budget} ->
+          with {:ok, budget} <- Budget.release(budget, scratch), do: {:ok, acc, budget}
+
+        error ->
+          error
       end
-    else
-      []
     end
   end
 
-  # 3.0 is a float. == would accept it.
+  defp resolve_entry(_value, _prefix, _base, _kind, budget, acc, _emit), do: {:ok, acc, budget}
+
+  defp each(items, budget, acc, fun) do
+    Enum.reduce_while(items, {:ok, acc, budget}, fn item, {:ok, acc, budget} ->
+      case fun.(item, acc, budget) do
+        {:ok, acc, budget} -> {:cont, {:ok, acc, budget}}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
   defp version3?(object), do: field(object, "version") === 3
 
-  defp section(item, base) do
-    case pairs(item) do
-      nil -> []
-      object -> section_map(object, base)
-    end
-  end
+  defp source_rewritten?(decoded, base),
+    do: Enum.any?(map_entries(decoded, base), &(&1.fetch_kind == nil))
 
-  defp section_map(object, base) do
-    case field(object, "map") do
-      {:object, _pairs} = embedded -> map_entries(embedded, base)
-      _other -> section_url(field(object, "url"), base)
-    end
-  end
-
-  defp section_url({:str, raw, start, length}, base) do
-    case URL.resolve(raw, base) do
-      {:ok, url} -> [entry(raw, url, :source_map, {start, length})]
-      :skip -> []
-    end
-  end
-
-  defp section_url(_raw, _base), do: []
-
-  defp source_entries(object, base) do
-    sources = list_field(object, "sources")
-    contents = list_field(object, "sourcesContent")
-    prefix = source_prefix(object)
-
-    sources
-    |> Enum.with_index()
-    |> Enum.flat_map(&source_at(&1, contents, prefix, base))
-  end
-
-  defp source_at({{:str, raw, start, length}, index}, contents, prefix, base) do
-    if embedded?(contents, index) do
+  def root_owners_result(decoded, budget) do
+    reduce_maps(
+      decoded,
+      budget,
+      [],
+      &root_owner/4,
+      fn _object, acc, budget -> {:ok, acc, budget} end,
       []
+    )
+  end
+
+  defp root_parent(_object, nil, budget), do: {:ok, nil, budget}
+
+  defp root_parent(object, parents, budget) do
+    case field(object, "sourceRoot") do
+      {:str, value, at, len} when value != "" ->
+        with {:ok, budget} <-
+               Budget.charge(budget, Budget.cost(:context) + Budget.cost(:list_cell)),
+             do: {:ok, [{at, len} | parents], budget}
+
+      _value ->
+        {:ok, parents, budget}
+    end
+  end
+
+  defp root_owner(object, parents, acc, budget) do
+    root = field(object, "sourceRoot")
+    root? = match?({:str, value, _at, _len} when value != "", root)
+
+    if root? or parents != [] do
+      with {:ok, budget} <- Budget.charge(budget, Budget.cost(:context) + Budget.cost(:list_cell)) do
+        span =
+          case root do
+            {:str, value, at, len} when value != "" -> {at, len}
+            _value -> nil
+          end
+
+        {:ok, [{span, parents, list_field(object, "sources")} | acc], budget}
+      end
     else
-      resolve_source(raw, prefix, base, {start, length})
+      {:ok, acc, budget}
     end
-  end
-
-  defp source_at(_item, _contents, _prefix, _base), do: []
-
-  defp embedded?(contents, index) do
-    match?({:str, _value, _start, _length}, Enum.at(contents, index))
-  end
-
-  defp resolve_source(raw, prefix, base, span) do
-    case URL.resolve(join_source(raw, prefix), base) do
-      {:ok, url} -> [entry(raw, url, nil, span)]
-      :skip -> []
-    end
-  end
-
-  defp join_source(raw, prefix) do
-    cond do
-      Regex.match?(@scheme, raw) -> raw
-      String.starts_with?(raw, "/") -> raw
-      true -> prefix <> raw
-    end
-  end
-
-  defp source_rewritten?(decoded, base) do
-    Enum.any?(map_entries(decoded, base), &(&1.fetch_kind == nil))
   end
 
   defp root_clears({:object, pairs}) do
@@ -432,13 +556,6 @@ defmodule Crawler.Parser.SourceMap do
 
   defp root_clears(list) when is_list(list), do: Enum.flat_map(list, &root_clears/1)
   defp root_clears(_decoded), do: []
-
-  defp source_prefix(object) do
-    case string_field(object, "sourceRoot") do
-      value when value in [nil, ""] -> ""
-      root -> append_slash(root)
-    end
-  end
 
   defp append_slash(root) do
     if String.ends_with?(root, "/"), do: root, else: root <> "/"
@@ -462,56 +579,141 @@ defmodule Crawler.Parser.SourceMap do
     }
   end
 
-  defp shown_url(note, page) do
-    if data_url?(note.url) do
-      rewrite_data(note.url, page, note_base(note))
+  def lexical_notes_result(source, {_masked, _strings, comments}, budget),
+    do: notes_result(comments, source, budget)
+
+  def lexical_notes_result(source, %{comments: comments}, budget),
+    do: notes_result(comments, source, budget)
+
+  defp notes_result(comments, source, budget) do
+    with {:ok, notes, budget} <-
+           each(comments, budget, [], fn {_at, len} = span, acc, budget ->
+             scratch = len + Budget.cost(:token)
+
+             with {:ok, budget} <- Budget.reserve(budget, scratch) do
+               case annotation(source, span) do
+                 [] ->
+                   with {:ok, budget} <- Budget.release(budget, scratch), do: {:ok, acc, budget}
+
+                 [note] ->
+                   with {:ok, budget} <- Budget.charge(budget, Budget.cost(:token), facts: 1),
+                        {:ok, budget} <- Budget.release(budget, scratch),
+                        do: {:ok, [note | acc], budget}
+               end
+             end
+           end),
+         do: {:ok, Enum.reverse(notes), budget}
+  end
+
+  def annotation_ref_result(note, source, budget) do
+    with {:ok, budget} <- Budget.charge(budget, Budget.cost(:token)),
+         do: {:ok, annotation_ref(note, source), budget}
+  end
+
+  def data_source_refs_result(note, opts, budget) do
+    with {:ok, refs, budget} <-
+           reduce_data_source_refs(note, opts, budget, [], fn ref, acc, budget ->
+             {:ok, [ref | acc], budget}
+           end),
+         do: {:ok, Enum.reverse(refs), budget}
+  end
+
+  def reduce_data_source_refs(%{url: url, base: base}, opts, budget, acc, emit)
+      when is_binary(base) do
+    if Map.has_key?(Map.get(opts, :source_map_regions, %{}), url) do
+      {:ok, acc, budget}
     else
-      offline_path(page, note.url)
-    end
-  end
+      capacity = if data_url?(url), do: Budget.count(budget, :occurrences), else: {:ok, budget}
 
-  defp note_base(%{base: base}) when is_binary(base), do: base
-  defp note_base(_note), do: ""
+      with {:ok, _hypothetical} <- capacity do
+        case data_source_refs_attempt(url, base, budget, acc, emit) do
+          {:error, :invalid_json, latest} ->
+            with {:ok, latest} <- Budget.refund(latest, latest.retained - budget.retained),
+                 do: {:ok, acc, latest}
 
-  defp rewrite_data(url, page, base) do
-    case decode_data(url) do
-      {:ok, payload, meta, encoding} ->
-        rewrite_payload(url, payload, meta, encoding, page, base)
+          {:error, {:limit, key}, _latest}
+          when key in [
+                 :max_input_bytes,
+                 :max_depth,
+                 :max_tokens,
+                 :max_string_bytes,
+                 :max_number_bytes
+               ] ->
+            {:error, {:limit, {:json, key}}}
 
-      _error ->
-        url
-    end
-  end
+          {:error, reason, _latest} ->
+            {:error, reason}
 
-  defp rewrite_payload(url, payload, meta, encoding, page, base) do
-    case JSON.decode_located(payload) do
-      {:ok, decoded} ->
-        spans = payload_spans(decoded, page, base)
-
-        spans =
-          if source_rewritten?(decoded, base), do: spans ++ root_clears(decoded), else: spans
-
-        case spans do
-          [] ->
-            url
-
-          spans ->
-            rewritten = payload |> Json.replace_spans(spans) |> encode_payload(encoding)
-            meta <> "," <> rewritten
+          result ->
+            result
         end
-
-      :error ->
-        url
+      end
     end
   end
 
-  defp payload_spans(decoded, page, base) do
-    for %{json_span: {start, length}, url: target} <- map_entries(decoded, base) do
-      {start, length, offline_path(page, target)}
+  def reduce_data_source_refs(_note, _opts, budget, acc, _emit), do: {:ok, acc, budget}
+
+  defp data_source_refs_attempt(url, base, budget, acc, emit) do
+    case decode_data_result(url, budget) do
+      {:ok, payload, _meta, _encoding, budget} ->
+        reduce_data_payload(payload, base, budget, acc, emit)
+
+      {:skip, budget} ->
+        {:ok, acc, budget}
+
+      error ->
+        error
     end
   end
 
-  defp decode_data(url) do
+  defp reduce_data_payload(payload, base, budget, acc, emit) do
+    case JSON.decode_located_result(payload, budget) do
+      {:ok, ast, budget} ->
+        reduce_located(ast, %{url: base}, budget, acc, fn entry, acc, budget ->
+          with {:ok, budget} <- Budget.charge(budget, Budget.cost(:token)),
+               do: emit.(bare_ref(entry.raw, entry.url, entry.fetch_kind), acc, budget)
+        end)
+
+      error ->
+        error
+    end
+  end
+
+  def decode_data_result(url, budget) do
+    if data_url?(url) do
+      hold = 8 * byte_size(url) + Budget.cost(:binary, 4)
+
+      with {:ok, budget} <- Budget.reserve(budget, hold) do
+        case decode_data(url) do
+          {:ok, payload, meta, encoding} ->
+            with {:ok, budget} <-
+                   Budget.settle(budget, hold, byte_size(payload) + Budget.cost(:binary)),
+                 do: {:ok, payload, meta, encoding, budget}
+
+          _other ->
+            with {:ok, budget} <- Budget.release(budget, hold), do: {:skip, budget}
+        end
+      end
+    else
+      {:skip, budget}
+    end
+  end
+
+  def lexical_notes(source, scan) do
+    {:ok, notes, _budget} = lexical_notes_result(source, scan, Budget.unlimited())
+    notes
+  end
+
+  def header_reference(opts) do
+    case header_reference_result(opts, Budget.unlimited()) do
+      {:ok, value, _budget} -> value
+      {:error, _reason} -> nil
+    end
+  end
+
+  def encode_data(payload, meta, encoding), do: meta <> "," <> encode_payload(payload, encoding)
+
+  def decode_data(url) do
     case String.split(url, ",", parts: 2) do
       [meta, payload] ->
         if data_url?(meta), do: decode_payload(meta, payload)
@@ -546,21 +748,6 @@ defmodule Crawler.Parser.SourceMap do
 
   # URI.encode/1 leaves "#", which ends a data URL before the payload does.
   defp encode_payload(payload, :percent), do: URI.encode(payload, &URI.char_unreserved?/1)
-
-  defp offline_path(nil, url), do: url
-  defp offline_path(page, url), do: Linker.offline_link(page, url)
-
-  defp prefix(true), do: ""
-  defp prefix(false), do: "\n"
-
-  defp directive(text, :javascript), do: "//# sourceMappingURL=" <> text
-  defp directive(text, :css), do: "/*# sourceMappingURL=" <> text <> " */"
-
-  defp splice(source, at, len, replacement) do
-    head = binary_part(source, 0, at)
-    tail = binary_part(source, at + len, byte_size(source) - at - len)
-    head <> replacement <> tail
-  end
 
   defp pairs({:object, pairs}) when is_list(pairs), do: pairs
   defp pairs(_decoded), do: nil

@@ -1,7 +1,6 @@
 defmodule Crawler.Snapper.SVGHrefSelectionTest do
   use ExUnit.Case, async: true
 
-  alias Crawler.Linker
   alias Crawler.Snapper.LinkReplacer
 
   @page "http://example.com/index.html"
@@ -18,8 +17,8 @@ defmodule Crawler.Snapper.SVGHrefSelectionTest do
           ~s|<#{tag} href="" href='chosen.svg' xlink:href='shared.svg' style="background:url(shared.svg)"/>| <>
           "</svg>"
 
-      chosen = offline("chosen.svg")
-      shared = offline("shared.svg")
+      chosen = online("chosen.svg")
+      shared = online("shared.svg")
 
       assert rewrite(source, @opts) ==
                "<svg>" <>
@@ -36,7 +35,7 @@ defmodule Crawler.Snapper.SVGHrefSelectionTest do
         ~s|<use xlink:href="shared.svg"/></svg>|
 
     assert rewrite(source, %{@opts | assets: ["css"]}) ==
-             ~s|<svg><image href="shared.svg" xlink:href="shared.svg" style="background:url(#{offline("shared.svg")})"/>| <>
+             ~s|<svg><image href="shared.svg" xlink:href="shared.svg" style="background:url(#{online("shared.svg")})"/>| <>
                ~s|<use xlink:href="shared.svg"/></svg>|
   end
 
@@ -45,5 +44,5 @@ defmodule Crawler.Snapper.SVGHrefSelectionTest do
     body
   end
 
-  defp offline(path), do: Linker.offline_link(@page, "http://example.com/" <> path)
+  defp online(path), do: "http://example.com/" <> path
 end

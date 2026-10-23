@@ -1,7 +1,7 @@
 defmodule Crawler.Snapper.HTMLSVGEntryTest do
   use Crawler.OfflineLinkCase, async: true
 
-  import Crawler.SnapshotHelpers, only: [saved: 2]
+  import Crawler.SnapshotHelpers, only: [saved_artifact: 2]
   import Crawler.TestHelpers, only: [tmp: 1]
 
   alias Crawler.Parser
@@ -22,8 +22,8 @@ defmodule Crawler.Snapper.HTMLSVGEntryTest do
       on_exit(fn -> File.rm_rf(root) end)
       assert discovered(source) == []
       assert rewrite(source, @page) == source
-      save(source, root)
-      assert File.read!(saved(root, @page)) == <<0xEF, 0xBB, 0xBF>> <> source
+      artifact = save(source, root)
+      assert File.read!(saved_artifact(root, artifact)) == <<0xEF, 0xBB, 0xBF>> <> source
     end
   end
 
@@ -43,13 +43,13 @@ defmodule Crawler.Snapper.HTMLSVGEntryTest do
       root = tmp("snapshot-svg-entry-image-#{System.unique_integer([:positive])}")
       on_exit(fn -> File.rm_rf(root) end)
       target = "http://example.com/blog/image.png"
-      href = Linker.offline_link(@page, target)
+      href = target
       expected = String.replace(source, ~s|href="image.png"|, ~s|href="#{href}"|)
 
       assert discovered(source) == [target]
       assert rewrite(source, @page) == expected
-      save(source, root)
-      assert File.read!(saved(root, @page)) == <<0xEF, 0xBB, 0xBF>> <> expected
+      artifact = save(source, root)
+      assert File.read!(saved_artifact(root, artifact)) == <<0xEF, 0xBB, 0xBF>> <> expected
     end
   end
 
@@ -59,7 +59,7 @@ defmodule Crawler.Snapper.HTMLSVGEntryTest do
 
     active = ~s|<svg><image href="image.png"/></svg>|
     target = "http://example.com/blog/image.png"
-    href = Linker.offline_link(@page, target)
+    href = target
 
     assert discovered(inert <> active) == [target]
     assert rewrite(inert <> active, @page) == inert <> ~s|<svg><image href="#{href}"/></svg>|
@@ -69,22 +69,25 @@ defmodule Crawler.Snapper.HTMLSVGEntryTest do
     inert = ~s|<math><svg><image href="next"/></svg></math>|
     source = inert <> ~s|<a href="next">Out</a>|
     target = "http://example.com/blog/next"
-    href = Linker.offline_link(@page, target)
+    href = target
     assert discovered(source) == [target]
     assert rewrite(source, @page) == inert <> ~s|<a href="#{href}">Out</a>|
   end
 
   defp save(source, root) do
-    assert {:ok, _opts} =
+    assert {:ok, artifact} =
              Snapper.snap(source, %{
                url: @page,
                save_to: root,
+               public_id: "svgentry00000000000000001",
                content_type: "text/html",
                html_tag: "a",
                assets: ["images"],
                depth: 1,
                max_depths: 3
              })
+
+    artifact
   end
 
   defp discovered(source) do

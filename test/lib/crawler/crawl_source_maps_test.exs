@@ -1,9 +1,8 @@
 defmodule Crawler.CrawlSourceMapsTest do
   use Crawler.TestCase, async: false
 
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
-  alias Crawler.Linker
   alias Crawler.Store
 
   @decoy_js ~S"""
@@ -24,7 +23,7 @@ defmodule Crawler.CrawlSourceMapsTest do
 
   setup do
     scope = unique_scope("source-maps")
-    root = tmp(scope)
+    root = tmp(scope, "archive")
     on_exit(fn -> File.rm_rf(root) end)
     {:ok, scope: scope, root: root}
   end
@@ -45,14 +44,15 @@ defmodule Crawler.CrawlSourceMapsTest do
     js(context.site, "/cdn/app.js", @decoy_js)
     map(context.site, "/cdn/real.js.map", ~s|{"version":3,"mappings":""}|)
 
-    crawl(page, context, ["js"])
+    export = crawl(page, context, ["js"])
+    selected = reference_target(export, resource_for_url(export, page), script)
 
-    saved = File.read!(saved(context.root, script))
-    href = offline(script, map)
+    saved = read_resource(export, selected)
+    href = relative_reference(selected, reference_target(export, selected, map))
     assert occurrences(saved, "fake.js.map") == 4
     assert occurrences(saved, "legacy.js.map") == 1
     assert String.contains?(saved, "/*# sourceMappingURL=#{href} */")
-    assert_link_opens(context.root, script, map)
+    assert_link_opens(export, selected, reference_target(export, selected, map))
     refute_stored(context, [url <> "/base/real.js.map", url <> "/cdn/legacy.js.map"])
   end
 
@@ -76,13 +76,24 @@ defmodule Crawler.CrawlSourceMapsTest do
     map(context.site, "/assets/generated/app.js.map", ~s|{"version":3,"mappings":""}|)
     map(context.site, "/assets/plain.js.map", ~s|{"version":3,"mappings":""}|)
 
-    crawl(page, context, ["js"])
+    export = crawl(page, context, ["js"])
 
-    body = File.read!(saved(context.root, page))
-    assert String.contains?(body, "//# sourceMappingURL=#{offline(page, generated)}")
-    assert String.contains?(body, "//# sourceMappingURL=#{offline(page, plain)}")
-    assert_link_opens(context.root, page, generated)
-    assert_link_opens(context.root, page, plain)
+    body = read_resource(export, resource_for_url(export, page))
+    assert String.contains?(body, "//# sourceMappingURL=#{offline(export, page, generated)}")
+    assert String.contains?(body, "//# sourceMappingURL=#{offline(export, page, plain)}")
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, page),
+      reference_target(export, resource_for_url(export, page), generated)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, page),
+      reference_target(export, resource_for_url(export, page), plain)
+    )
+
     refute_stored(context, [url <> "/assets/generated/app.js"])
   end
 
@@ -105,15 +116,26 @@ defmodule Crawler.CrawlSourceMapsTest do
     map(context.site, "/cdn/real.css.map", ~s|{"version":3,"mappings":""}|)
     map(context.site, "/assets/inline.css.map", ~s|{"version":3,"mappings":""}|)
 
-    crawl(page, context, ["css"])
+    export = crawl(page, context, ["css"])
+    selected = reference_target(export, resource_for_url(export, page), sheet)
 
-    saved = File.read!(saved(context.root, sheet))
+    saved = read_resource(export, selected)
     assert String.contains?(saved, "fake.css.map")
     assert String.contains?(saved, "//# sourceMappingURL=nope.css.map")
     assert String.contains?(saved, "/*@ sourceMappingURL=old.css.map */")
-    assert String.contains?(saved, "/*# sourceMappingURL=#{offline(sheet, map)} */")
-    assert_link_opens(context.root, sheet, map)
-    assert_link_opens(context.root, page, inline)
+
+    assert String.contains?(
+             saved,
+             "/*# sourceMappingURL=#{relative_reference(selected, reference_target(export, selected, map))} */"
+           )
+
+    assert_link_opens(export, selected, reference_target(export, selected, map))
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, page),
+      reference_target(export, resource_for_url(export, page), inline)
+    )
   end
 
   test "a SourceMap header wins and a page header does not name an inline map", context do
@@ -147,18 +169,38 @@ defmodule Crawler.CrawlSourceMapsTest do
     map(context.site, "/header.js.map", ~s|{"version":3,"mappings":""}|)
     map(context.site, "/sheet.css.map", ~s|{"version":3,"mappings":""}|)
 
-    crawl(page, context, ["js", "css"])
+    export = crawl(page, context, ["js", "css"])
+    page_resource = resource_for_url(export, page)
+    script_resource = reference_target(export, page_resource, script)
+    sheet_resource = reference_target(export, page_resource, sheet)
 
-    saved = File.read!(saved(context.root, script))
+    saved = read_resource(export, script_resource)
     assert String.starts_with?(saved, "var a = 1;")
-    assert String.contains?(saved, "//# sourceMappingURL=#{offline(script, header)}")
+
+    assert String.contains?(
+             saved,
+             "//# sourceMappingURL=#{relative_reference(script_resource, reference_target(export, script_resource, header))}"
+           )
+
     refute String.contains?(saved, "comment.js.map")
     refute String.contains?(saved, "older.js.map")
-    assert_link_opens(context.root, script, header)
 
-    sheet_body = File.read!(saved(context.root, sheet))
-    assert sheet_body == "h1{color:red}\n/*# sourceMappingURL=#{offline(sheet, sheet_map)} */"
-    assert_link_opens(context.root, sheet, sheet_map)
+    assert_link_opens(
+      export,
+      script_resource,
+      reference_target(export, script_resource, header)
+    )
+
+    sheet_body = read_resource(export, sheet_resource)
+
+    assert sheet_body ==
+             "h1{color:red}\n/*# sourceMappingURL=#{relative_reference(sheet_resource, reference_target(export, sheet_resource, sheet_map))} */"
+
+    assert_link_opens(
+      export,
+      sheet_resource,
+      reference_target(export, sheet_resource, sheet_map)
+    )
   end
 
   test "a map saves fetched sources and an empty sourceRoot stays beside the map", context do
@@ -193,9 +235,9 @@ defmodule Crawler.CrawlSourceMapsTest do
     text(context.site, "/abs.ts", "let abs = 1;\n")
     text(context.site, "/maps/app.ts", "let beside = 1;\n")
 
-    crawl(page, context, ["js"])
+    export = crawl(page, context, ["js"])
 
-    saved = File.read!(saved(context.root, map))
+    saved = read_resource(export, resource_for_url(export, map))
     assert String.contains?(saved, ~s("sourceRoot":""))
     refute String.contains?(saved, ~s("sourceRoot":"../src"))
     assert String.contains?(saved, "embedded app source")
@@ -204,10 +246,31 @@ defmodule Crawler.CrawlSourceMapsTest do
     assert String.contains?(saved, "https://no.test/file.ts")
     assert String.contains?(saved, "webpack://app/boot.ts")
     assert String.contains?(saved, "\"app.ts\"")
-    assert_link_opens(context.root, map, lib)
-    assert_link_opens(context.root, map, absolute)
-    assert_link_opens(context.root, script, map)
-    assert_link_opens(context.root, empty_map, beside)
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, map),
+      reference_target(export, resource_for_url(export, map), lib)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, map),
+      reference_target(export, resource_for_url(export, map), absolute)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, script),
+      reference_target(export, resource_for_url(export, script), map)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, empty_map),
+      reference_target(export, resource_for_url(export, empty_map), beside)
+    )
+
     refute_stored(context, [url <> "/app.ts", url <> "/src/app.ts"])
   end
 
@@ -258,16 +321,47 @@ defmodule Crawler.CrawlSourceMapsTest do
     text(context.site, "/maps/inline.ts", "let inline = 1;\n")
     text(context.site, "/js/src/app.ts", "let app = 1;\n")
 
-    crawl(page, context, ["js"])
+    export = crawl(page, context, ["js"])
 
-    assert_link_opens(context.root, index_js, index_map)
-    assert_link_opens(context.root, index_map, part)
-    assert_link_opens(context.root, index_map, inline)
-    assert_link_opens(context.root, part, part_source)
-    assert_link_opens(context.root, old_js, old_map)
-    assert_link_opens(context.root, bad_js, bad_map)
+    assert_link_opens(
+      export,
+      resource_for_url(export, index_js),
+      reference_target(export, resource_for_url(export, index_js), index_map)
+    )
 
-    saved = File.read!(saved(context.root, data_js))
+    assert_link_opens(
+      export,
+      resource_for_url(export, index_map),
+      reference_target(export, resource_for_url(export, index_map), part)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, index_map),
+      reference_target(export, resource_for_url(export, index_map), inline)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, part),
+      reference_target(export, resource_for_url(export, part), part_source)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, old_js),
+      reference_target(export, resource_for_url(export, old_js), old_map)
+    )
+
+    assert_link_opens(
+      export,
+      resource_for_url(export, bad_js),
+      reference_target(export, resource_for_url(export, bad_js), bad_map)
+    )
+
+    assert read_resource(export, resource_for_url(export, bad_map)) == "not json"
+
+    saved = read_resource(export, resource_for_url(export, data_js))
     assert String.contains?(saved, "sourceMappingURL=data:application/json;charset=utf-8,")
 
     [payload] =
@@ -276,15 +370,13 @@ defmodule Crawler.CrawlSourceMapsTest do
       )
 
     decoded = URI.decode(payload)
-    assert String.contains?(decoded, offline(data_js, app))
+    assert String.contains?(decoded, offline(export, data_js, app))
 
-    assert File.read!(
-             Path.expand(
-               link_path(offline(data_js, app)),
-               Path.dirname(saved(context.root, data_js))
-             )
-           ) ==
-             File.read!(saved(context.root, app))
+    source = resource_for_url(export, data_js)
+    target = reference_target(export, source, app)
+    assert [href] = Jason.decode!(decoded)["sources"]
+    assert_opens(export, source, target, href)
+    assert read_resource(export, target) == "let app = 1;\n"
 
     refute_stored(context, [
       url <> "/maps/ignored.ts",
@@ -311,11 +403,17 @@ defmodule Crawler.CrawlSourceMapsTest do
     js(context.site, "/cdn/app.js", "var a = 1;\n", [{"SourceMap", "app.js.map"}])
     map(context.site, "/cdn/app.js.map", ~s|{"version":3,"mappings":""}|)
 
-    crawl(page, context, ["js"])
+    export = crawl(page, context, ["js"])
+    selected = reference_target(export, resource_for_url(export, page), script)
 
-    saved = File.read!(saved(context.root, script))
-    assert String.contains?(saved, "//# sourceMappingURL=#{offline(script, map)}")
-    assert_link_opens(context.root, script, map)
+    saved = read_resource(export, selected)
+
+    assert String.contains?(
+             saved,
+             "//# sourceMappingURL=#{relative_reference(selected, reference_target(export, selected, map))}"
+           )
+
+    assert_link_opens(export, selected, reference_target(export, selected, map))
 
     refute_stored(context, [
       url <> "/base/app.js.map",
@@ -334,11 +432,11 @@ defmodule Crawler.CrawlSourceMapsTest do
         assets: assets,
         store: Store,
         save_to: context.root,
+        max_manifest_bytes: 16_777_216,
         req_options: context.req_options
       )
 
-    wait(8_000, fn -> refute Crawler.running?(opts) end)
-    opts
+    ready_export(opts)
   end
 
   defp html(site, path, body, headers \\ []), do: respond(site, path, "text/html", body, headers)
@@ -369,7 +467,10 @@ defmodule Crawler.CrawlSourceMapsTest do
     end)
   end
 
-  defp offline(from, to), do: Linker.offline_link(from, to)
+  defp offline(export, from, to) do
+    source = resource_for_url(export, from)
+    relative_reference(source, reference_target(export, source, to))
+  end
 
   defp refute_stored(context, urls) do
     Enum.each(urls, fn url ->

@@ -9,7 +9,8 @@ defmodule Crawler.StoreScopeIdentityTest do
     end
   end
 
-  test "dropping an integer scope preserves a numerically equal float scope", %{url: url} do
+  test "dropping an integer scope preserves a numerically equal float scope", context do
+    %{site: site, url: url, req_options: req_options} = context
     integer = System.unique_integer([:positive])
     float = integer * 1.0
     integer_key = {url <> "/numeric-scope", integer}
@@ -26,10 +27,30 @@ defmodule Crawler.StoreScopeIdentityTest do
     assert {_, _} = Store.add_page_data(float_key, "FLOAT", %{})
     assert :ok = Store.ops_inc(integer)
     assert :ok = Store.ops_inc(float)
-    assert :ok = Store.note_enqueued(float, float_generation, nil)
+    claim_url = url <> "/numeric-scope-claim"
 
-    assert {:ok, float_claim} =
-             Store.start_work(%{scope: float, generation: float_generation, max_pages: 2})
+    ReqTestSite.expect_once(site, "GET", "/numeric-scope-claim", fn conn ->
+      conn |> Plug.Conn.put_resp_content_type("text/html") |> Plug.Conn.resp(200, "CLAIM")
+    end)
+
+    assert {:ok, claim} =
+             start_crawl(claim_url,
+               scope: float,
+               store: Store,
+               parser: Crawler.HeldParser,
+               hold_parser_url: claim_url,
+               parser_observer: self(),
+               count_page: false,
+               max_pages: 2,
+               max_body: 1_024,
+               max_analysis_bytes: 2_097_152,
+               respect_robots: false,
+               retries: 0,
+               req_options: req_options
+             )
+
+    assert_receive {:parser_held, executor, _page}, 2_000
+    on_exit(fn -> send(executor, :release_parser) end)
 
     retired_integer = Store.drop_scope(integer)
     refute retired_integer == integer_generation
@@ -42,7 +63,8 @@ defmodule Crawler.StoreScopeIdentityTest do
     assert Process.whereis(Store) == store
     assert Store.pending_count(float) == 1
     assert Store.inflight_count(float) == 1
-    assert :ok = Store.finish_claim(float_claim)
+    send(executor, :release_parser)
+    await_idle(claim)
     assert Store.pending_count(float) == 0
     assert Store.inflight_count(float) == 0
     assert Store.find(float_key).body == "FLOAT"

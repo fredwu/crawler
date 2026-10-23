@@ -1,7 +1,7 @@
 defmodule Crawler.Snapper.HTMLBoundariesTest do
   use Crawler.OfflineLinkCase, async: true
 
-  import Crawler.SnapshotHelpers, only: [saved: 2]
+  import Crawler.SnapshotHelpers, only: [saved_artifact: 2]
   import Crawler.TestHelpers, only: [tmp: 1]
 
   alias Crawler.Charset
@@ -20,11 +20,11 @@ defmodule Crawler.Snapper.HTMLBoundariesTest do
       comment = unquote(comment)
       source = comment <> ~s|<base href="/docs/"><a href="next">real</a>|
       target = "http://example.com/docs/next"
-      href = Linker.offline_link(@page, target)
+      href = target
 
       assert discovered(source) == [target]
       assert source |> HtmlParser.parse(%{}) |> Floki.attribute("href") == ["next"]
-      assert rewrite(source, @page) == comment <> ~s|<a href="#{href}">real</a>|
+      assert rewrite(source, @page) == comment <> ~s|<base><a href="#{href}">real</a>|
     end
   end
 
@@ -34,10 +34,10 @@ defmodule Crawler.Snapper.HTMLBoundariesTest do
 
     source = script <> ~s|<base href="/docs/"><a href="next">real</a>|
     target = "http://example.com/docs/next"
-    href = Linker.offline_link(@page, target)
+    href = target
 
     assert discovered(source) == [target]
-    assert rewrite(source, @page) == script <> ~s|<a href="#{href}">real</a>|
+    assert rewrite(source, @page) == script <> ~s|<base><a href="#{href}">real</a>|
     assert [base] = HTMLSpans.base_tags(source)
     assert HTMLSpans.value(base, "href") == "/docs/"
   end
@@ -52,9 +52,9 @@ defmodule Crawler.Snapper.HTMLBoundariesTest do
     script = ~s|<script><!--<script!></script>|
     source = script <> ~s|<base href="/docs/"><a href="next">real</a>|
     target = "http://example.com/docs/next"
-    href = Linker.offline_link(@page, target)
+    href = target
     assert discovered(source) == [target]
-    assert rewrite(source, @page) == script <> ~s|<a href="#{href}">real</a>|
+    assert rewrite(source, @page) == script <> ~s|<base><a href="#{href}">real</a>|
   end
 
   test "ordinary comments and literal script markup retain their parser source bytes" do
@@ -79,24 +79,33 @@ defmodule Crawler.Snapper.HTMLBoundariesTest do
 
     assert Charset.decode(source, %{content_type: "text/html"}) == source
 
-    for {url, body} <- [{target, "TARGET"}, {page, source}] do
-      assert {:ok, _opts} =
-               Snapper.snap(body, %{
-                 url: url,
-                 save_to: root,
-                 content_type: "text/html",
-                 html_tag: "a",
-                 assets: [],
-                 depth: 1,
-                 max_depths: 3
-               })
-    end
+    [target_artifact, page_artifact] =
+      for {url, body, public_id} <- [
+            {target, "TARGET", "htmlboundary0000000000001"},
+            {page, source, "htmlboundary0000000000002"}
+          ] do
+        assert {:ok, artifact} =
+                 Snapper.snap(body, %{
+                   url: url,
+                   save_to: root,
+                   public_id: public_id,
+                   content_type: "text/html",
+                   html_tag: "a",
+                   assets: [],
+                   depth: 1,
+                   max_depths: 3
+                 })
 
-    href = Linker.offline_link(page, target)
+        artifact
+      end
 
-    assert File.read!(saved(root, page)) ==
+    href = target
+
+    assert File.read!(saved_artifact(root, target_artifact)) == <<0xEF, 0xBB, 0xBF>> <> "TARGET"
+
+    assert File.read!(saved_artifact(root, page_artifact)) ==
              <<0xEF, 0xBB, 0xBF>> <>
-               comment <> script <> ~s|<meta charset="utf-8"><a href="#{href}">real</a>|
+               comment <> script <> ~s|<meta charset="utf-8"><base><a href="#{href}">real</a>|
   end
 
   defp discovered(source) do

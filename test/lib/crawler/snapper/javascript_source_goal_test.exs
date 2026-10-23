@@ -1,7 +1,6 @@
 defmodule Crawler.Snapper.JavascriptSourceGoalTest do
   use ExUnit.Case, async: true
 
-  alias Crawler.Linker
   alias Crawler.Snapper.LinkReplacer
 
   @page "http://example.com/dir/page"
@@ -51,14 +50,14 @@ defmodule Crawler.Snapper.JavascriptSourceGoalTest do
       String.replace(
         @source,
         ~s|"./real.js"|,
-        ~s|"#{Linker.offline_link(@page, "http://example.com/dir/real.js")}"|
+        ~s|"http://example.com/dir/real.js"|
       )
 
     if goal == :script do
       String.replace(
         source,
         ~S|".\/hidden.js"|,
-        ~s|"#{Linker.offline_link(@page, "http://example.com/dir/hidden.js")}"|
+        ~s|"http://example.com/dir/hidden.js"|
       )
     else
       source

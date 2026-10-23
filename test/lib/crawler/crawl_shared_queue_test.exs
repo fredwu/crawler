@@ -204,7 +204,7 @@ defmodule Crawler.CrawlSharedQueueTest do
     assert Process.info(self(), :trap_exit) == flags
     refute Process.alive?(owner[:queue])
     refute Process.alive?(owner[:queue_owner])
-    refute Process.whereis(:"opq-#{inspect(owner[:queue])}")
+    wait(fn -> assert Registry.lookup(OPQ.Registry, owner[:queue]) == [] end)
     refute Store.find({page_a, scope_a})
     assert Store.ops_count(scope_a) == 0
     assert Store.inflight_count(scope_a) == 0

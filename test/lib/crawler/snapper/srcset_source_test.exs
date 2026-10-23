@@ -1,7 +1,6 @@
 defmodule Crawler.Snapper.SrcsetSourceTest do
   use ExUnit.Case, async: true
 
-  alias Crawler.Linker
   alias Crawler.Parser
   alias Crawler.Snapper.LinkReplacer
 
@@ -14,8 +13,8 @@ defmodule Crawler.Snapper.SrcsetSourceTest do
       name = unquote(name)
       source = ~s|<#{tag} #{name}="a.png&#32;1x&#44;&#x20;b.png&#x09;2x">|
       assert discovered(source) == ["http://example.com/a.png", "http://example.com/b.png"]
-      a = Linker.offline_link(@page, "http://example.com/a.png")
-      b = Linker.offline_link(@page, "http://example.com/b.png")
+      a = "http://example.com/a.png"
+      b = "http://example.com/b.png"
       assert {:ok, body} = LinkReplacer.replace_links(source, @opts)
       assert body == ~s|<#{tag} #{name}="#{a}&#32;1x&#44;&#x20;#{b}&#x09;2x">|
     end
@@ -24,8 +23,8 @@ defmodule Crawler.Snapper.SrcsetSourceTest do
   test "an encoded comma inside a URL is not mistaken for a candidate delimiter" do
     source = ~s|<img srcset="a&#44;b.png&#32;1x&#44; next.png&#32;2x">|
     assert discovered(source) == ["http://example.com/a,b.png", "http://example.com/next.png"]
-    comma = Linker.offline_link(@page, "http://example.com/a,b.png")
-    next = Linker.offline_link(@page, "http://example.com/next.png")
+    comma = "http://example.com/a,b.png"
+    next = "http://example.com/next.png"
     assert {:ok, body} = LinkReplacer.replace_links(source, @opts)
     assert body == ~s|<img srcset="#{comma}&#32;1x&#44; #{next}&#32;2x">|
   end
@@ -35,7 +34,7 @@ defmodule Crawler.Snapper.SrcsetSourceTest do
       ~s|<img srcset="data:image/png;base64,AAAA&#32;1x&#44; a.png&#32;2x" srcset="a.png&#32;1x">|
 
     assert discovered(source) == ["http://example.com/a.png"]
-    a = Linker.offline_link(@page, "http://example.com/a.png")
+    a = "http://example.com/a.png"
     assert {:ok, body} = LinkReplacer.replace_links(source, @opts)
 
     assert body ==

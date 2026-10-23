@@ -1,25 +1,24 @@
 defmodule Crawler.Parser do
   @moduledoc """
   Parses pages and calls a link handler to handle the detected links.
+
+  Text input must be decoded UTF-8. For standalone calls, decode raw response
+  bytes with [`Crawler.Charset.decode/2`](https://github.com/fredwu/crawler/blob/master/lib/crawler/charset.ex#L11) first. Managed callers must use
+  [`Crawler.Charset.decode_result/3`](https://github.com/fredwu/crawler/blob/master/lib/crawler/charset.ex#L16), then pass the decoded source and its returned
+  continuing allocation budget to `Crawler.Analysis.analyze/3`. Keep the same
+  ledger through preparation, binding, and rendering. These facades do not
+  implicitly decode input or reset the managed budget.
   """
 
-  alias Crawler.Dispatcher
-  alias Crawler.HTMLReferences
+  alias Crawler.Analysis
+  alias Crawler.Analysis.Budget
+  alias Crawler.Export.Producer
   alias Crawler.HTMLSpans
-  alias Crawler.HTTP.DocumentHeaders
-  alias Crawler.ImportMap
   alias Crawler.MediaType
-  alias Crawler.Parser.CssParser
-  alias Crawler.Parser.CssParser.DocumentStyles
+  alias Crawler.Parser.Callbacks
   alias Crawler.Parser.CssSheets
   alias Crawler.Parser.Guarder
-  alias Crawler.Parser.HtmlParser
-  alias Crawler.Parser.LinkParser
-  alias Crawler.Parser.ScriptReferences
-  alias Crawler.Parser.SourceMap
-  alias Crawler.Parser.SpeculationRules
-  alias Crawler.Parser.WebManifest
-  alias Crawler.Robots
+  alias Crawler.Parser.Prepared
   alias Crawler.Sitemap
   alias Crawler.URL
 
@@ -37,7 +36,7 @@ defmodule Crawler.Parser do
     @type opts :: map
     @type page :: %Page{url: url, body: body, opts: opts}
 
-    @callback parse(page) :: {:ok, page}
+    @callback parse(page) :: {:ok, page} | {:error, term}
     @callback parse({:error, term}) :: :ok
   end
 
@@ -48,7 +47,8 @@ defmodule Crawler.Parser do
 
   Discovered links are sent to `Crawler.Dispatcher`. The scraper module in
   `page.opts[:scraper]` receives the page after link discovery. Its
-  `scrape/1` result is returned.
+  `scrape/1` result is returned. A tagged Sitemap ingestion error is returned
+  without calling the scraper.
 
   A custom parser can use `parse_links/3` with its own link handler. Crawled
   data is also available asynchronously; see the
@@ -110,451 +110,320 @@ defmodule Crawler.Parser do
   def parse({:warn, reason}), do: Logger.debug(fn -> "#{inspect(reason)}" end)
   def parse({:error, _reason}), do: Logger.error("Crawl failed")
 
-  def parse(%{body: body, opts: opts} = page) do
-    parse_links(body, opts, &Dispatcher.dispatch(&1, &2))
+  def parse(%{opts: opts} = page) do
+    with {:ok, prepared} <- page_preparation(page),
+         {:ok, prepared, credit, control?} <- ingest_page(prepared, Map.get(page, :credit)),
+         :ok <- Producer.discover(prepared, credit, control?) do
+      opts = if control?, do: Map.put(opts, :count_page, false), else: opts
+      previous = page
+      page = %{page | opts: opts}
 
-    opts =
-      if Sitemap.ingest(opts, body) do
-        Map.put(opts, :count_page, false)
-      else
-        opts
-      end
+      page =
+        if is_struct(page, Crawler.Store.Page) and is_map(credit) do
+          updated = %{
+            page
+            | interpretation: prepared,
+              analysis: prepared.analysis,
+              credit: credit
+          }
 
-    {:ok, _page} = opts[:scraper].scrape(%{page | opts: opts})
+          Crawler.Store.Execution.advance_funded_page(previous, updated)
+        else
+          page
+        end
+
+      opts[:scraper].scrape(page)
+    end
+  end
+
+  defp ingest_page(prepared, %{} = credit), do: Sitemap.ingest_prepared(prepared, credit)
+
+  defp ingest_page(prepared, credit) do
+    case Sitemap.ingest(prepared.opts, prepared.source) do
+      result when is_boolean(result) -> {:ok, prepared, credit, result}
+      error -> error
+    end
   end
 
   @doc """
-  Discovers links in `body` with the page options in `opts`.
+  Discovers references and calls the handler with the existing element tuples.
 
-  Calls `link_handler.(element, link_opts)` for each discovered link. An element
-  is `{attribute, url}` when the URL is unchanged, or
-  `{"link", original_link, attribute, resolved_url}` when it is resolved or
-  normalized. The link options include its resource tag and any HTML base URL.
+  The `body` must be decoded UTF-8. Invalid UTF-8 in supported text returns
+  `{:error, :invalid_utf8}`.
 
-  Returns the handler results grouped by parsed element. Returns an empty list
-  when the page cannot be parsed. This function does not call the scraper.
+  Returns handler results grouped by source element. Unsupported response roles
+  return an empty list. Invalid or limited supported analysis returns a tagged
+  error, so managed callers can settle that outcome.
   """
-  def parse_links(body, opts, link_handler) do
-    cond do
-      opts[:fetch_kind] == :manifest ->
-        manifest_links(body, opts, link_handler)
-
-      opts[:fetch_kind] == :speculation_rules ->
-        speculation_file_links(body, opts, link_handler)
-
-      opts[:fetch_kind] == :source_map ->
-        source_map_links(body, opts, link_handler)
-
-      true ->
-        opts = put_base_href(body, remember_document_url(put_robots_nofollow(body, opts)))
-        opts = assign_style_group(body, opts)
-
-        opts
-        |> Guarder.pass?()
-        |> do_parse_links(body, opts, link_handler)
-    end
+  def parse_links(body, opts, handler) do
+    with {:ok, prepared} <- prepare_for_parse(body, opts), do: emit(prepared, handler)
   end
 
   @doc false
-  def with_document_base(body, opts), do: put_base_href(body, opts)
+  def prepare(%Analysis{} = analysis, opts, css_context) do
+    opts = source_options(analysis, opts)
 
-  @doc false
-  def assigned_style_group(body, opts), do: assign_style_group(body, opts)[:style_group]
-
-  @doc false
-  def document_styles(body, opts) do
-    if is_nil(opts[:generation]) and document?(opts) do
-      opts = put_base_href(body, opts)
-      DocumentStyles.new(HtmlParser.references(body, opts), opts[:referrer_url] || opts[:url])
-    end
-  end
-
-  defp put_robots_nofollow(body, opts) do
-    cond do
-      opts[:respect_robots] == false ->
-        Map.delete(opts, :robots_nofollow)
-
-      Robots.header_nofollow?(opts[:headers], opts[:user_agent]) ->
-        Map.put(opts, :robots_nofollow, true)
-
-      html?(opts) and Robots.meta_nofollow?(body, opts[:user_agent]) ->
-        Map.put(opts, :robots_nofollow, true)
-
-      true ->
-        Map.delete(opts, :robots_nofollow)
-    end
-  end
-
-  defp remember_document_url(opts) do
-    if document?(opts) and not present_url?(opts[:document_url]) do
-      put_document_url(opts, opts[:referrer_url] || opts[:url])
+    if parseable?(opts) do
+      with {:ok, groups} <- stylesheet_groups(analysis, opts) do
+        do_prepare_collection(analysis, opts, css_context, groups)
+      end
     else
-      opts
+      {:ok, opaque(original_source(analysis), opts, analysis)}
     end
   end
 
-  defp present_url?(url) when is_binary(url) and url != "", do: true
-  defp present_url?(_url), do: false
-
-  defp put_document_url(opts, url) when is_binary(url) and url != "",
-    do: Map.put(opts, :document_url, url)
-
-  defp put_document_url(opts, _url), do: opts
-
-  defp assign_style_group(body, %{srcdoc: true} = opts) do
-    Map.put(opts, :style_group, srcdoc_group(opts, body))
+  @doc false
+  def prepare_for_parse(source_or_analysis, opts) do
+    if parseable?(opts) do
+      with {:ok, analysis, opts} <- lexical_analysis(source_or_analysis, opts),
+           opts <- source_options(analysis, opts),
+           {:ok, groups} <- stylesheet_groups(analysis, opts),
+           {:ok, context} <- stylesheet_context(groups, opts) do
+        do_prepare_collection(analysis, opts, context, groups)
+      end
+    else
+      {:ok, opaque(original_source(source_or_analysis), opts)}
+    end
   end
 
-  defp assign_style_group(_body, opts) do
+  @doc false
+  def prepare_collection(
+        %Analysis{} = analysis,
+        opts,
+        css_context,
+        %{groups: _groups} = css_collection
+      ) do
+    do_prepare_collection(analysis, source_options(analysis, opts), css_context, css_collection)
+  end
+
+  def prepare_collection(%Analysis{}, _opts, _css_context, _css_collection),
+    do: {:error, :invalid_budget_continuation}
+
+  defp do_prepare_collection(analysis, opts, css_context, css_collection) do
+    with :ok <- managed_snapshot(opts, css_context, css_collection),
+         {:ok, collection} <-
+           occurrence_collection(analysis, Map.merge(opts, css_context), css_collection),
+         {:ok, collection} <- retain_css_revision(collection, css_context),
+         {:ok, collection} <- retain_control_result(collection, analysis, opts),
+         {:ok, groups, members, collection} <- Callbacks.prepare(analysis, opts, collection) do
+      {:ok,
+       %Prepared{
+         source: original_source(analysis),
+         analysis: analysis,
+         analysis_revision: analysis.revision,
+         source_revision: opts[:source_revision],
+         opts: opts,
+         context_key: preparation_key(opts),
+         occurrences: collection.occurrences,
+         collection: collection,
+         css_collection: css_collection,
+         css_revision: css_context[:css_revision],
+         groups: groups,
+         callback_members: members
+       }}
+    end
+  end
+
+  defp retain_css_revision(collection, %{css_revision: revision}) when not is_nil(revision) do
+    with {:ok, budget} <- Budget.charge(collection.budget, Budget.cost(:context)),
+         do: {:ok, %{collection | budget: budget}}
+  end
+
+  defp retain_css_revision(collection, _context), do: {:ok, collection}
+
+  defp retain_control_result(collection, %{mode: :xml}, opts) do
+    if MediaType.feed?(opts[:content_type]) or MediaType.xml?(opts[:content_type]) do
+      with {:ok, budget} <- Budget.charge(collection.budget, 256),
+           do: {:ok, Map.merge(collection, %{budget: budget, control_document: :pending})}
+    else
+      {:ok, collection}
+    end
+  end
+
+  defp retain_control_result(collection, _analysis, _opts), do: {:ok, collection}
+
+  defp occurrence_collection(analysis, context, nil),
+    do: Analysis.occurrences_result(analysis, context)
+
+  defp occurrence_collection(analysis, context, css_collection),
+    do: Analysis.occurrences_result(analysis, context, css_collection)
+
+  @doc false
+  def emit(%Prepared{} = prepared, handler) do
+    occurrences = if prepared.collection, do: prepared.collection.occurrences, else: []
+    Callbacks.emit(prepared.groups, occurrences, prepared.opts, handler)
+  end
+
+  @doc false
+  def emit_bound(%Prepared{collection: nil, groups: []}, _handler, _observer), do: []
+
+  def emit_bound(%Prepared{callback_members: members} = prepared, handler, observer)
+      when is_map(members) do
+    Callbacks.emit_bound(
+      prepared.groups,
+      prepared.collection.occurrences,
+      prepared.opts,
+      members,
+      handler,
+      observer
+    )
+  end
+
+  def emit_bound(%Prepared{}, _handler, _observer), do: {:error, :missing_callback_members}
+
+  defp page_preparation(%{body: body, opts: opts} = page) do
+    case Map.get(page, :interpretation) do
+      %Prepared{source: ^body} = prepared ->
+        current = source_options(prepared.analysis, opts)
+
+        if preparation_key(current) == prepared.context_key,
+          do: {:ok, %{prepared | opts: current}},
+          else: prepare_for_parse(prepared.analysis || body, opts)
+
+      _other ->
+        prepare_for_parse(Map.get(page, :analysis) || body, opts)
+    end
+  end
+
+  defp lexical_analysis(%Analysis{mode: {:javascript, cached_goal}} = analysis, opts) do
+    goal = opts[:javascript_goal] || :module
+
+    if goal == cached_goal,
+      do: {:ok, analysis, opts},
+      else: lexical_analysis(original_source(analysis), opts)
+  end
+
+  defp lexical_analysis(%Analysis{} = analysis, opts), do: {:ok, analysis, opts}
+
+  defp lexical_analysis(source, opts) do
+    opts = if is_nil(opts[:generation]), do: opts, else: Crawler.Limits.validate!(opts)
+
+    options =
+      if is_nil(opts[:generation]),
+        do: opts,
+        else: Map.merge(opts, Map.new(Crawler.Limits.analysis(opts)))
+
+    with {:ok, analysis} <- Analysis.analyze(source, options), do: {:ok, analysis, opts}
+  end
+
+  defp stylesheet_groups(analysis, opts) do
+    if is_nil(opts[:generation]),
+      do: {:ok, nil},
+      else: Analysis.css_groups_result(analysis, opts)
+  end
+
+  defp stylesheet_context(nil, _opts), do: {:ok, %{}}
+  defp stylesheet_context(%{groups: []}, _opts), do: {:ok, %{}}
+
+  defp stylesheet_context(%{groups: groups}, opts),
+    do: CssSheets.resolve_groups(opts, groups)
+
+  defp managed_snapshot(_opts, _context, nil), do: :ok
+  defp managed_snapshot(_opts, _context, %{groups: []}), do: :ok
+
+  defp managed_snapshot(_opts, context, _groups) do
     cond do
-      MediaType.css?(opts[:content_type]) -> keep_or_assign_group(opts)
-      document?(opts) -> document_group(opts)
-      true -> keep_or_assign_group(opts)
+      not Map.has_key?(context, :css_tokens) -> {:error, :missing_managed_css_snapshot}
+      context[:css_revision] == nil -> {:error, :missing_css_revision}
+      true -> :ok
     end
   end
 
-  defp document_group(%{url: url} = opts) when is_binary(url) and url != "",
-    do: Map.put(opts, :style_group, url)
-
-  defp document_group(opts), do: keep_or_assign_group(opts)
-
-  defp keep_or_assign_group(%{style_group: group} = opts) when is_binary(group) and group != "",
-    do: opts
-
-  defp keep_or_assign_group(%{url: url} = opts) when is_binary(url) and url != "",
-    do: Map.put(opts, :style_group, url)
-
-  defp keep_or_assign_group(opts), do: opts
-
-  defp srcdoc_group(opts, body) do
-    base = if present_url?(opts[:url]), do: opts[:url], else: ""
-    base <> " srcdoc " <> Integer.to_string(:erlang.phash2(body))
+  defp parseable?(opts) do
+    opts[:fetch_kind] in [:manifest, :speculation_rules, :source_map] or Guarder.pass?(opts)
   end
 
-  defp put_base_href(body, opts) when is_binary(body) do
-    if html?(opts) do
-      case base_href(body) do
-        nil -> opts
-        href -> Map.put(opts, :referrer_url, merge_base(href, opts))
+  defp original_source(%Analysis{} = analysis), do: analysis.regions[analysis.root].source
+  defp original_source(source), do: source
+
+  @doc false
+  def opaque(source, opts, analysis \\ nil) do
+    %Prepared{
+      source: source,
+      analysis: analysis,
+      opts: opts,
+      occurrences: [],
+      groups: [],
+      source_revision: opts[:source_revision],
+      analysis_revision: if(analysis, do: analysis.revision),
+      context_key: preparation_key(opts)
+    }
+  end
+
+  defp source_options(nil, opts), do: opts
+
+  defp source_options(analysis, opts) do
+    kind = analysis.regions[analysis.root].kind
+
+    cond do
+      opts[:srcdoc] == true ->
+        Map.put(opts, :style_group, {:srcdoc, opts[:url], analysis.revision})
+
+      kind in [:html, :xml] ->
+        put_document_group(opts)
+
+      kind == :css ->
+        Map.put_new(opts, :style_group, opts[:url] || opts[:referrer_url])
+
+      true ->
+        opts
+    end
+  end
+
+  defp put_document_group(opts) do
+    case opts[:url] || opts[:referrer_url] do
+      url when is_binary(url) and url != "" -> Map.put(opts, :style_group, url)
+      _other -> opts
+    end
+  end
+
+  defp preparation_key(opts) do
+    {Analysis.context_key(opts),
+     Map.take(opts, [
+       :assets,
+       :respect_robots,
+       :user_agent,
+       :robots_nofollow,
+       :content_type,
+       :headers
+     ])}
+  end
+
+  @doc false
+  def with_document_base(body, opts) do
+    if MediaType.document_mode(opts[:content_type]) == :html do
+      case HTMLSpans.base_tags(body) do
+        [tag | _rest] -> put_base(HTMLSpans.value(tag, "href"), opts)
+        [] -> opts
       end
     else
       opts
     end
   end
 
-  defp put_base_href(_body, opts), do: opts
+  defp put_base(href, opts) do
+    case URL.resolve(href, opts[:referrer_url] || opts[:url] || "") do
+      {:ok, url} ->
+        path = URI.parse(URL.sanitize(href)).path || ""
+        uri = URI.parse(url)
 
-  defp html?(opts), do: MediaType.html?(opts[:content_type])
+        url =
+          if String.ends_with?(path, "/"),
+            do: URI.to_string(%{uri | path: String.trim_trailing(uri.path || "", "/") <> "/"}),
+            else: url
 
-  defp base_href(body) do
-    case HTMLSpans.base_tags(body) do
-      [tag | _] -> HTMLSpans.value(tag, "href")
-      [] -> nil
+        Map.put(opts, :referrer_url, url)
+
+      :skip ->
+        opts
     end
   end
 
-  defp merge_base(href, opts) do
-    base = opts[:referrer_url] || opts[:url] || ""
-
-    case URL.resolve(href, base) do
-      {:ok, url} -> restore_directory(href, url)
-      :skip -> base
-    end
-  end
-
-  defp restore_directory(href, url) do
-    if directory_ref?(href), do: slash_directory(url), else: url
-  end
-
-  defp directory_ref?(href) when is_binary(href) do
-    case href |> URL.sanitize() |> URI.parse() do
-      %URI{path: path} when is_binary(path) -> String.ends_with?(path, "/")
-      _ -> false
-    end
-  end
-
-  defp directory_ref?(_href), do: false
-
-  defp slash_directory(url) do
-    case String.split(url, "?", parts: 2) do
-      [bare, query] -> bare_slash(bare) <> "?" <> query
-      [bare] -> bare_slash(bare)
-    end
-  end
-
-  defp bare_slash(bare) do
-    if String.ends_with?(bare, "/"), do: bare, else: bare <> "/"
-  end
-
-  defp do_parse_links(false, _body, _opts, _link_handler), do: []
-
-  defp do_parse_links(true, body, opts, link_handler) do
-    elements =
-      body
-      |> parse_file(opts)
-      |> prepend_document_headers(opts)
-
-    if document?(opts) do
-      base = opts[:referrer_url] || opts[:url]
-
-      styles =
-        opts[:document_styles] ||
-          if(is_nil(opts[:generation]), do: DocumentStyles.new(elements, base))
-
-      opts = Map.put(opts, :document_styles, styles)
-      walk_document(elements, Map.put(opts, :document_base, base), link_handler)
-    else
-      Enum.map(elements, &LinkParser.parse(&1, opts, link_handler))
-    end
-  end
-
-  defp document?(opts) do
-    MediaType.html?(opts[:content_type]) or MediaType.svg?(opts[:content_type])
-  end
-
-  defp walk_document(elements, opts, link_handler) do
-    handler = fn link, link_opts ->
-      link_handler.(link, Map.drop(link_opts, [:document_styles, :document_style_id]))
-    end
-
-    {results, _state} =
-      Enum.map_reduce(elements, %{map: ImportMap.empty(), manifest: false}, fn element, state ->
-        opts =
-          opts
-          |> Map.put(:import_map, state.map)
-          |> Map.put(:document_style_id, document_style_id(element))
-
-        {result, manifest} = parse_document_element(element, opts, handler, state.manifest)
-
-        {result, %{map: register_import_map(element, state.map, opts), manifest: manifest}}
-      end)
-
-    results
-  end
-
-  defp document_style_id(%{span: span}), do: span
-  defp document_style_id(_element), do: nil
-
-  defp parse_document_element(element, opts, link_handler, manifest_seen) do
-    if manifest_candidate?(element) and manifest_seen do
-      {nil, true}
-    else
-      {LinkParser.parse(element, opts, link_handler),
-       manifest_seen or manifest_candidate?(element)}
-    end
-  end
-
-  defp manifest_candidate?(%{name: "link", namespace: :html, attributes: attrs}) do
-    match?(%{fetch_kind: :manifest}, HTMLReferences.link_choice(attrs))
-  end
-
-  defp manifest_candidate?(_element), do: false
-
-  defp manifest_links(body, opts, handler) do
-    body
-    |> WebManifest.entries(manifest_base(opts))
-    |> Enum.map(&emit_manifest(&1, opts, handler))
-  end
-
-  # referrer_url is the response. url remains the request that was redirected.
-  defp manifest_base(%{referrer_url: url}) when is_binary(url) and url != "", do: url
-  defp manifest_base(%{url: url}) when is_binary(url), do: url
-  defp manifest_base(_opts), do: ""
-
-  defp emit_manifest({:page, raw, url, start, length}, opts, handler) do
-    handler.(linked(raw, url), with_span(page_opts(opts), start, length))
-  end
-
-  defp emit_manifest({:image, raw, url, start, length}, opts, handler) do
-    if HTMLReferences.enabled?(opts, "images") do
-      handler.(linked(raw, url), with_span(child_opts(opts, "img", "img"), start, length))
-    end
-  end
-
-  defp source_map_links(body, opts, handler) do
-    body
-    |> SourceMap.entries(opts)
-    |> Enum.map(fn entry ->
-      handler.(linked(entry.raw, entry.url), map_child_opts(opts, entry))
-    end)
-  end
-
-  defp map_child_opts(opts, entry) do
-    opts
-    |> Map.drop([
-      :cookie_navigation,
-      :credentials,
-      :document_base,
-      :document_url,
-      :fetch_kind,
-      :import_map,
-      :javascript_goal,
-      :json_span,
-      :link_html_tag,
-      :page_open,
-      :worker_base
-    ])
-    |> Map.put(:html_tag, "link")
-    |> Map.put(:reference_tag, "link")
-    |> put_fetch_kind(entry.fetch_kind)
-    |> put_json_span(entry.json_span)
-  end
-
-  defp put_fetch_kind(opts, :source_map), do: Map.put(opts, :fetch_kind, :source_map)
-  defp put_fetch_kind(opts, _kind), do: opts
-
-  defp put_json_span(opts, {start, length}), do: with_span(opts, start, length)
-  defp put_json_span(opts, _span), do: opts
-
-  defp speculation_file_links(body, opts, handler) do
-    body
-    |> SpeculationRules.entries(opts)
-    |> Enum.map(fn {raw, url, start, length, action} ->
-      handler.(linked(raw, url), with_span(speculation_opts(opts, action), start, length))
-    end)
-  end
-
-  defp linked(raw, url) when raw == url, do: {"href", url}
-  defp linked(raw, url), do: {"link", raw, "href", url}
-
-  defp child_opts(opts, html_tag, reference_tag) do
-    opts
-    |> Map.drop([
-      :fetch_kind,
-      :document_base,
-      :document_url,
-      :json_span,
-      :credentials,
-      :page_open
-    ])
-    |> Map.put(:html_tag, html_tag)
-    |> Map.put(:reference_tag, reference_tag)
-  end
-
-  defp speculation_opts(opts, :prefetch) do
-    opts
-    |> page_opts()
-    |> Map.put(:credentials, :same_site)
-    |> Map.put(:page_open, false)
-  end
-
-  defp speculation_opts(opts, _action), do: page_opts(opts)
-
-  # Recorder has already counted this file. Its pages belong with the document's links.
-  defp page_opts(opts) do
-    opts = child_opts(opts, "a", "a")
-
-    case opts[:depth] do
-      depth when is_integer(depth) -> Map.put(opts, :depth, max(depth - 1, 0))
-      _depth -> opts
-    end
-  end
-
-  defp with_span(opts, start, length), do: Map.put(opts, :json_span, {start, length})
-
-  defp register_import_map(
-         %{name: "script", namespace: :html, in_shadow_root?: false} = tag,
-         map,
-         opts
-       ) do
-    if import_map_element?(tag.attributes, opts) do
-      ImportMap.merge_source(raw_text(tag.children), map, opts[:document_base] || "")
-    else
-      map
-    end
-  end
-
-  defp register_import_map(_element, map, _opts), do: map
-
-  defp import_map_element?(attrs, opts) do
-    HTMLReferences.enabled?(opts, "js") and HTMLReferences.import_map?(attrs)
-  end
-
-  defp raw_text(children) do
-    Enum.map_join(children, fn
-      text when is_binary(text) -> text
-      _child -> ""
-    end)
-  end
-
-  defp prepend_document_headers(elements, opts) do
-    if html?(opts) do
-      header_elements(opts) ++ elements
-    else
-      elements
-    end
-  end
-
-  defp header_elements(opts) do
-    links = Enum.map(DocumentHeaders.elements(opts[:headers]), &mark_header_element/1)
-    links ++ speculation_header_elements(opts)
-  end
-
-  defp mark_header_element({"link", attrs, children}) do
-    {"link", attrs ++ [{"crawler-from-header", "true"}], children}
-  end
-
-  defp mark_header_element(element), do: element
-
-  defp speculation_header_elements(opts) do
-    opts[:headers]
-    |> SpeculationRules.header_urls()
-    |> Enum.map(fn url ->
-      {"link",
-       [
-         {"href", url},
-         {"crawler-speculation-rules", "true"},
-         {"crawler-from-header", "true"}
-       ], []}
-    end)
-  end
-
-  defp parse_file(body, opts) do
-    type = opts[:content_type]
-
-    cond do
-      MediaType.css?(type) ->
-        css_elements(body, opts) ++ SourceMap.element_refs(body, opts, :css)
-
-      MediaType.javascript?(type) ->
-        ScriptReferences.elements(body, opts)
-
-      true ->
-        xml_stylesheets(body, opts) ++ HtmlParser.references(body, opts)
-    end
-  end
-
-  defp css_elements(body, opts) when is_binary(body) do
-    tokens =
-      body
-      |> CssParser.spans(opts)
-      |> Enum.uniq_by(& &1.value)
-
-    extras =
-      opts
-      |> CssSheets.take_urls(body, tokens)
-      |> Enum.map(&{:css, &1, :url})
-
-    tokens
-    |> Enum.map(&css_link/1)
-    |> Kernel.++(extras)
-    |> Enum.uniq_by(fn {:css, value, _kind} -> value end)
-  end
-
-  defp css_elements(_body, _opts), do: []
-
-  defp css_link(token), do: {:css, token.value, span_kind(token)}
-
-  defp span_kind(%{kind: kind}) when kind in [:font, :import, :url], do: kind
-  defp span_kind(_span), do: :url
-
-  defp xml_stylesheets(body, opts) do
-    if MediaType.svg?(opts[:content_type]) do
-      Enum.map(HTMLSpans.css_xml_stylesheets(body), fn sheet ->
-        {"link", [{"rel", "stylesheet"}, {"href", sheet.href}, {"type", sheet.type}], []}
-      end)
-    else
-      []
+  @doc false
+  def assigned_style_group(body, opts) do
+    case Analysis.analyze(body, opts) do
+      {:ok, analysis} -> source_options(analysis, opts)[:style_group]
+      {:error, _reason} -> nil
     end
   end
 end

@@ -2,7 +2,6 @@ defmodule Crawler.HTMLRefreshGrammarTest do
   use ExUnit.Case, async: true
 
   alias Crawler.HTMLRefresh
-  alias Crawler.Linker
   alias Crawler.Parser
   alias Crawler.Snapper.LinkReplacer
 
@@ -29,9 +28,14 @@ defmodule Crawler.HTMLRefreshGrammarTest do
                Parser.parse_links(source, opts, fn element, _opts -> element end)
 
       assert {:ok, body} = LinkReplacer.replace_links(source, opts)
-      offline = Linker.offline_link(@page, resolved)
+      assert resolved == "http://example.com" <> target
+
+      online =
+        ("http://example.com" <> String.replace(target, "&", "&amp;"))
+        |> String.replace("=", "&#61;")
+
       encoded_target = String.replace(target, "&", "&amp;")
-      assert body == String.replace(source, encoded_target, offline)
+      assert body == String.replace(source, encoded_target, online)
     end
   end
 

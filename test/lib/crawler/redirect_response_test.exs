@@ -36,7 +36,7 @@ defmodule Crawler.RedirectResponseTest do
         })
 
       assert result == {:warn, "Failed to fetch #{page}, status code: 302"}
-      refute Store.find({page, scope}).body
+      refute Store.find({page, scope})
     end)
 
     assert RequestLog.frequencies(seen) == %{
@@ -74,7 +74,7 @@ defmodule Crawler.RedirectResponseTest do
         })
 
       assert result == {:error, "Failed to fetch #{page}, reason: too many redirects (0)"}
-      refute Store.find({page, scope}).body
+      refute Store.find({page, scope})
     end)
 
     assert RequestLog.frequencies(seen) == %{
@@ -153,7 +153,7 @@ defmodule Crawler.RedirectResponseTest do
         })
 
       assert result == {:warn, "Failed to fetch #{page}, status code: 302"}
-      refute Store.find({page, scope}).body
+      refute Store.find({page, scope})
     end)
 
     assert RequestLog.frequencies(seen) == %{

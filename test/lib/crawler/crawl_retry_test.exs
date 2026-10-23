@@ -1,7 +1,26 @@
 defmodule Crawler.CrawlRetryTest do
   use Crawler.TestCase, async: false
 
+  import Crawler.ManagedSnapshotHelpers
+
+  alias Crawler.RequestLog
   alias Crawler.Store
+
+  defmodule StagedParser do
+    @behaviour Crawler.Parser.Spec
+
+    def parse(%Crawler.Store.Page{} = page) do
+      with {:ok, _} = result <- Crawler.Parser.parse(page) do
+        send(page.opts.parser_observer, {:publication_staged, self()})
+
+        receive do
+          :release_staged_parser -> result
+        end
+      end
+    end
+
+    def parse(input), do: Crawler.Parser.parse(input)
+  end
 
   test "retries retryable responses and a gated transport timeout", %{url: url} do
     {:ok, attempts} = Agent.start_link(fn -> %{} end)
@@ -55,6 +74,7 @@ defmodule Crawler.CrawlRetryTest do
         timeout: 1_000,
         workers: 1,
         store: Store,
+        save_to: nil,
         respect_robots: false,
         req_options: req_options
       )
@@ -71,6 +91,7 @@ defmodule Crawler.CrawlRetryTest do
         retries: 2,
         workers: 1,
         queue: status_opts[:queue],
+        save_to: nil,
         respect_robots: false,
         req_options: req_options
       )
@@ -89,6 +110,7 @@ defmodule Crawler.CrawlRetryTest do
         workers: 1,
         queue: status_opts[:queue],
         store: Store,
+        save_to: nil,
         respect_robots: false,
         req_options: req_options
       )
@@ -105,22 +127,30 @@ defmodule Crawler.CrawlRetryTest do
     end)
   end
 
-  test "a failed redirect does not leave the target url blocked", %{
+  test "failed publication does not block a fresh landing run", %{
     site: site,
     url: url,
     req_options: req_options
   } do
     landing = "#{url}/alias/landing/"
-    blocked = tmp("behavior-alias-block", "not-a-directory")
-    File.write!(blocked, "not-a-directory")
+    scope = unique_scope("alias-fail")
+    directory = tmp(unique_scope("behavior-alias-block"))
+    blocked = Path.join(directory, "not-a-directory")
+    requests = RequestLog.new()
+    on_exit(fn -> File.rm_rf(directory) end)
+    refute File.exists?(blocked)
 
-    ReqTestSite.expect(site, "GET", "/alias/from", fn conn ->
+    ReqTestSite.stub(site, "GET", "/alias/from", fn conn ->
+      RequestLog.record(requests, conn.request_path)
+
       conn
       |> Plug.Conn.put_resp_header("location", landing)
       |> Plug.Conn.resp(302, "")
     end)
 
     ReqTestSite.expect(site, "GET", "/alias/landing/", fn conn ->
+      RequestLog.record(requests, conn.request_path)
+
       conn
       |> Plug.Conn.put_resp_header("content-type", "text/html")
       |> Plug.Conn.resp(200, "LANDED")
@@ -128,30 +158,55 @@ defmodule Crawler.CrawlRetryTest do
 
     {:ok, failed} =
       start_crawl("#{url}/alias/from",
-        scope: "alias-fail",
+        scope: scope,
         workers: 1,
+        store: Store,
         save_to: blocked,
+        parser: StagedParser,
+        parser_observer: self(),
         req_options: req_options
       )
+
+    assert_receive {:publication_staged, parser}, 2_000
+    on_exit(fn -> send(parser, :release_staged_parser) end)
+    File.write!(blocked, "not-a-directory")
+
+    assert RequestLog.frequencies(requests) == %{"/alias/from" => 1, "/alias/landing/" => 1}
+    send(parser, :release_staged_parser)
 
     wait(fn ->
       refute Crawler.running?(failed)
-      refute Store.find({"#{url}/alias/from", "alias-fail"})
-      refute Store.find({landing, "alias-fail"})
+
+      assert {:ok, %{state: :failed, ready?: false, reason: {:snapshot, :destination_exists}}} =
+               Crawler.export_status(failed)
+
+      assert %Store.Page{body: "LANDED"} = Store.find_processed({"#{url}/alias/from", scope})
+      assert %Store.Page{body: "LANDED"} = Store.find_processed({landing, scope})
+      assert Store.ops_count(scope) == 1
     end)
+
+    assert File.read!(blocked) == "not-a-directory"
+    assert :ok = Crawler.stop(failed)
 
     {:ok, again} =
       start_crawl(landing,
-        scope: "alias-fail",
+        scope: scope,
+        force: true,
         workers: 1,
         store: Store,
+        save_to: Path.join(directory, "archive"),
         req_options: req_options
       )
 
-    wait(fn ->
-      refute Crawler.running?(again)
-      assert %Store.Page{body: "LANDED"} = Store.find_processed({landing, "alias-fail"})
-    end)
+    refute again.generation == failed.generation
+    export = ready_export(again)
+    assert %Store.Page{body: "LANDED"} = Store.find_processed({landing, scope})
+
+    assert read_resource(export, resource_for_url(export, landing)) ==
+             <<0xEF, 0xBB, 0xBF>> <> "LANDED"
+
+    assert RequestLog.frequencies(requests) == %{"/alias/from" => 1, "/alias/landing/" => 2}
+    assert File.read!(blocked) == "not-a-directory"
   end
 
   test "a failed fetch can succeed on a later crawl", %{
@@ -179,6 +234,7 @@ defmodule Crawler.CrawlRetryTest do
         scope: "retry-later",
         workers: 1,
         store: Store,
+        save_to: nil,
         req_options: req_options
       )
 
@@ -194,6 +250,7 @@ defmodule Crawler.CrawlRetryTest do
         force: true,
         workers: 1,
         store: Store,
+        save_to: nil,
         req_options: req_options
       )
 

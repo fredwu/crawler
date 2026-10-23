@@ -1,21 +1,18 @@
 defmodule Crawler.Snapper.LinkReplacerIntegrityTest do
   use ExUnit.Case, async: true
 
-  alias Crawler.Linker
-  alias Crawler.Snapper.LinkReplacer
+  alias Crawler.StandaloneRewriteHelpers
 
   @page "http://example.com/index.html"
-  @script "http://example.com/app.js"
-  @stylesheet "http://example.com/app.css"
   @integrity "sha256-valid-original-hash"
 
   test "rewrites a sole modulepreload reference and removes its integrity" do
     source = ~s|<link rel="ModulePreload" href="only.js" integrity="#{@integrity}">|
 
-    assert {:ok, body} = LinkReplacer.replace_links(source, opts())
+    assert {:ok, body} = replace_local(source, opts())
 
     assert body ==
-             ~s|<link rel="ModulePreload" href="#{Linker.offline_link(@page, "only.js")}">|
+             ~s|<link rel="ModulePreload" href="fixtures/only.js">|
   end
 
   for {as, file} <- [{"script", "app.js"}, {"style", "app.css"}],
@@ -24,12 +21,12 @@ defmodule Crawler.Snapper.LinkReplacerIntegrityTest do
       source =
         ~s|<link rel="#{unquote(rel)}" as="#{String.upcase(unquote(as))}" href="#{unquote(file)}" integrity="#{@integrity}">|
 
-      assert {:ok, body} = LinkReplacer.replace_links(source, opts())
+      assert {:ok, body} = replace_local(source, opts())
 
       assert body ==
                source
                |> String.replace(~s| integrity="#{@integrity}"|, "")
-               |> String.replace(unquote(file), Linker.offline_link(@page, unquote(file)))
+               |> String.replace(unquote(file), "fixtures/" <> unquote(file))
     end
   end
 
@@ -39,14 +36,14 @@ defmodule Crawler.Snapper.LinkReplacerIntegrityTest do
     <link rel="preload" as="style" href="app.css" integrity="#{@integrity}">
     """
 
-    assert {:ok, ^source} = LinkReplacer.replace_links(source, %{opts() | assets: []})
+    assert {:ok, ^source} = replace_local(source, %{opts() | assets: []})
 
     inline = """
     <link rel="preload" as="script" href="data:text/javascript,void(0)" integrity="#{@integrity}">
     <link rel="preload" as="style" href="data:text/css,body{}" integrity="#{@integrity}">
     """
 
-    assert {:ok, ^inline} = LinkReplacer.replace_links(inline, opts())
+    assert {:ok, ^inline} = replace_local(inline, opts())
   end
 
   test "drops integrity on rewritten worker and document preloads and keeps it on media and fetch" do
@@ -71,17 +68,17 @@ defmodule Crawler.Snapper.LinkReplacerIntegrityTest do
       end)
 
     assert {:ok, body} =
-             LinkReplacer.replace_links(source, %{opts() | assets: ["css", "js", "images"]})
+             replace_local(source, %{opts() | assets: ["css", "js", "images"]})
 
     for {as, file} <- dropped do
-      offline = Linker.offline_link(@page, file)
-      assert body =~ ~s|as="#{as}" href="#{offline}">|
-      refute body =~ ~s|as="#{as}" href="#{offline}" integrity="#{@integrity}"|
+      local = "fixtures/" <> file
+      assert body =~ ~s|as="#{as}" href="#{local}">|
+      refute body =~ ~s|as="#{as}" href="#{local}" integrity="#{@integrity}"|
     end
 
     for {as, file} <- kept do
-      offline = Linker.offline_link(@page, file)
-      assert body =~ ~s|as="#{as}" href="#{offline}" integrity="#{@integrity}"|
+      local = "fixtures/" <> file
+      assert body =~ ~s|as="#{as}" href="#{local}" integrity="#{@integrity}"|
     end
   end
 
@@ -92,11 +89,11 @@ defmodule Crawler.Snapper.LinkReplacerIntegrityTest do
     <link rel="icon" href="icon.png" integrity="#{@integrity}">
     """
 
-    assert {:ok, body} = LinkReplacer.replace_links(source, %{opts() | assets: ["css", "images"]})
+    assert {:ok, body} = replace_local(source, %{opts() | assets: ["css", "images"]})
 
     expected =
       Enum.reduce(["photo.png", "font.woff2", "icon.png"], source, fn file, body ->
-        String.replace(body, file, Linker.offline_link(@page, file))
+        String.replace(body, file, "fixtures/" <> file)
       end)
 
     assert body == expected
@@ -110,7 +107,7 @@ defmodule Crawler.Snapper.LinkReplacerIntegrityTest do
       ] do
     test "removes the actual integrity attribute from #{template}" do
       source = String.replace(unquote(template), "HASH", @integrity)
-      assert {:ok, body} = LinkReplacer.replace_links(source, opts())
+      assert {:ok, body} = replace_local(source, opts())
 
       expected =
         source
@@ -118,7 +115,7 @@ defmodule Crawler.Snapper.LinkReplacerIntegrityTest do
           ~r/ INTEGRITY='[^']*'| integrity="[^"]*"| integrity=sha256-valid-original-hash/,
           ""
         )
-        |> String.replace("app.js", Linker.offline_link(@page, @script))
+        |> String.replace("app.js", "fixtures/app.js")
 
       assert body == expected
     end
@@ -131,13 +128,13 @@ defmodule Crawler.Snapper.LinkReplacerIntegrityTest do
     <link rel="alternate StyleSheet" href="app.css" integrity="#{@integrity}">
     """
 
-    assert {:ok, body} = LinkReplacer.replace_links(source, opts())
+    assert {:ok, body} = replace_local(source, opts())
 
     assert body ==
              source
              |> String.replace(~s| integrity="#{@integrity}"|, "")
-             |> String.replace("app.js", Linker.offline_link(@page, @script))
-             |> String.replace("app.css", Linker.offline_link(@page, @stylesheet))
+             |> String.replace("app.js", "fixtures/app.js")
+             |> String.replace("app.css", "fixtures/app.css")
   end
 
   test "preserves integrity on untouched references and in inline content" do
@@ -150,11 +147,11 @@ defmodule Crawler.Snapper.LinkReplacerIntegrityTest do
     """
 
     assert {:ok, unchanged} =
-             LinkReplacer.replace_links(source, %{opts() | assets: []})
+             replace_local(source, %{opts() | assets: []})
 
     assert unchanged == source
 
-    assert {:ok, rewritten} = LinkReplacer.replace_links(source, opts())
+    assert {:ok, rewritten} = replace_local(source, opts())
     assert rewritten =~ ~s|src="data:text/javascript,void(0)" integrity="#{@integrity}"|
     assert rewritten =~ ~s|const note = '<script integrity="#{@integrity}">';|
     assert rewritten =~ ~s|<div title="<script integrity='#{@integrity}'>"></div>|
@@ -169,14 +166,54 @@ defmodule Crawler.Snapper.LinkReplacerIntegrityTest do
     <link rel="preload" title="as='style'" href="app.css" integrity="#{@integrity}">
     """
 
-    assert {:ok, body} = LinkReplacer.replace_links(source, opts())
+    assert {:ok, body} = replace_local(source, opts())
 
     assert body ==
              String.replace(
                source,
                ~s|<link rel="stylesheet" href="app.css">|,
-               ~s|<link rel="stylesheet" href="#{Linker.offline_link(@page, @stylesheet)}">|
+               ~s|<link rel="stylesheet" href="fixtures/app.css">|
              )
+  end
+
+  defp replace_local(source, opts) do
+    handles = %{
+      "only.js" => :only,
+      "app.js" => :script,
+      "app.css" => :stylesheet,
+      "w.js" => :worker,
+      "sw.js" => :service_worker,
+      "shared.js" => :shared_worker,
+      "paint.js" => :paint_worklet,
+      "heard.js" => :audio_worklet,
+      "next.html" => :document,
+      "clip.mp3" => :audio,
+      "film.mp4" => :video,
+      "notes.html" => :fetch,
+      "photo.png" => :image,
+      "font.woff2" => :font,
+      "icon.png" => :icon
+    }
+
+    outcomes = %{
+      only: {:ok, "fixtures/only.js"},
+      script: {:ok, "fixtures/app.js"},
+      stylesheet: {:ok, "fixtures/app.css"},
+      worker: {:ok, "fixtures/w.js"},
+      service_worker: {:ok, "fixtures/sw.js"},
+      shared_worker: {:ok, "fixtures/shared.js"},
+      paint_worklet: {:ok, "fixtures/paint.js"},
+      audio_worklet: {:ok, "fixtures/heard.js"},
+      document: {:ok, "fixtures/next.html"},
+      audio: {:ok, "fixtures/clip.mp3"},
+      video: {:ok, "fixtures/film.mp4"},
+      fetch: {:ok, "fixtures/notes.html"},
+      image: {:ok, "fixtures/photo.png"},
+      font: {:ok, "fixtures/font.woff2"},
+      icon: {:ok, "fixtures/icon.png"}
+    }
+
+    StandaloneRewriteHelpers.replace_bound(source, opts, &Map.get(handles, &1.value), outcomes)
   end
 
   defp opts do

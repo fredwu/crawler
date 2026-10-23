@@ -24,7 +24,7 @@ defmodule Crawler.Charset.InvalidLabelTest do
              ~s|<meta charset="utf-8" http-equiv="content-type" content="text/html; charset=utf-8">café|
   end
 
-  test "a malformed XML encoding allows XHTML to use a supported meta declaration" do
+  test "a malformed XML encoding uses UTF-8 without an HTML meta fallback" do
     source =
       ~s|<?xml version="1.0" encoding="| <>
         <<255>> <>
@@ -33,7 +33,7 @@ defmodule Crawler.Charset.InvalidLabelTest do
     assert HTML.xml_charset(source) == nil
 
     assert Charset.decode(source, %{content_type: "application/xhtml+xml"}) ==
-             ~s|<?xml version="1.0" encoding="utf-8"?><meta charset="utf-8">café|
+             ~s|<?xml version="1.0" encoding="utf-8"?><meta charset="latin1">caf�|
   end
 
   test "without a supported declaration malformed input uses normal body replacement" do

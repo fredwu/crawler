@@ -42,7 +42,7 @@ defmodule Crawler.Mixfile do
       {:req, "~> 0.6.2"},
       {:floki, "~> 0.38"},
       {:unicode_idna, "~> 0.2.0"},
-      {:opq, "~> 4.0"},
+      {:opq, github: "fredwu/opq", ref: "86c8ad4376b962f288d72b9dacc21951838326a1"},
       {:retry, "~> 0.19"},
       {:recode, "~> 0.8", only: :dev},
       {:ex_doc, ">= 0.0.0", only: :dev},

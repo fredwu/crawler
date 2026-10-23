@@ -1,42 +1,111 @@
 defmodule Crawler.Cookies do
   @moduledoc false
 
+  alias Crawler.Cookies.Jar
   alias Crawler.Cookies.PublicSuffix
 
   @months ~w(jan feb mar apr may jun jul aug sep oct nov dec)
   @date_delimiters ~r/[\t\x20-\x2F\x3B-\x40\x5B-\x60\x7B-\x7E]+/
   @max_expires_at DateTime.new!(~D[9999-12-31], ~T[23:59:59], "Etc/UTC")
 
-  def store(jar, request_url, headers, context \\ %{})
+  # Limits apply to each scope jar. Capacity eviction removes the oldest-created
+  # identity; replacement retains its creation order. Serialized cookie bytes
+  # bound retained values independently of the cookie count.
+  def limits, do: Jar.defaults()
 
-  def store(jar, request_url, headers, context) when is_list(headers) do
-    uri = URI.parse(to_string(request_url))
-    context = normalize_context(context)
+  def entries(jar), do: jar |> Jar.new(%{}) |> Jar.entries()
 
-    Enum.reduce(headers, jar || [], fn header, jar ->
-      store_one(jar, uri, header, context)
-    end)
+  def store(jar, request_url, headers, context \\ %{}) do
+    {jar, _outcome} = store_result(jar, request_url, headers, context)
+    jar
   end
 
-  def store(jar, _request_url, _headers, _context), do: jar || []
+  def store_result(jar, request_url, headers, context \\ %{}) do
+    uri = URI.parse(to_string(request_url))
+    context = normalize_context(context)
+    {jar, expired} = jar |> Jar.new(context) |> Jar.prune(DateTime.utc_now())
+    {jar, evicted, limits} = Jar.enforce(jar)
+
+    outcome = %{
+      status: :ok,
+      processed: 0,
+      expired: expired,
+      evicted: evicted,
+      rejected: 0,
+      unprocessed?: false,
+      limits: limits
+    }
+
+    {jar, outcome} =
+      if is_list(headers) and
+           credential_ok?(uri, document_uri(uri, context), credential_mode(context)) do
+        store_headers(headers, jar, uri, context, outcome, jar.limits.max_cookie_updates)
+      else
+        {jar, outcome}
+      end
+
+    limits = outcome.limits |> MapSet.to_list() |> Enum.sort()
+    {jar, %{outcome | status: if(limits == [], do: :ok, else: :limited), limits: limits}}
+  end
+
+  defp store_headers([], jar, _uri, _context, outcome, _remaining), do: {jar, outcome}
+
+  defp store_headers([_ | _], jar, _uri, _context, outcome, 0) do
+    {jar,
+     %{outcome | unprocessed?: true, limits: MapSet.put(outcome.limits, :max_cookie_updates)}}
+  end
+
+  defp store_headers([header | rest], jar, uri, context, outcome, remaining) do
+    outcome = %{outcome | processed: outcome.processed + 1}
+
+    {jar, outcome} =
+      if is_binary(header) and byte_size(header) > jar.limits.max_cookie_bytes do
+        {jar,
+         %{
+           outcome
+           | rejected: outcome.rejected + 1,
+             limits: MapSet.put(outcome.limits, :max_cookie_bytes)
+         }}
+      else
+        {jar, evicted, limits} = store_one(jar, uri, header, context)
+
+        {jar,
+         %{
+           outcome
+           | evicted: outcome.evicted + evicted,
+             limits: MapSet.union(outcome.limits, limits)
+         }}
+      end
+
+    store_headers(rest, jar, uri, context, outcome, remaining - 1)
+  end
 
   def header(jar, request_url, context \\ %{}) do
+    {header, _jar, _work} = header_result(jar, request_url, context)
+    header
+  end
+
+  # The state owner retains the returned jar so read-only traffic also releases
+  # expired records. Candidate work excludes cookies from unrelated domains.
+  def header_result(jar, request_url, context \\ %{}) do
     uri = URI.parse(to_string(request_url))
     context = normalize_context(context)
     document = document_uri(uri, context)
     mode = credential_mode(context)
     navigation = navigating?(context, mode)
+    {jar, expired} = jar |> Jar.new(%{}) |> Jar.prune(DateTime.utc_now())
+
+    candidates =
+      if credential_ok?(uri, document, mode), do: Jar.candidates(jar, uri.host), else: []
 
     pairs =
-      (jar || [])
+      candidates
       |> Enum.filter(&send?(&1, uri, document, navigation, mode))
-      |> Enum.sort_by(&{-String.length(&1.path), Map.get(&1, :seq, 0)})
+      |> Enum.sort_by(&{-String.length(&1.path), &1.seq})
       |> Enum.map(&"#{&1.name}=#{&1.value}")
 
-    case pairs do
-      [] -> nil
-      _ -> Enum.join(pairs, "; ")
-    end
+    header = if pairs == [], do: nil, else: Enum.join(pairs, "; ")
+    {header, jar, %{expired: expired, examined: length(candidates)}}
   end
 
   # A page open follows a link or a document redirect. Robots and sitemap
@@ -81,32 +150,40 @@ defmodule Crawler.Cookies do
   def merge_header(user, jar) when user in [nil, ""], do: jar
 
   def merge_header(user, jar) do
-    merged = Map.merge(Map.new(pairs(user)), Map.new(pairs(jar)))
-    Enum.map_join(merged, "; ", fn {name, value} -> "#{name}=#{value}" end)
+    jar_pairs = pairs(jar)
+    names = MapSet.new(jar_pairs, &elem(&1, 0))
+    user_pairs = Enum.reject(pairs(user), &MapSet.member?(names, elem(&1, 0)))
+    Enum.map_join(jar_pairs ++ user_pairs, "; ", fn {name, value} -> "#{name}=#{value}" end)
   end
 
-  defp store_one(jar, %URI{host: host}, _header, _context) when not is_binary(host), do: jar
+  defp unchanged(jar), do: {jar, 0, MapSet.new()}
+
+  defp store_one(jar, %URI{host: host}, _header, _context) when not is_binary(host),
+    do: unchanged(jar)
 
   defp store_one(jar, %URI{} = uri, header, context) when is_binary(header) do
     case parse_set_cookie(header) do
       {:ok, name, value, attrs} -> accept(jar, name, value, attrs, uri, context)
-      :error -> jar
+      :error -> unchanged(jar)
     end
   end
 
-  defp store_one(jar, _uri, _header, _context), do: jar
+  defp store_one(jar, _uri, _header, _context), do: unchanged(jar)
 
   defp accept(jar, name, value, attrs, uri, context) do
     case build(name, value, attrs, uri, context) do
-      :reject -> jar
-      cookie -> if allow_store?(jar, cookie, uri), do: keep(jar, cookie, attrs), else: jar
+      :reject ->
+        unchanged(jar)
+
+      cookie ->
+        if allow_store?(jar, cookie, uri), do: keep(jar, cookie, attrs), else: unchanged(jar)
     end
   end
 
   defp keep(jar, cookie, attrs) do
     case deadline(attrs) do
-      :delete -> reject(jar, cookie)
-      expires_at -> replace(jar, Map.put(cookie, :expires_at, expires_at))
+      :delete -> unchanged(Jar.delete(jar, cookie))
+      expires_at -> Jar.put(jar, Map.put(cookie, :expires_at, expires_at))
     end
   end
 
@@ -155,7 +232,10 @@ defmodule Crawler.Cookies do
   defp allow_store?(_jar, _cookie, _uri), do: true
 
   defp secure_identity?(jar, cookie) do
-    Enum.any?(jar, fn item -> item.secure? and same_cookie?(item, cookie) end)
+    case Jar.get(jar, cookie) do
+      %{secure?: true} -> true
+      _ -> false
+    end
   end
 
   defp prefix_ok?(%{name: "__Host-" <> _} = cookie, scheme) do
@@ -369,37 +449,6 @@ defmodule Crawler.Cookies do
     host = PublicSuffix.normalize(host)
     domain = PublicSuffix.normalize(domain)
     host != "" and (host == domain or String.ends_with?(host, "." <> domain))
-  end
-
-  # :seq is the creation order. A replace keeps that place, so the list order is not the send order.
-  defp replace(jar, cookie) do
-    case Enum.find(jar, &same_cookie?(&1, cookie)) do
-      nil -> jar ++ [Map.put(cookie, :seq, next_seq(jar))]
-      current -> rewrite(jar, cookie, Map.get(current, :seq, next_seq(jar)))
-    end
-  end
-
-  defp rewrite(jar, cookie, seq) do
-    Enum.map(jar, &rewrite_one(&1, cookie, seq))
-  end
-
-  defp rewrite_one(item, cookie, seq) do
-    if same_cookie?(item, cookie), do: Map.put(cookie, :seq, seq), else: item
-  end
-
-  defp next_seq([]), do: 0
-
-  defp next_seq(jar) do
-    jar |> Enum.map(&Map.get(&1, :seq, 0)) |> Enum.max() |> then(&(&1 + 1))
-  end
-
-  # The ASCII form is the cookie identity. The stored domain stays Unicode.
-  defp reject(jar, cookie), do: Enum.reject(jar, &same_cookie?(&1, cookie))
-
-  defp same_cookie?(item, cookie) do
-    item.name == cookie.name and item.path == cookie.path and
-      same_host?(item.domain, cookie.domain) and
-      Map.get(item, :partition) == Map.get(cookie, :partition)
   end
 
   defp parse_set_cookie(header) do

@@ -1,34 +1,61 @@
 defmodule Crawler.Parser.CssParser.VariableGraph do
   @moduledoc false
 
+  alias Crawler.Analysis.Budget
+
   @defaults [max_work: 100_000, max_pictures: 10_000, max_depth: 256]
 
   def run(sheets, fallbacks?, opts) do
-    state = initial(fallbacks?, opts)
+    {:ok, outcome, _budget} = run_result(sheets, fallbacks?, opts, Budget.unlimited())
+    outcome
+  end
+
+  def run_result(sheets, fallbacks?, opts, budget) do
+    state = initial(fallbacks?, opts, budget)
 
     try do
+      state = hold(state, 4096)
+      state = %{state | budget: adopt(sheets, state.budget)}
       state = Enum.reduce(sheets, state, &index_sheet/2)
+      state = hold(state, Budget.cost(:list_cell, length(state.uses)))
       uses = Enum.reverse(state.uses)
       {result, state} = collect(uses, empty(), state, &use_pictures/2)
 
-      %{
-        pictures: Enum.reverse(result.pictures),
-        revision: state.revision,
-        status: :ok,
-        stats: Map.put(state.stats, :pictures, MapSet.size(result.identities))
-      }
+      output_bytes =
+        Budget.cost(:context) +
+          length(result.pictures) *
+            (Budget.cost(:context) + Budget.cost(:token) + Budget.cost(:list_cell))
+
+      budget = take!(Budget.charge(state.budget, output_bytes))
+      pictures = Enum.reverse(result.pictures)
+      budget = take!(Budget.release(budget, state.held))
+
+      {:ok,
+       %{
+         pictures: pictures,
+         revision: state.revision,
+         status: :ok,
+         stats: Map.put(state.stats, :pictures, MapSet.size(result.identities))
+       }, budget}
     catch
       {:css_graph_limit, limit, state} ->
-        %{
-          pictures: [],
-          revision: state.revision,
-          status: {:limited, limit},
-          stats: Map.put(state.stats, :pictures, 0)
-        }
+        with {:ok, budget} <- Budget.charge(state.budget, Budget.cost(:context)),
+             {:ok, budget} <- Budget.release(budget, state.held) do
+          {:ok,
+           %{
+             pictures: [],
+             revision: state.revision,
+             status: {:limited, limit},
+             stats: Map.put(state.stats, :pictures, 0)
+           }, budget}
+        end
+
+      {:css_graph_budget, reason} ->
+        {:error, reason}
     end
   end
 
-  defp initial(fallbacks?, opts) do
+  defp initial(fallbacks?, opts, budget) do
     limits =
       Map.new(@defaults, fn {key, default} ->
         value = Keyword.get(opts, key, default)
@@ -41,6 +68,8 @@ defmodule Crawler.Parser.CssParser.VariableGraph do
       end)
 
     %{
+      budget: budget,
+      held: 0,
       revision: Keyword.get_lazy(opts, :graph_revision, &make_ref/0),
       fallbacks?: fallbacks?,
       limits: limits,
@@ -57,11 +86,13 @@ defmodule Crawler.Parser.CssParser.VariableGraph do
 
   defp index_sheet(sheet, state) do
     state = spend(state)
+    state = hold(state, Budget.cost(:map_entry))
     state = %{state | bases: Map.put_new(state.bases, sheet.id, sheet.base)}
 
     {state, _index} =
       Enum.reduce(sheet.bindings, {state, 0}, fn binding, {state, index} ->
         state = indexed(state)
+        state = hold(state, Budget.cost(:map_entry, 3) + 192)
         rank = {sheet.order, index}
         name = binding.name
 
@@ -80,6 +111,8 @@ defmodule Crawler.Parser.CssParser.VariableGraph do
       Enum.reduce(sheet.registrations, {state, 0}, fn registration, {state, index} ->
         state = indexed(state)
 
+        state = hold(state, Budget.cost(:map_entry) + 64)
+
         registrations =
           put_winner(state.registrations, registration.name, {sheet.order, index}, registration)
 
@@ -88,6 +121,7 @@ defmodule Crawler.Parser.CssParser.VariableGraph do
 
     Enum.reduce(sheet.uses, state, fn use, state ->
       state = indexed(state)
+      state = hold(state, Budget.cost(:list_cell))
       %{state | uses: [use | state.uses]}
     end)
   end
@@ -105,6 +139,7 @@ defmodule Crawler.Parser.CssParser.VariableGraph do
   end
 
   defp use_pictures(use, state) do
+    state = hold(state, Budget.cost(:context) + Budget.cost(:frame))
     ctx = context(use.sheet_id, use.base, use.sheet_id, use.base, use.sheet_id, use.rule_id)
     alias_pictures(use, ctx, MapSet.new(), 0, state)
   end
@@ -112,6 +147,8 @@ defmodule Crawler.Parser.CssParser.VariableGraph do
   defp resolve(name, ctx, seen, depth, state) do
     state = spend(state)
     check_depth(depth, state)
+
+    state = hold(state, Budget.cost(:frame) + Budget.cost(:map_entry))
 
     if MapSet.member?(seen, name) do
       {%{empty() | names: MapSet.new([name]), cyclic?: true}, state}
@@ -121,6 +158,7 @@ defmodule Crawler.Parser.CssParser.VariableGraph do
   end
 
   defp cached_or_resolve(name, ctx, seen, depth, state) do
+    state = hold(state, 128)
     key = {state.revision, ctx.use_sheet, ctx.use_rule, state.fallbacks?, name}
 
     case Map.fetch(state.memo, key) do
@@ -143,6 +181,8 @@ defmodule Crawler.Parser.CssParser.VariableGraph do
     stats = Map.update!(state.stats, :lookups, &(&1 + 1))
     state = %{state | stats: stats}
 
+    state = hold(state, Budget.cost(:map_entry))
+
     {result, state} =
       case winning(name, ctx, state) do
         nil ->
@@ -152,11 +192,13 @@ defmodule Crawler.Parser.CssParser.VariableGraph do
           binding_pictures(binding, ctx, MapSet.put(seen, name), depth + 1, state)
       end
 
+    state = hold(state, Budget.cost(:map_entry) + Budget.cost(:context))
     result = %{result | names: MapSet.put(result.names, name)}
 
     if result.cyclic? do
       {result, state}
     else
+      state = hold(state, Budget.cost(:map_entry))
       memo = Map.put(state.memo, key, result)
       stats = %{state.stats | cache_entries: map_size(memo)}
       {result, %{state | memo: memo, stats: stats}}
@@ -177,6 +219,7 @@ defmodule Crawler.Parser.CssParser.VariableGraph do
   defp binding_pictures(binding, ctx, seen, depth, state) do
     base_id = if registered?(binding.name, state), do: binding.sheet_id, else: ctx.use_sheet
     base = Map.get(state.bases, base_id, binding.base)
+    state = hold(state, Budget.cost(:context))
     ctx = context(binding.sheet_id, binding.base, base_id, base, ctx.use_sheet, ctx.use_rule)
     value_pictures(binding, ctx, seen, depth, state)
   end
@@ -205,6 +248,8 @@ defmodule Crawler.Parser.CssParser.VariableGraph do
 
     case item(Map.get(state.registrations, alias_value.name)) do
       %{syntax_url?: true, initial: token} = registration when not is_nil(token) ->
+        state = hold(state, Budget.cost(:context))
+
         ctx =
           context(
             registration.sheet_id,
@@ -218,6 +263,7 @@ defmodule Crawler.Parser.CssParser.VariableGraph do
         add_picture(empty(), token, ctx, state)
 
       _other ->
+        state = hold(state, Budget.cost(:map_entry))
         seen = MapSet.put(seen, alias_value.name)
         fallback_pictures(alias_value.fallback, ctx, seen, depth, state)
     end
@@ -230,6 +276,8 @@ defmodule Crawler.Parser.CssParser.VariableGraph do
   end
 
   defp value_pictures(value, ctx, seen, depth, state) do
+    state = hold(state, Budget.cost(:context) + Budget.cost(:frame))
+
     {result, state} =
       Enum.reduce(value.urls, {empty(), state}, fn token, {result, state} ->
         add_picture(result, token, ctx, state)
@@ -241,6 +289,8 @@ defmodule Crawler.Parser.CssParser.VariableGraph do
   end
 
   defp collect(items, result, state, fun) do
+    state = hold(state, Budget.cost(:frame))
+
     Enum.reduce(items, {result, state}, fn item, {result, state} ->
       state = spend(state)
       {next, state} = fun.(item, state)
@@ -250,6 +300,13 @@ defmodule Crawler.Parser.CssParser.VariableGraph do
 
   defp merge(result, next, state) do
     state = spend(state, MapSet.size(next.names))
+
+    state =
+      hold(
+        state,
+        Budget.cost(:map_entry, MapSet.size(next.names)) +
+          Budget.cost(:context) + Budget.cost(:list_cell, length(next.pictures))
+      )
 
     result = %{
       result
@@ -265,6 +322,8 @@ defmodule Crawler.Parser.CssParser.VariableGraph do
   end
 
   defp add_picture(result, token, ctx, state) do
+    state = hold(state, Budget.cost(:context) + Budget.cost(:token))
+
     picture = %{
       token: Map.put_new(token, :kind, :url),
       token_sheet: ctx.token_sheet,
@@ -285,6 +344,9 @@ defmodule Crawler.Parser.CssParser.VariableGraph do
       if MapSet.size(result.identities) >= state.limits.max_pictures do
         limit(:pictures, state)
       end
+
+      state =
+        hold(state, Budget.cost(:list_cell) + Budget.cost(:map_entry) + Budget.cost(:context))
 
       {%{
          result
@@ -316,8 +378,63 @@ defmodule Crawler.Parser.CssParser.VariableGraph do
   defp spend(state, amount \\ 1) do
     work = state.stats.work + amount
     if work > state.limits.max_work, do: limit(:work, state)
+    state = hold(state, Budget.cost(:frame))
     %{state | stats: %{state.stats | work: work}}
   end
+
+  # Internal graph structures remain live until the outcome is detached. Charging
+  # replacements cumulatively also covers old persistent-map paths awaiting GC.
+  defp hold(state, bytes) do
+    budget = take!(Budget.reserve(state.budget, bytes))
+    %{state | budget: budget, held: state.held + bytes}
+  end
+
+  # Inputs can arrive from a cache snapshot rather than a lexical ledger. Adopt
+  # their complete backing conservatively; repeated references are overcharged.
+  defp adopt(_term, %{limit: :infinity} = budget), do: budget
+
+  defp adopt(term, budget) when is_binary(term),
+    do: take!(Budget.charge(budget, Budget.cost(:binary) + :binary.referenced_byte_size(term)))
+
+  defp adopt([], budget), do: budget
+
+  defp adopt([head | tail], budget) do
+    budget = take!(Budget.charge(budget, Budget.cost(:list_cell) + Budget.cost(:frame)))
+    budget = adopt(head, budget)
+    adopt(tail, budget)
+  end
+
+  defp adopt(term, budget) when is_map(term) do
+    budget = take!(Budget.charge(budget, 128 + Budget.cost(:map_entry, map_size(term))))
+    adopt_map(:maps.iterator(term), budget)
+  end
+
+  defp adopt(term, budget) when is_tuple(term) do
+    budget = take!(Budget.charge(budget, 32 + 8 * tuple_size(term)))
+    adopt_tuple(term, 0, budget)
+  end
+
+  defp adopt(_term, budget), do: budget
+
+  defp adopt_map(iterator, budget) do
+    case :maps.next(iterator) do
+      :none ->
+        budget
+
+      {key, value, next} ->
+        budget = adopt(key, budget)
+        budget = adopt(value, budget)
+        adopt_map(next, budget)
+    end
+  end
+
+  defp adopt_tuple(tuple, index, budget) when index == tuple_size(tuple), do: budget
+
+  defp adopt_tuple(tuple, index, budget),
+    do: adopt_tuple(tuple, index + 1, adopt(elem(tuple, index), budget))
+
+  defp take!({:ok, budget}), do: budget
+  defp take!({:error, reason}), do: throw({:css_graph_budget, reason})
 
   @spec limit(:work | :pictures | :depth, map()) :: no_return()
   defp limit(kind, state), do: throw({:css_graph_limit, kind, state})

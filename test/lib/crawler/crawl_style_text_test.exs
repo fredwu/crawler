@@ -1,7 +1,7 @@
 defmodule Crawler.CrawlStyleTextTest do
   use Crawler.TestCase, async: false
 
-  import Crawler.SnapshotHelpers
+  import Crawler.ManagedSnapshotHelpers
 
   alias Crawler.RequestLog
   alias Crawler.Store
@@ -12,7 +12,7 @@ defmodule Crawler.CrawlStyleTextTest do
     req_options: req_options
   } do
     scope = unique_scope("style-text")
-    root = tmp(scope)
+    root = tmp(scope, "archive")
     page = "#{url}/style-page"
     raw_target = "#{url}/assets/asset.png?x=1&amp;y=2"
     attribute_target = "#{url}/assets/asset.png?x=1&y=2"
@@ -61,10 +61,34 @@ defmodule Crawler.CrawlStyleTextTest do
       assert Store.find_processed({attribute_target, scope})
     end)
 
+    export = ready_export(opts)
+    source = resource_for_url(export, page)
+
     assert RequestLog.frequencies(requests) == %{"x=1&amp;y=2" => 1, "x=1&y=2" => 1}
-    assert File.read!(saved(root, raw_target)) == "raw style asset"
-    assert File.read!(saved(root, attribute_target)) == "attribute style asset"
-    assert_link_opens(root, page, raw_target)
-    assert_link_opens(root, page, attribute_target)
+
+    assert read_resource(export, reference_target(export, source, raw_target)) ==
+             "raw style asset"
+
+    assert read_resource(export, reference_target(export, source, attribute_target)) ==
+             "attribute style asset"
+
+    body = read_resource(export, source)
+
+    assert [raw_reference] =
+             Regex.run(~r/<style>.*?url\("([^"]+)"\)/s, body, capture: :all_but_first)
+
+    assert [attribute_reference] =
+             Regex.run(~r/<div style="background:url\(&quot;([^&]+)&quot;\)"/, body,
+               capture: :all_but_first
+             )
+
+    assert_opens(export, source, reference_target(export, source, raw_target), raw_reference)
+
+    assert_opens(
+      export,
+      source,
+      reference_target(export, source, attribute_target),
+      attribute_reference
+    )
   end
 end

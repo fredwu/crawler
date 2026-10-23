@@ -182,11 +182,18 @@ defmodule Crawler.CrawlPageBudgetTest do
     on_exit(fn -> send(handler, :release) end)
 
     direct_key = {url <> "/budget/direct", scope}
-    assert {:ok, _} = Store.add(direct_key, other[:generation])
 
-    assert {_, _} =
-             Store.add_page_data(direct_key, "DIRECT", %{generation: other[:generation]})
+    ReqTestSite.expect_once(site, "GET", "/budget/direct", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/plain")
+      |> Plug.Conn.resp(200, "DIRECT")
+    end)
 
+    assert %Store.Page{body: "DIRECT"} =
+             returned =
+             Crawler.crawl_now(Map.merge(other, %{url: elem(direct_key, 0), count_page: false}))
+
+    assert :ok = Store.release_page(returned)
     direct = Store.find(direct_key)
     failed_key = {url <> "/budget/exhausted-failure", scope}
     owner = crawl(elem(failed_key, 0), scope, req_options, max_pages: 2, workers: 2)
@@ -321,6 +328,8 @@ defmodule Crawler.CrawlPageBudgetTest do
       workers: 1,
       max_depths: 3,
       retries: 0,
+      max_body: 1_048_576,
+      max_analysis_bytes: 16_000_000,
       store: Store,
       req_options: req_options
     ]

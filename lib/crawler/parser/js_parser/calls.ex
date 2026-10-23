@@ -1,6 +1,8 @@
 defmodule Crawler.Parser.JsParser.Calls do
   @moduledoc false
 
+  alias Crawler.Analysis.Budget
+  alias Crawler.Parser.JsParser.Matches
   alias Crawler.Parser.JsParser.Scanner
   alias Crawler.Parser.JsParser.StringLiteral
 
@@ -42,31 +44,60 @@ defmodule Crawler.Parser.JsParser.Calls do
   # these calls are matched on the original source. Paren depth still uses the
   # mask, where string and comment contents are spaces.
   def spans(source, goal) when is_binary(source) and goal in [:script, :module] do
-    {masked, strings, _comments} = Scanner.scan(source, goal)
-    strings = MapSet.new(strings)
-    workers = workers(source, masked, strings, goal)
-    scripts = import_scripts(source, masked, strings)
-    imports = dynamic_imports(source, masked, strings, goal)
-    taken = taken_spans(workers, scripts, imports)
-
-    workers ++ module_urls(source, masked, strings, goal, taken) ++ scripts ++ imports
+    spans(source, goal, Scanner.scan(source, goal))
   end
 
   def spans(_source, _goal), do: []
 
-  defp workers(source, masked, strings, goal) do
-    constructed(@worker, source, masked, strings, :worker, allowed_bases(goal)) ++
-      constructed(@worklet, source, masked, strings, :worklet, @entry_bases) ++
-      constructed(@register, source, masked, strings, :register, allowed_bases(goal)) ++
-      worker_strings(source, masked, strings) ++
-      worklet_strings(source, masked, strings) ++
-      registers(source, masked, strings)
+  def spans(source, goal, scan) when is_binary(source) and goal in [:script, :module] do
+    {:ok, spans, _budget} = spans_result(source, goal, scan, Budget.unlimited())
+    spans
   end
 
-  defp constructed(regex, source, masked, strings, kind, bases) do
-    reject_overlaps(
-      scan(regex, source, &constructed_call(&1, source, masked, strings, kind, bases))
-    )
+  def spans_result(source, goal, {masked, strings, _comments}, budget)
+      when is_binary(source) and goal in [:script, :module] do
+    scratch =
+      byte_size(source) * (Budget.cost(:token) + Budget.cost(:frame)) +
+        Budget.cost(:context, 8)
+
+    with {:ok, budget} <- Budget.reserve(budget, scratch) do
+      strings = MapSet.new(strings)
+      {workers, state} = workers(source, masked, strings, goal, {budget, 0})
+      {scripts, state} = import_scripts(source, masked, strings, state)
+      {imports, state} = dynamic_imports(source, masked, strings, goal, state)
+      taken = taken_spans(workers, scripts, imports)
+      {urls, {budget, retained}} = module_urls(source, masked, strings, goal, taken, state)
+      spans = workers ++ urls ++ scripts ++ imports
+
+      with {:ok, budget} <- Budget.settle(budget, scratch, retained) do
+        {:ok, spans, budget}
+      end
+    end
+  catch
+    {:js_calls_budget, error} -> error
+  end
+
+  defp workers(source, masked, strings, goal, state) do
+    {worker, state} =
+      constructed(@worker, source, masked, strings, :worker, allowed_bases(goal), state)
+
+    {worklet, state} =
+      constructed(@worklet, source, masked, strings, :worklet, @entry_bases, state)
+
+    {register, state} =
+      constructed(@register, source, masked, strings, :register, allowed_bases(goal), state)
+
+    {worker_strings, state} = worker_strings(source, masked, strings, state)
+    {worklet_strings, state} = worklet_strings(source, masked, strings, state)
+    {registers, state} = registers(source, masked, strings, state)
+    {worker ++ worklet ++ register ++ worker_strings ++ worklet_strings ++ registers, state}
+  end
+
+  defp constructed(regex, source, masked, strings, kind, bases, state) do
+    {matches, state} =
+      scan(regex, source, &constructed_call(&1, source, masked, strings, kind, bases), state)
+
+    reject_overlaps(matches, state)
   end
 
   defp constructed_call([whole, kind_name, paren], source, masked, strings, kind, bases)
@@ -91,58 +122,81 @@ defmodule Crawler.Parser.JsParser.Calls do
 
   defp constructed_call(_groups, _source, _masked, _strings, _kind, _bases), do: nil
 
-  defp worker_strings(source, masked, strings) do
-    scan(@worker, source, fn [whole, _kind, paren] ->
-      open = index(paren)
+  defp worker_strings(source, masked, strings, state) do
+    scan(
+      @worker,
+      source,
+      fn [whole, _kind, paren] ->
+        open = index(paren)
 
-      with true <- call?(masked, strings, whole, paren),
-           {:ok, {at, len, text}, _next} <- first_string(masked, source, strings, open),
-           true <- literal_argument?(masked, {at, len}),
-           {:ok, close} <- call_end(masked, open) do
-        worker_tuple(at, len, text, :window, :worker, source, strings, masked, open, close)
-      else
-        _ -> nil
-      end
-    end)
+        with true <- call?(masked, strings, whole, paren),
+             {:ok, {at, len, text}, _next} <- first_string(masked, source, strings, open),
+             true <- literal_argument?(masked, {at, len}),
+             {:ok, close} <- call_end(masked, open) do
+          worker_tuple(at, len, text, :window, :worker, source, strings, masked, open, close)
+        else
+          _ -> nil
+        end
+      end,
+      state
+    )
   end
 
-  defp worklet_strings(source, masked, strings) do
-    scan(@worklet, source, fn [whole, paren] ->
-      open = index(paren)
+  defp worklet_strings(source, masked, strings, state) do
+    scan(
+      @worklet,
+      source,
+      fn [whole, paren] ->
+        open = index(paren)
 
-      with true <- call?(masked, strings, whole, paren),
-           {:ok, {at, len, text}, _next} <- first_string(masked, source, strings, open),
-           true <- literal_argument?(masked, {at, len}),
-           {:ok, close} <- call_end(masked, open) do
-        worker_tuple(at, len, text, :window, :worklet, source, strings, masked, open, close)
-      else
-        _ -> nil
-      end
-    end)
+        with true <- call?(masked, strings, whole, paren),
+             {:ok, {at, len, text}, _next} <- first_string(masked, source, strings, open),
+             true <- literal_argument?(masked, {at, len}),
+             {:ok, close} <- call_end(masked, open) do
+          worker_tuple(at, len, text, :window, :worklet, source, strings, masked, open, close)
+        else
+          _ -> nil
+        end
+      end,
+      state
+    )
   end
 
-  defp registers(source, masked, strings) do
-    scan(@register, source, fn [whole, paren] ->
-      open = index(paren)
+  defp registers(source, masked, strings, state) do
+    scan(
+      @register,
+      source,
+      fn [whole, paren] ->
+        open = index(paren)
 
-      with true <- call?(masked, strings, whole, paren),
-           {:ok, {at, len, text}, _next} <- first_string(masked, source, strings, open),
-           true <- literal_argument?(masked, {at, len}),
-           {:ok, close} <- call_end(masked, open) do
-        worker_tuple(at, len, text, :window, :register, source, strings, masked, open, close)
-      else
-        _ -> nil
-      end
-    end)
+        with true <- call?(masked, strings, whole, paren),
+             {:ok, {at, len, text}, _next} <- first_string(masked, source, strings, open),
+             true <- literal_argument?(masked, {at, len}),
+             {:ok, close} <- call_end(masked, open) do
+          worker_tuple(at, len, text, :window, :register, source, strings, masked, open, close)
+        else
+          _ -> nil
+        end
+      end,
+      state
+    )
   end
 
-  defp module_urls(source, masked, strings, :module, taken) do
-    source
-    |> urls(masked, strings)
-    |> Enum.reject(fn {:url, at, len, _spec} -> MapSet.member?(taken, {at, len}) end)
+  defp module_urls(source, masked, strings, :module, taken, state) do
+    {urls, state} = urls(source, masked, strings, state)
+
+    {kept, state} =
+      Enum.reduce(urls, {[], state}, fn {:url, at, len, _spec} = call,
+                                        {kept, {budget, retained}} ->
+        if MapSet.member?(taken, {at, len}),
+          do: {kept, {budget, retained - call_bytes(call)}},
+          else: {[call | kept], {budget, retained}}
+      end)
+
+    {Enum.reverse(kept), state}
   end
 
-  defp module_urls(_source, _masked, _strings, _goal, _taken), do: []
+  defp module_urls(_source, _masked, _strings, _goal, _taken, state), do: {[], state}
 
   defp taken_spans(workers, scripts, imports) do
     MapSet.new(span_keys(workers) ++ span_keys(scripts) ++ span_keys(imports))
@@ -157,20 +211,25 @@ defmodule Crawler.Parser.JsParser.Calls do
     end)
   end
 
-  defp urls(source, masked, strings) do
-    scan(@meta_url, source, fn [whole, paren] ->
-      with true <- call?(masked, strings, whole, paren),
-           {:ok, {at, len, text}, next} <- first_string(masked, source, strings, index(paren)),
-           {:ok, _close, :script} <- known_base_end(source, next, [:script]) do
-        {:url, at, len, text}
-      else
-        _ -> nil
-      end
-    end)
+  defp urls(source, masked, strings, state) do
+    scan(
+      @meta_url,
+      source,
+      fn [whole, paren] ->
+        with true <- call?(masked, strings, whole, paren),
+             {:ok, {at, len, text}, next} <- first_string(masked, source, strings, index(paren)),
+             {:ok, _close, :script} <- known_base_end(source, next, [:script]) do
+          {:url, at, len, text}
+        else
+          _ -> nil
+        end
+      end,
+      state
+    )
   end
 
-  defp dynamic_imports(source, masked, strings, goal) do
-    scan(@import_call, source, &import_call(&1, source, masked, strings, goal))
+  defp dynamic_imports(source, masked, strings, goal, state) do
+    scan(@import_call, source, &import_call(&1, source, masked, strings, goal), state)
   end
 
   defp import_call([whole, paren], source, masked, strings, goal) do
@@ -188,71 +247,90 @@ defmodule Crawler.Parser.JsParser.Calls do
     end
   end
 
-  defp import_scripts(source, masked, strings) do
-    List.flatten(scan(@import_scripts, source, &script_call(&1, source, masked, strings)))
+  defp import_scripts(source, masked, strings, state) do
+    scan(
+      @import_scripts,
+      source,
+      fn groups, state ->
+        script_call(groups, source, masked, strings, state)
+      end,
+      state
+    )
   end
 
-  defp script_call([whole, paren], source, masked, strings) do
+  defp script_call([whole, paren], source, masked, strings, state) do
     if call?(masked, strings, whole, paren) do
-      script_arguments(source, masked, strings, paren)
+      script_arguments(source, masked, strings, paren, state)
     else
-      []
+      {[], state}
     end
   end
 
-  defp script_arguments(source, masked, strings, paren) do
+  defp script_arguments(source, masked, strings, paren, state) do
     case call_end(masked, index(paren)) do
-      {:ok, close} -> arguments(masked, source, strings, index(paren) + 1, close)
-      :error -> []
+      {:ok, close} -> arguments(masked, source, strings, index(paren) + 1, close, [], state)
+      :error -> {[], state}
     end
   end
 
-  defp arguments(masked, source, strings, index, stop) do
+  defp arguments(masked, source, strings, index, stop, acc, state) do
     index = skip(masked, index, stop)
 
     cond do
       index >= stop ->
-        []
+        {Enum.reverse(acc), state}
 
       :binary.at(masked, index) == ?, ->
-        arguments(masked, source, strings, index + 1, stop)
+        arguments(masked, source, strings, index + 1, stop, acc, state)
 
       :binary.at(masked, index) in [?", ?', ?`] ->
-        string_argument(masked, source, strings, index, stop)
+        string_argument(masked, source, strings, index, stop, acc, state)
 
       true ->
-        script_url_argument(masked, source, strings, index, stop)
+        script_url_argument(masked, source, strings, index, stop, acc, state)
     end
   end
 
-  defp string_argument(masked, source, strings, index, stop) do
+  defp string_argument(masked, source, strings, index, stop, acc, state) do
+    state = count(state)
+
     case one_string(masked, source, strings, index, stop) do
       {:ok, {at, len, text}, next} ->
-        literal_scripts(masked, source, strings, at, len, text, next, stop)
+        literal_scripts(masked, source, strings, at, len, text, next, stop, acc, state)
 
       {:skip, next} ->
-        arguments(masked, source, strings, next, stop)
+        arguments(masked, source, strings, next, stop, acc, state)
 
       :error ->
-        []
+        {Enum.reverse(acc), state}
     end
   end
 
-  defp literal_scripts(masked, source, strings, at, len, text, next, stop) do
+  defp literal_scripts(masked, source, strings, at, len, text, next, stop, acc, state) do
     if literal_argument?(masked, {at, len}) do
-      [{:scripts, at, len, text} | arguments(masked, source, strings, next, stop)]
+      arguments(masked, source, strings, next, stop, [{:scripts, at, len, text} | acc], state)
     else
-      arguments(masked, source, strings, skip_argument(masked, next, stop), stop)
+      arguments(masked, source, strings, skip_argument(masked, next, stop), stop, acc, state)
     end
   end
 
-  defp script_url_argument(masked, source, strings, index, stop) do
+  defp script_url_argument(masked, source, strings, index, stop, acc, state) do
+    state = count(state)
+
     case script_url(source, masked, strings, index) do
       {:ok, {at, len, text, base}, next} ->
-        [{:scripts, at, len, text, base} | arguments(masked, source, strings, next, stop)]
+        arguments(
+          masked,
+          source,
+          strings,
+          next,
+          stop,
+          [{:scripts, at, len, text, base} | acc],
+          state
+        )
 
       :error ->
-        arguments(masked, source, strings, skip_argument(masked, index, stop), stop)
+        arguments(masked, source, strings, skip_argument(masked, index, stop), stop, acc, state)
     end
   end
 
@@ -793,28 +871,56 @@ defmodule Crawler.Parser.JsParser.Calls do
     Enum.any?(strings, fn {start, stop} -> at >= start and at < stop end)
   end
 
-  defp scan(regex, masked, fun) do
-    regex
-    |> Regex.scan(masked, return: :index)
-    |> Enum.flat_map(fn groups ->
-      case fun.(groups) do
-        nil -> []
-        matches when is_list(matches) -> matches
-        match -> [match]
-      end
-    end)
-  end
+  defp scan(regex, source, fun, state) do
+    {:ok, {matches, state}} =
+      Matches.reduce(regex, source, {[], state}, fn groups, {acc, state} ->
+        state = count(state)
 
-  defp reject_overlaps(matches) do
-    {kept, _} =
-      Enum.reduce(matches, {[], MapSet.new()}, fn {:worker, at, len, _, _, _, _} = match,
-                                                  {kept, seen} ->
-        if MapSet.member?(seen, {at, len}),
-          do: {kept, seen},
-          else: {[match | kept], MapSet.put(seen, {at, len})}
+        {matches, state} =
+          if is_function(fun, 2), do: fun.(groups, state), else: {fun.(groups), state}
+
+        matches =
+          case matches do
+            nil -> []
+            matches when is_list(matches) -> matches
+            match -> [match]
+          end
+
+        {budget, retained} = state
+
+        {acc, retained} =
+          Enum.reduce(matches, {acc, retained}, fn match, {acc, bytes} ->
+            {[match | acc], bytes + call_bytes(match)}
+          end)
+
+        {:cont, {acc, {budget, retained}}}
       end)
 
-    Enum.reverse(kept)
+    {Enum.reverse(matches), state}
+  end
+
+  defp count({budget, retained}) do
+    case Budget.count(budget, :facts) do
+      {:ok, budget} -> {budget, retained}
+      error -> throw({:js_calls_budget, error})
+    end
+  end
+
+  defp call_bytes(call),
+    do:
+      Budget.cost(:token) + Budget.cost(:binary) +
+        Budget.cost(:list_cell, 4) + byte_size(elem(call, 3))
+
+  defp reject_overlaps(matches, {budget, retained}) do
+    {kept, _seen, retained} =
+      Enum.reduce(matches, {[], MapSet.new(), retained}, fn {:worker, at, len, _, _, _, _} = match,
+                                                            {kept, seen, retained} ->
+        if MapSet.member?(seen, {at, len}),
+          do: {kept, seen, retained - call_bytes(match)},
+          else: {[match | kept], MapSet.put(seen, {at, len}), retained}
+      end)
+
+    {Enum.reverse(kept), {budget, retained}}
   end
 
   defp call_end(masked, open), do: scan_end(masked, open + 1, 1)

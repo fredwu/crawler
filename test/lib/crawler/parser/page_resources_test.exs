@@ -1,7 +1,6 @@
 defmodule Crawler.Parser.PageResourcesTest do
   use ExUnit.Case, async: true
 
-  alias Crawler.Linker
   alias Crawler.Parser
   alias Crawler.Snapper.LinkReplacer
 
@@ -31,10 +30,10 @@ defmodule Crawler.Parser.PageResourcesTest do
     assert saved =~ ~s|href="not-a-picture.svg"|
     assert saved =~ ~s|src="nope.png"|
     assert saved =~ ~s|src="math.png"|
-    assert saved =~ Linker.offline_link(@page, asset("photo.png"))
-    assert saved =~ Linker.offline_link(@page, asset("photo-2x.png"))
-    assert saved =~ Linker.offline_link(@page, asset("real.png"))
-    assert saved =~ Linker.offline_link(@page, asset("sprite.svg"))
+    assert saved =~ asset("photo.png")
+    assert saved =~ asset("photo-2x.png")
+    assert saved =~ asset("real.png")
+    assert saved =~ asset("sprite.svg")
     refute saved =~ ~s|src="photo.png"|
     refute saved =~ ~s|srcset="photo-2x.png 2x"|
     refute saved =~ ~s|src="real.png"|
@@ -95,7 +94,7 @@ defmodule Crawler.Parser.PageResourcesTest do
     saved = rewrite(source, opts)
 
     for name <- ~w(bg.jpg table.png head.png body.png row.png cell.png heading.png foot.png) do
-      assert saved =~ Linker.offline_link(@start, blog(name))
+      assert saved =~ blog(name)
       refute saved =~ ~s|background="#{name}"|
     end
 

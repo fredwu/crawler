@@ -1,8 +1,8 @@
 defmodule Crawler.Parser.CssParser.BadUrlTest do
   use ExUnit.Case, async: true
 
+  alias Crawler.Analysis
   alias Crawler.Parser.CssParser
-  alias Crawler.Snapper.LinkReplacer.Css
 
   test "invalid unquoted URL values stay opaque and preserve their original bytes" do
     values =
@@ -15,9 +15,9 @@ defmodule Crawler.Parser.CssParser.BadUrlTest do
       source = invalid <> ";background:url(real.png)"
 
       assert resources(source) == ["real.png"]
-      assert Css.replace(source, value, "offline.png", entity_quotes: false) == source
+      assert render_css(source, value, "offline.png") == source
 
-      assert Css.replace(source, "real.png", "saved.png", entity_quotes: false) ==
+      assert render_css(source, "real.png", "saved.png") ==
                invalid <> ";background:url(saved.png)"
     end
   end
@@ -32,13 +32,13 @@ defmodule Crawler.Parser.CssParser.BadUrlTest do
       source = invalid <> ";background:url(real.png)"
       assert resources(source) == ["real.png"]
 
-      assert Css.replace(source, "real.png", "saved.png", entity_quotes: false) ==
+      assert render_css(source, "real.png", "saved.png") ==
                invalid <> ";background:url(saved.png)"
     end
 
     unfinished = ~S|url(foo"bar.png \) @import 'hidden.css'; url(hidden.png|
     assert resources(unfinished) == []
-    assert Css.replace(unfinished, "hidden.png", "saved.png", entity_quotes: false) == unfinished
+    assert render_css(unfinished, "hidden.png", "saved.png") == unfinished
   end
 
   test "quoted values and escaped punctuation remain valid URL resources" do
@@ -46,7 +46,7 @@ defmodule Crawler.Parser.CssParser.BadUrlTest do
 
     assert resources(source) == ["foo(bar.png", "foo(bar.png", "foo\"bar.png", "foo)bar.png"]
 
-    assert Css.replace(source, "foo(bar.png", "saved.png", entity_quotes: false) ==
+    assert render_css(source, "foo(bar.png", "saved.png") ==
              ~S|url("saved.png"),url(saved.png),url(foo\"bar.png),url(foo\)bar.png)|
   end
 
@@ -54,11 +54,41 @@ defmodule Crawler.Parser.CssParser.BadUrlTest do
     source = ~S|url(foo&quot;bar.png),url(&quot;real.png&quot;)|
 
     assert Enum.map(CssParser.spans(source, entity_quotes: true), & &1.value) == ["real.png"]
-    assert Css.replace(source, "foo\"bar.png", "saved.png") == source
 
-    assert Css.replace(source, "real.png", "saved.png") ==
-             ~S|url(foo&quot;bar.png),url(&quot;saved.png&quot;)|
+    assert render_css(attribute(source), "foo\"bar.png", "saved.png", "text/html") ==
+             attribute(source)
+
+    assert render_css(attribute(source), "real.png", "saved.png", "text/html") ==
+             attribute(~S|url(foo&quot;bar.png),url(&quot;saved.png&quot;)|)
   end
 
   defp resources(source), do: Enum.map(CssParser.spans(source), & &1.value)
+
+  defp attribute(source), do: ~s|<div style="#{source}"></div>|
+
+  defp render_css(source, value, path, type \\ "text/css") do
+    opts = %{
+      url: "https://example.test/styles/main.css",
+      content_type: type,
+      assets: ["css", "images"]
+    }
+
+    assert {:ok, analysis} = Analysis.analyze(source, opts)
+    assert {:ok, collection} = Analysis.occurrences_result(analysis, opts)
+
+    assert {:ok, bound} =
+             Analysis.bind(collection, fn ref ->
+               if ref.source_role == :css and ref.context.html_tag == "link" and
+                    ref.value == value,
+                  do: %{fixture: :css_resource, path: path}
+             end)
+
+    assert {:ok, rendered} =
+             Analysis.render(analysis, bound, fn
+               %{target: %{fixture: :css_resource, path: path}} -> {:local, path}
+               _ref -> :keep
+             end)
+
+    rendered
+  end
 end

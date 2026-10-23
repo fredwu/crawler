@@ -2,6 +2,7 @@ defmodule Crawler.CookiesTest do
   use ExUnit.Case, async: true
 
   alias Crawler.Cookies
+  alias Crawler.Cookies.Jar
   alias Crawler.Cookies.PublicSuffix
 
   test "host-only cookies follow the request path and stay on that host" do
@@ -38,8 +39,11 @@ defmodule Crawler.CookiesTest do
     assert Cookies.header(jar, "http://example.com/a") == "id=1"
     assert Cookies.header(jar, "http://notexample.com/a") == nil
 
-    assert Cookies.store([], "http://example.com/a", ["id=1; Domain=evil.com"]) == []
-    assert Cookies.store([], "http://127.0.0.1/a", ["id=1; Domain=127.0.0.1"]) == []
+    assert Cookies.entries(Cookies.store([], "http://example.com/a", ["id=1; Domain=evil.com"])) ==
+             []
+
+    assert Cookies.entries(Cookies.store([], "http://127.0.0.1/a", ["id=1; Domain=127.0.0.1"])) ==
+             []
 
     assert Cookies.header(Cookies.store([], "http://127.0.0.1/a", ["id=1"]), "http://127.0.0.1/b") ==
              "id=1"
@@ -53,7 +57,7 @@ defmodule Crawler.CookiesTest do
     expired =
       Cookies.store([], "http://example.com/a", ["id=1; Expires=Tue, 01 Jan 1980 00:00:00 GMT"])
 
-    assert expired == []
+    assert Cookies.entries(expired) == []
 
     kept =
       Cookies.store([], "http://example.com/a", [
@@ -70,7 +74,7 @@ defmodule Crawler.CookiesTest do
         "id=1; Max-Age=nope; Expires=Tue, 01 Jan 1980 00:00:00 GMT"
       ])
 
-    assert invalid_age == []
+    assert Cookies.entries(invalid_age) == []
 
     invalid_date = Cookies.store([], "http://example.com/a", ["id=1; Expires=not-a-date"])
     assert Cookies.header(invalid_date, "http://example.com/b") == "id=1"
@@ -80,14 +84,14 @@ defmodule Crawler.CookiesTest do
     dashed =
       Cookies.store([], "http://example.com/a", ["id=1; Expires=Thu, 01-Jan-1970 00:00:01 GMT"])
 
-    assert dashed == []
+    assert Cookies.entries(dashed) == []
 
     rfc850 =
       Cookies.store([], "http://example.com/a", [
         "id=1; Expires=Thursday, 01-Jan-1970 00:00:01 GMT"
       ])
 
-    assert rfc850 == []
+    assert Cookies.entries(rfc850) == []
 
     future =
       Cookies.store([], "http://example.com/a", ["id=1; Expires=Thu, 01-Jan-2099 00:00:00 GMT"])
@@ -101,28 +105,40 @@ defmodule Crawler.CookiesTest do
         "id=1; Max-Age=1; Expires=Thu, 01-Jan-2099 00:00:00 GMT; Path=/"
       ])
 
-    assert [%{expires_at: deadline}] = jar
+    assert [%{expires_at: deadline}] = Cookies.entries(jar)
 
     if DateTime.compare(deadline, DateTime.utc_now()) == :gt do
       assert Cookies.header(jar, url) == "id=1"
     end
 
-    wait_until_expired(jar)
+    {jar, 1} = Jar.prune(jar, DateTime.add(deadline, 1, :second))
     assert Cookies.header(jar, url) == nil
   end
 
   test "a public suffix cannot be a cookie domain" do
-    assert Cookies.store([], "http://a.com/a", ["stolen=1; Domain=com"]) == []
-    assert Cookies.store([], "http://shop.example.co.uk/a", ["id=1; Domain=co.uk"]) == []
-    assert Cookies.store([], "http://a.com.au/a", ["id=1; Domain=com.au"]) == []
-    assert Cookies.store([], "http://a.github.io/a", ["id=1; Domain=github.io"]) == []
+    assert Cookies.entries(Cookies.store([], "http://a.com/a", ["stolen=1; Domain=com"])) ==
+             []
 
-    assert Cookies.store([], "http://bucket.s3.amazonaws.com/a", [
-             "id=1; Domain=s3.amazonaws.com"
-           ]) == []
+    assert Cookies.entries(
+             Cookies.store([], "http://shop.example.co.uk/a", ["id=1; Domain=co.uk"])
+           ) == []
 
-    assert Cookies.store([], "http://www.ck/a", ["id=1; Domain=ck"]) == []
-    assert Cookies.store([], "http://www.foo.ck/a", ["id=1; Domain=foo.ck"]) == []
+    assert Cookies.entries(Cookies.store([], "http://a.com.au/a", ["id=1; Domain=com.au"])) ==
+             []
+
+    assert Cookies.entries(Cookies.store([], "http://a.github.io/a", ["id=1; Domain=github.io"])) ==
+             []
+
+    assert Cookies.entries(
+             Cookies.store([], "http://bucket.s3.amazonaws.com/a", [
+               "id=1; Domain=s3.amazonaws.com"
+             ])
+           ) == []
+
+    assert Cookies.entries(Cookies.store([], "http://www.ck/a", ["id=1; Domain=ck"])) == []
+
+    assert Cookies.entries(Cookies.store([], "http://www.foo.ck/a", ["id=1; Domain=foo.ck"])) ==
+             []
 
     shared = Cookies.store([], "http://www.example.com/a", ["id=1; Domain=example.com"])
     assert Cookies.header(shared, "http://shop.example.com/a") == "id=1"
@@ -161,13 +177,13 @@ defmodule Crawler.CookiesTest do
   test "a trailing dot and a unicode domain match in ascii form" do
     dotted = Cookies.store([], "http://www.example.com/a", ["id=1; Domain=example.com."])
 
-    assert [%{domain: "example.com", host_only?: false}] = dotted
+    assert [%{domain: "example.com", host_only?: false}] = Cookies.entries(dotted)
     assert Cookies.header(dotted, "http://shop.example.com/a") == "id=1"
 
     unicode =
       Cookies.store([], "http://www.xn--exmple-cua.com/a", ["id=1; Domain=EXÄMPLE.COM."])
 
-    assert [%{domain: "exämple.com", host_only?: false}] = unicode
+    assert [%{domain: "exämple.com", host_only?: false}] = Cookies.entries(unicode)
     assert Cookies.header(unicode, "http://shop.xn--exmple-cua.com/a") == "id=1"
     assert Cookies.header(unicode, "http://example.org/a") == nil
   end
@@ -176,17 +192,18 @@ defmodule Crawler.CookiesTest do
     early =
       Cookies.store([], "http://example.com/a", ["id=1; Expires=01 Jan 1500 00:00:00 GMT 2099"])
 
-    assert [%{expires_at: nil}] = early
+    assert [%{expires_at: nil}] = Cookies.entries(early)
     assert Cookies.header(early, "http://example.com/b") == "id=1"
 
     sixteen =
       Cookies.store([], "http://example.com/a", ["id=1; Expires=01 Jan 1600 00:00:00 GMT"])
 
-    assert [%{expires_at: nil}] = sixteen
+    assert [%{expires_at: nil}] = Cookies.entries(sixteen)
     assert Cookies.header(sixteen, "http://example.com/b") == "id=1"
 
-    assert Cookies.store([], "http://example.com/a", ["id=1; Expires=01 Jan 1601 00:00:00 GMT"]) ==
-             []
+    assert Cookies.entries(
+             Cookies.store([], "http://example.com/a", ["id=1; Expires=01 Jan 1601 00:00:00 GMT"])
+           ) == []
   end
 
   test "a huge max-age is capped instead of walking the calendar" do
@@ -196,17 +213,23 @@ defmodule Crawler.CookiesTest do
       Cookies.store([], "http://example.com/a", ["id=1; Max-Age=100000000000000000000"])
 
     assert System.monotonic_time(:millisecond) - started < 1_000
-    assert [%{expires_at: %DateTime{year: 9999}}] = jar
+    assert [%{expires_at: %DateTime{year: 9999}}] = Cookies.entries(jar)
     assert Cookies.header(jar, "http://example.com/b") == "id=1"
   end
 
   test "a domain attribute on an address is rejected after trailing dots are removed" do
-    assert Cookies.store([], "http://127.0.0.1../a", ["id=1; Domain=127.0.0.1"]) == []
-    assert Cookies.store([], "http://127.0.0.1../a", ["id=1; Domain=127.0.0.1."]) == []
-    assert Cookies.store([], "http://evil.127.0.0.1/a", ["id=1; Domain=127.0.0.1"]) == []
+    assert Cookies.entries(Cookies.store([], "http://127.0.0.1../a", ["id=1; Domain=127.0.0.1"])) ==
+             []
+
+    assert Cookies.entries(Cookies.store([], "http://127.0.0.1../a", ["id=1; Domain=127.0.0.1."])) ==
+             []
+
+    assert Cookies.entries(
+             Cookies.store([], "http://evil.127.0.0.1/a", ["id=1; Domain=127.0.0.1"])
+           ) == []
 
     host_only = Cookies.store([], "http://127.0.0.1../a", ["id=1"])
-    assert [%{domain: "127.0.0.1", host_only?: true}] = host_only
+    assert [%{domain: "127.0.0.1", host_only?: true}] = Cookies.entries(host_only)
     assert Cookies.header(host_only, "http://127.0.0.1../b") == "id=1"
     assert Cookies.header(host_only, "http://evil.127.0.0.1/a") == nil
   end
@@ -214,68 +237,83 @@ defmodule Crawler.CookiesTest do
   test "a trailing-dot host-only cookie is replaced on the bare host" do
     jar = Cookies.store([], "http://example.com../a", ["id=1"])
 
-    assert [%{domain: "example.com", host_only?: true}] = jar
+    assert [%{domain: "example.com", host_only?: true}] = Cookies.entries(jar)
     assert Cookies.header(jar, "http://example.com/b") == "id=1"
     assert Cookies.header(jar, "http://www.example.com/b") == nil
 
     replaced = Cookies.store(jar, "http://example.com./a", ["id=2"])
-    assert [%{domain: "example.com", value: "2"}] = replaced
+    assert [%{domain: "example.com", value: "2"}] = Cookies.entries(replaced)
     assert Cookies.header(replaced, "http://example.com../b") == "id=2"
 
-    assert Cookies.store(jar, "http://example.com/a", ["id=1; Max-Age=0"]) == []
+    assert Cookies.entries(Cookies.store(jar, "http://example.com/a", ["id=1; Max-Age=0"])) ==
+             []
   end
 
   test "a domain attribute that is not utf-8 is ignored" do
     header = "id=1; Domain=ex" <> <<255>> <> "ample.com"
 
     assert [%{name: "ok", value: "1", host_only?: true}] =
-             Cookies.store([], "http://example.com/a", [header, "ok=1"])
+             Cookies.entries(Cookies.store([], "http://example.com/a", [header, "ok=1"]))
   end
 
   test "another idna spelling of the same domain replaces the cookie" do
     planted = Cookies.store([], "http://www.example.com/a", ["id=1; Domain=example。com"])
-    assert [%{domain: "example。com", host_only?: false}] = planted
+    assert [%{domain: "example。com", host_only?: false}] = Cookies.entries(planted)
     assert Cookies.header(planted, "http://shop.example.com/a") == "id=1"
 
-    assert Cookies.store(planted, "http://www.example.com/a", [
-             "id=1; Domain=example.com; Max-Age=0"
-           ]) ==
-             []
+    assert Cookies.entries(
+             Cookies.store(planted, "http://www.example.com/a", [
+               "id=1; Domain=example.com; Max-Age=0"
+             ])
+           ) == []
 
     unicode =
       Cookies.store([], "http://www.xn--exmple-cua.com/a", ["id=1; Domain=exämple.com"])
 
-    assert [%{domain: "exämple.com"}] = unicode
+    assert [%{domain: "exämple.com"}] = Cookies.entries(unicode)
 
-    assert Cookies.store(unicode, "http://www.xn--exmple-cua.com/a", [
-             "id=1; Domain=xn--exmple-cua.com; Max-Age=0"
-           ]) == []
+    assert Cookies.entries(
+             Cookies.store(unicode, "http://www.xn--exmple-cua.com/a", [
+               "id=1; Domain=xn--exmple-cua.com; Max-Age=0"
+             ])
+           ) == []
   end
 
   test "a domain attribute that is an address only after idna is rejected" do
-    assert Cookies.store([], "http://evil.127.0.0.1/a", ["id=1; Domain=１２７.０.０.１"]) == []
-    assert Cookies.store([], "http://evil.127.0.0.1/a", ["id=1; Domain=127.0.0.1。"]) == []
+    assert Cookies.entries(
+             Cookies.store([], "http://evil.127.0.0.1/a", ["id=1; Domain=１２７.０.０.１"])
+           ) == []
+
+    assert Cookies.entries(
+             Cookies.store([], "http://evil.127.0.0.1/a", ["id=1; Domain=127.0.0.1。"])
+           ) == []
   end
 
   test "a trailing unicode full stop is removed after idna" do
     jar = Cookies.store([], "http://www.example.com/a", ["id=1; Domain=example.com。"])
 
-    assert [%{domain: "example.com。", host_only?: false}] = jar
+    assert [%{domain: "example.com。", host_only?: false}] = Cookies.entries(jar)
     assert Cookies.header(jar, "http://shop.example.com/a") == "id=1"
     assert Cookies.header(jar, "http://example.org/a") == nil
 
-    assert Cookies.store(jar, "http://www.example.com/a", ["id=1; Domain=example.com; Max-Age=0"]) ==
-             []
+    assert Cookies.entries(
+             Cookies.store(jar, "http://www.example.com/a", [
+               "id=1; Domain=example.com; Max-Age=0"
+             ])
+           ) == []
 
-    assert Cookies.store([], "http://a.com/a", ["id=1; Domain=com．"]) == []
+    assert Cookies.entries(Cookies.store([], "http://a.com/a", ["id=1; Domain=com．"])) == []
   end
 
   test "an empty label cannot hide a public suffix" do
-    assert Cookies.store([], "http://shop.brand.co..uk/a", ["id=1; Domain=co..uk"]) == []
-    assert Cookies.store([], "http://a..com/a", ["id=1; Domain=。com"]) == []
+    assert Cookies.entries(
+             Cookies.store([], "http://shop.brand.co..uk/a", ["id=1; Domain=co..uk"])
+           ) == []
+
+    assert Cookies.entries(Cookies.store([], "http://a..com/a", ["id=1; Domain=。com"])) == []
 
     jar = Cookies.store([], "http://www.example.com/a", ["id=1; Domain=。example.com"])
-    assert [%{domain: "。example.com", host_only?: false}] = jar
+    assert [%{domain: "。example.com", host_only?: false}] = Cookies.entries(jar)
     assert Cookies.header(jar, "http://shop.example.com/a") == "id=1"
     assert Cookies.header(jar, "http://example.org/a") == nil
 
@@ -297,40 +335,48 @@ defmodule Crawler.CookiesTest do
   test "a host-prefix cookie stays on the exact host that set it" do
     nested = "https://www.example.com/account/x"
 
-    assert Cookies.store([], nested, ["__Host-session=1; Domain=example.com; Path=/; Secure"]) ==
+    assert Cookies.entries(
+             Cookies.store([], nested, ["__Host-session=1; Domain=example.com; Path=/; Secure"])
+           ) == []
+
+    assert Cookies.entries(Cookies.store([], nested, ["__Host-session=1; Path=/admin; Secure"])) ==
              []
 
-    assert Cookies.store([], nested, ["__Host-session=1; Path=/admin; Secure"]) == []
-    assert Cookies.store([], nested, ["__Host-session=1; Secure"]) == []
+    assert Cookies.entries(Cookies.store([], nested, ["__Host-session=1; Secure"])) == []
 
-    assert Cookies.store([], "http://www.example.com/", ["__Host-session=1; Path=/; Secure"]) ==
-             []
+    assert Cookies.entries(
+             Cookies.store([], "http://www.example.com/", ["__Host-session=1; Path=/; Secure"])
+           ) == []
 
     explicit =
       Cookies.store([], nested, ["__Host-session=1; Path=/; Secure"])
 
-    assert [%{host_only?: true, secure?: true, path: "/", domain: "www.example.com"}] = explicit
+    assert [%{host_only?: true, secure?: true, path: "/", domain: "www.example.com"}] =
+             Cookies.entries(explicit)
+
     assert Cookies.header(explicit, "https://www.example.com/admin/y") == "__Host-session=1"
     assert Cookies.header(explicit, "https://example.com/") == nil
     assert Cookies.header(explicit, "https://shop.example.com/") == nil
     assert Cookies.header(explicit, "http://www.example.com/") == nil
 
     rooted = Cookies.store([], "https://example.com/", ["__Host-id=1; Secure"])
-    assert [%{host_only?: true, path: "/", domain: "example.com"}] = rooted
+    assert [%{host_only?: true, path: "/", domain: "example.com"}] = Cookies.entries(rooted)
     assert Cookies.header(rooted, "https://example.com/account") == "__Host-id=1"
     assert Cookies.header(rooted, "https://www.example.com/") == nil
   end
 
   test "a secure-prefix cookie is stored only with the secure flag and sent only over https" do
-    assert Cookies.store([], "https://example.com/", ["__Secure-id=1"]) == []
-    assert Cookies.store([], "http://example.com/", ["__Secure-ok=1; Secure"]) == []
+    assert Cookies.entries(Cookies.store([], "https://example.com/", ["__Secure-id=1"])) == []
+
+    assert Cookies.entries(Cookies.store([], "http://example.com/", ["__Secure-ok=1; Secure"])) ==
+             []
 
     jar =
       Cookies.store([], "https://www.example.com/account", [
         "__Secure-ok=1; Domain=example.com; Path=/; Secure"
       ])
 
-    assert [%{name: "__Secure-ok", secure?: true, host_only?: false}] = jar
+    assert [%{name: "__Secure-ok", secure?: true, host_only?: false}] = Cookies.entries(jar)
     assert Cookies.header(jar, "https://shop.example.com/account") == "__Secure-ok=1"
     assert Cookies.header(jar, "http://shop.example.com/account") == nil
     assert Cookies.header(jar, "http://www.example.com/") == nil
@@ -341,15 +387,17 @@ defmodule Crawler.CookiesTest do
     assert Cookies.header(jar, "https://example.com/account") == "id=good"
     assert Cookies.header(jar, "http://example.com/account") == nil
 
-    assert Cookies.store([], "http://example.com/", ["id=planted; Secure; Path=/"]) == []
+    assert Cookies.entries(
+             Cookies.store([], "http://example.com/", ["id=planted; Secure; Path=/"])
+           ) == []
 
     replaced = Cookies.store(jar, "http://example.com/", ["id=evil; Path=/"])
-    assert [%{name: "id", value: "good", secure?: true}] = replaced
+    assert [%{name: "id", value: "good", secure?: true}] = Cookies.entries(replaced)
 
     domain_shaped =
       Cookies.store(replaced, "http://example.com/", ["id=evil; Domain=example.com; Path=/"])
 
-    assert [%{name: "id", value: "good", host_only?: true}] = domain_shaped
+    assert [%{name: "id", value: "good", host_only?: true}] = Cookies.entries(domain_shaped)
 
     deleted = Cookies.store(domain_shaped, "http://example.com/", ["id=good; Max-Age=0; Path=/"])
     assert Cookies.header(deleted, "https://example.com/") == "id=good"
@@ -371,12 +419,12 @@ defmodule Crawler.CookiesTest do
         "__host-id=1; Domain=example.com; Path=/; Secure"
       ])
 
-    assert [%{name: "__host-id", host_only?: false, secure?: true}] = jar
+    assert [%{name: "__host-id", host_only?: false, secure?: true}] = Cookies.entries(jar)
     assert Cookies.header(jar, "https://shop.example.com/") == "__host-id=1"
     assert Cookies.header(jar, "http://shop.example.com/") == nil
 
     plain = Cookies.store([], "https://example.com/", ["__secure-id=1; Path=/"])
-    assert [%{name: "__secure-id", secure?: false, host_only?: true}] = plain
+    assert [%{name: "__secure-id", secure?: false, host_only?: true}] = Cookies.entries(plain)
     assert Cookies.header(plain, "http://example.com/account") == "__secure-id=1"
     assert Cookies.header(plain, "http://www.example.com/") == nil
   end
@@ -423,10 +471,13 @@ defmodule Crawler.CookiesTest do
     assert Cookies.header(jar, "https://cdn.test/next.js", cross) == "cdn=1"
     assert Cookies.header(jar, "http://cdn.test/next.js", cross) == nil
 
-    assert Cookies.store([], "https://cdn.test/app.js", ["cdn=1; Path=/; SameSite=None"]) == []
+    assert Cookies.entries(
+             Cookies.store([], "https://cdn.test/app.js", ["cdn=1; Path=/; SameSite=None"])
+           ) == []
 
-    assert Cookies.store([], "http://cdn.test/app.js", ["cdn=1; Path=/; Secure; SameSite=None"]) ==
-             []
+    assert Cookies.entries(
+             Cookies.store([], "http://cdn.test/app.js", ["cdn=1; Path=/; Secure; SameSite=None"])
+           ) == []
   end
 
   test "strict stays on the same site and lax can cross on a document navigation" do
@@ -621,11 +672,6 @@ defmodule Crawler.CookiesTest do
 
     assert Cookies.request_navigation?(%{html_tag: "a", reference_tag: "a"})
     refute Cookies.request_navigation?(%{html_tag: "a", reference_tag: "a", page_open: false})
-  end
-
-  defp wait_until_expired([%{expires_at: %DateTime{} = deadline} | _]) do
-    delay = DateTime.diff(deadline, DateTime.utc_now(), :millisecond) + 50
-    if delay > 0, do: Process.sleep(delay)
   end
 
   defp pairs(nil), do: %{}

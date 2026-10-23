@@ -1,11 +1,10 @@
 defmodule Crawler.URLIPv4Test do
   use ExUnit.Case, async: true
 
-  alias Crawler.Linker.Snapshot
   alias Crawler.URL
   alias Crawler.URL.Host
 
-  test "normalizes browser IPv4 spellings to one address and saved path" do
+  test "normalizes browser IPv4 spellings to one address" do
     for {address, spellings} <- [
           {"127.0.0.1",
            [
@@ -37,7 +36,6 @@ defmodule Crawler.URLIPv4Test do
       assert URL.canonical(url) == expected
       assert URL.resolve(url, "http://base.com/") == {:ok, expected}
       assert URL.resolve("//#{spelling}/page", "http://base.com/") == {:ok, expected}
-      assert Snapshot.path(url) == Snapshot.path(expected)
     end
   end
 
@@ -88,6 +86,6 @@ defmodule Crawler.URLIPv4Test do
     assert Host.domain("127.0.0.1%2e") == {:ok, "127.0.0.1"}
     assert Host.ipv6("::ffff:127.0.0.1") == {:ok, "::ffff:7f00:1"}
     assert URL.normalize("http://[::1]/page") == "http://[::1]/page"
-    refute Snapshot.path("http://127.0.0.1/page") == Snapshot.path("http://127.0.0.1../page")
+    refute URL.canonical("http://127.0.0.1/page") == URL.canonical("http://127.0.0.1../page")
   end
 end

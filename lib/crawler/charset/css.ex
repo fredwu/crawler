@@ -1,6 +1,7 @@
 defmodule Crawler.Charset.CSS do
   @moduledoc false
 
+  alias Crawler.Analysis.Budget
   alias Crawler.Charset.Encoding
   alias Crawler.Charset.Labels
 
@@ -16,9 +17,38 @@ defmodule Crawler.Charset.CSS do
   end
 
   def declare_utf8(body) do
-    case declaration(body) do
-      {_label, rest} -> ~s(@charset "utf-8";) <> rest
-      nil -> body
+    {:ok, decoded, _budget, _owned} = declare_result(body, Budget.unlimited(), :infinity, 0)
+    decoded
+  end
+
+  def declare_result(body, budget, cap, owned) do
+    scratch = 512 + min(byte_size(body), @prescan_bytes) * 32
+
+    with {:ok, budget} <- Budget.reserve(budget, scratch) do
+      case declaration(body) do
+        {"utf-8", _rest} ->
+          with {:ok, budget} <- Budget.release(budget, scratch), do: {:ok, body, budget, owned}
+
+        {_label, rest} ->
+          size = byte_size(~s(@charset "utf-8";)) + byte_size(rest)
+
+          if cap != :infinity and size > cap do
+            {:error, {:limit, :max_body}}
+          else
+            bytes = Budget.cost(:binary) + size
+
+            with {:ok, budget} <- Budget.charge(budget, bytes) do
+              decoded = IO.iodata_to_binary([~s(@charset "utf-8";), rest])
+
+              with {:ok, budget} <- Budget.release(budget, scratch),
+                   {:ok, budget} <- Budget.refund(budget, owned),
+                   do: {:ok, decoded, budget, bytes}
+            end
+          end
+
+        nil ->
+          with {:ok, budget} <- Budget.release(budget, scratch), do: {:ok, body, budget, owned}
+      end
     end
   end
 
