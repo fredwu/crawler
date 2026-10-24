@@ -27,3 +27,4 @@ crawler-*.tar
 /test/tmp/*
 
 .vscode
+.local
